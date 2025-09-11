@@ -4,7 +4,7 @@
 
 # 🎲 @dpr/dice
 
-A modern TypeScript library for **D&D 5e damage-per-round (DPR) calculations**, designed for players, Dungeon Masters, and developers who want to analyze combat mathematically.
+A TypeScript library for **D&D 5e damage-per-round (DPR) calculations**, designed for players, Dungeon Masters, and developers who want to analyze combat mathematically.
 
 This library powers [dprcalc.com](https://dprcalc.com) and provides a precise, composable way to model dice rolls, attacks, and outcomes with probability mass functions (PMFs) — not just averages. This allows for rich charting and statistics with full outcome attribution.
 
@@ -21,7 +21,7 @@ console.log("DPR:", attack.mean());
 - **Probability Mass Functions (PMF)**: Precise modeling of dice rolls and outcomes, not just averages.
 - **Complex Attack Expressions**: Supports crit ranges, advantage/disadvantage, conditional damage, rerolls, minimum damage, and more.
 - **Composable API**: Build dice expressions, run queries, and analyze results in just a few lines.
-- **TypeScript First**: Full type safety and modern developer experience.
+- **TypeScript First**: Full type safety and developer experience.
 
 ## 🚀 Installation
 
@@ -267,6 +267,12 @@ yarn example
 ## 📜 License
 
 2025 MIT © [Michael Margolis](https://github.com/yipe)
+
+## ⚖️ Legal / Trademarks
+
+Wizards of the Coast, Dungeons & Dragons, and their logos are trademarks of Wizards of the Coast LLC in the United States and other countries.
+
+© 2025 Wizards. All Rights Reserved.
 
 ## ❤️ Credits
 

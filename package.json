@@ -1,17 +1,27 @@
 {
-  "name": "dice",
+  "name": "@yipe/dice",
   "version": "0.1.0",
+  "description": "A high-performance dice probability engine for D&D 5e DPR calculations. Powers dprcalc.com.",
+  "keywords": [
+    "dnd",
+    "dice",
+    "probability",
+    "ttrpg",
+    "dpr",
+    "statistics"
+  ],
+  "homepage": "https://github.com/yipe/dice#readme",
+  "bugs": {
+    "url": "https://github.com/yipe/dice/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yipe/dice.git"
+  },
+  "license": "MIT",
+  "author": "Michael Margolis <acct@yipe.org>",
   "type": "module",
   "packageManager": "yarn@4.9.4",
-  "scripts": {
-    "check": "tsc --noEmit",
-    "build": "tsup",
-    "types": "tsc -p tsconfig.build.json --emitDeclarationOnly",
-    "test": "vitest run ",
-    "test:watch": "vitest watch",
-    "prepublishOnly": "yarn check && yarn test && yarn build",
-    "example": "tsx examples/run.ts"
-  },
   "imports": {
     "#/*": "./src/*"
   },
@@ -19,33 +29,48 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
   "files": [
-    "dist/"
+    "dist/",
+    "README.md",
+    "LICENSE"
   ],
+  "sideEffects": false,
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsup",
+    "types": "tsc -p tsconfig.build.json --emitDeclarationOnly",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "prepare": "yarn build",
+    "prepublishOnly": "yarn check && yarn test && yarn build",
+    "example": "tsx examples/run.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
   "devDependencies": {
     "@types/node": "^24.3.1",
+    "@vitest/coverage-v8": "^3.2.4",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
-  },
-  "typesVersions": {
-    "*": {
-      "*": [
-        "dist/index.d.ts"
-      ]
-    }
-  },
-  "dependencies": {
-    "@vitest/coverage-v8": "^3.2.4"
   }
 }

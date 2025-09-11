@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Enable Corepack (Yarn 4)
+        run: |
+          corepack enable
+          # Lock to the version in your packageManager field
+          corepack prepare yarn@4.9.4 --activate
+
+      # Cache Yarn Berry artifacts (helps a lot for CI speed)
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+            .yarn/build-state.yml
+            .pnp.cjs
+            .pnp.loader.mjs
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Install
+        run: yarn install --immutable
+
+      - name: Typecheck
+        run: yarn check
+
+      - name: Build
+        run: yarn build
+
+      - name: Test
+        run: yarn test
+
+      - name: Pack (sanity)
+        run: npm pack --dry-run

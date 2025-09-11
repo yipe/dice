@@ -14,7 +14,7 @@
 
 const arg = process.argv[2];
 
-async function runExample(modulePath, message) {
+async function runExample(modulePath: string, message: string) {
   console.log(`${message}\n`);
   await import(modulePath);
 }

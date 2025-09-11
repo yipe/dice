@@ -668,6 +668,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@yipe/dice@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@yipe/dice@workspace:."
+  dependencies:
+    "@types/node": "npm:^24.3.1"
+    "@vitest/coverage-v8": "npm:^3.2.4"
+    ts-node: "npm:^10.9.2"
+    tsconfig-paths: "npm:^4.2.0"
+    tsup: "npm:^8.5.0"
+    tsx: "npm:^4.20.5"
+    typescript: "npm:^5.9.2"
+    vitest: "npm:^3.2.4"
+  languageName: unknown
+  linkType: soft
+
 "abbrev@npm:^3.0.0":
   version: 3.0.1
   resolution: "abbrev@npm:3.0.1"
@@ -925,21 +940,6 @@ __metadata:
   checksum: 10c0/7102cf3b7bb719c6b9c0db2e19bf0aa9318d141581befe8c7ce8ccd39af9eaa4346e5e05adef7f9bd7015da0f13a3a25dcfe306ef79dc8668aedbecb658dd247
   languageName: node
   linkType: hard
-
-"dice@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "dice@workspace:."
-  dependencies:
-    "@types/node": "npm:^24.3.1"
-    "@vitest/coverage-v8": "npm:^3.2.4"
-    ts-node: "npm:^10.9.2"
-    tsconfig-paths: "npm:^4.2.0"
-    tsup: "npm:^8.5.0"
-    tsx: "npm:^4.20.5"
-    typescript: "npm:^5.9.2"
-    vitest: "npm:^3.2.4"
-  languageName: unknown
-  linkType: soft
 
 "diff@npm:^4.0.1":
   version: 4.0.2
