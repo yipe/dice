@@ -372,21 +372,13 @@ function parseArgumentInternal(
       assertToken(s, "k");
       return parseKeep(s, n);
 
-    case "0":
-    case "1":
-    case "2":
-    case "3":
-    case "4":
-    case "5":
-    case "6":
-    case "7":
-    case "8":
-    case "9":
     case "n":
       return parseNumber(s, n);
-  }
 
-  return;
+    default:
+      if (isDigit(c)) return parseNumber(s, n);
+      return;
+  }
 }
 
 function parseBinaryArgument(
