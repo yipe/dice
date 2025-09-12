@@ -50,7 +50,7 @@
   "sideEffects": false,
   "scripts": {
     "lint": "eslint .",
-    "check": "tsc --noEmit",
+    "typecheck": "tsc -p config/tsconfig.build.json --noEmit",
     "build": "tsup --config config/tsup.config.ts",
     "types": "tsc -p config/tsconfig.build.json --emitDeclarationOnly",
     "test": "vitest run",

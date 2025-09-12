@@ -1,12 +1,17 @@
+// config/tsconfig.build.json
 {
-  "extends": "./tsconfig.json",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
+    "rootDir": "../src",
+    "outDir": "../dist",
     "declaration": true,
-    "emitDeclarationOnly": true,
-    "stripInternal": true,
-    "rootDir": "src",
-    "outDir": "dist",
-    "skipLibCheck": true
+    "emitDeclarationOnly": false
   },
-  "include": ["src/index.ts"]
+  "include": ["../src/**/*.ts"], // was "src/index.ts"
+  "exclude": [
+    "../dist",
+    "../node_modules",
+    "../**/*.spec.ts",
+    "../**/*.test.ts"
+  ]
 }
