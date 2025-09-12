@@ -4,5 +4,27 @@
     "**/.pnp.*": true
   },
   "typescript.tsdk": ".yarn/sdks/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // Enable ESLint
+  "eslint.enable": true,
+
+  // Lint these file types
+  "eslint.validate": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact"
+  ],
+
+  // Fix on save
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always"
+  },
+
+  // Use the project's local ESLint version, not VS Code's global
+  "eslint.useESLintClass": false,
+
+  // Show problems inline
+  "editor.codeLens": true
 }

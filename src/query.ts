@@ -1,5 +1,6 @@
 import { PMF } from "./pmf";
-import { COMPUTATIONAL_EPS, OutcomeType } from "./types";
+import type { OutcomeType } from "./types";
+import { COMPUTATIONAL_EPS } from "./types";
 
 /**
  * Query interface for analyzing dice roll probability distributions.
@@ -671,7 +672,7 @@ export class DiceQuery {
     const damageValues = this.combined.support();
 
     // Precompute totalCount per bin for the labels you intend to stack for efficiency.
-    const totals = damageValues.map((dmg) => {
+    damageValues.map((dmg) => {
       const bin = this.combined.map.get(dmg)!;
       return labels.reduce((sum, lab) => sum + (bin.count[lab] || 0), 0);
     });
@@ -1232,7 +1233,7 @@ export class DiceQuery {
   ): Map<OutcomeType, number> {
     const totals = new Map<OutcomeType, number>();
     outcomes.forEach((o) => totals.set(o, 0));
-    for (const [x, row] of this.combined.map) {
+    for (const [, row] of this.combined.map) {
       for (const o of outcomes) {
         const p = (row.count[o] as number) || 0; // if your bins store per-outcome p; else derive via toLabeledTable
         totals.set(o, (totals.get(o) || 0) + p);
@@ -1493,7 +1494,7 @@ export class DiceQuery {
    * const bonusAttack = parse("(d20 + 3 AC 15) * (1d6 + 1)");
    * const bothAttacks = mainAttack.convolve(bonusAttack);
    */
-  convolve(other: DiceQuery, eps?: number): DiceQuery {
+  convolve(other: DiceQuery): DiceQuery {
     const singles = [...this.singles, ...other.singles];
     return new DiceQuery(singles);
   }

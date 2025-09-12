@@ -1,12 +1,13 @@
 // dice.ts (internal)
 
 import { PMF } from "./pmf";
-import {
+import type {
   Bin,
-  COMPUTATIONAL_EPS,
   DamageDistribution,
   OutcomeLabelMap,
-  OutcomeType,
+  OutcomeType} from "./types";
+import {
+  COMPUTATIONAL_EPS
 } from "./types";
 
 /**

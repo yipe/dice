@@ -1,6 +1,7 @@
 import { LRUCache } from "./lru-cache";
 import { DiceQuery } from "./query";
-import { Bin, COMPUTATIONAL_EPS, OutcomeLabelMap } from "./types";
+import type { Bin, OutcomeLabelMap } from "./types";
+import { COMPUTATIONAL_EPS } from "./types";
 
 const cacheEnabled = true;
 
@@ -54,7 +55,7 @@ export class PMF {
   }
 
   // This creates a single bin at value 0, but with weight 0.
-  static emptyMass(epsilon = EPSILON): PMF {
+  static emptyMass(): PMF {
     return PMF.zero().scaleMass(0);
   }
 
@@ -309,7 +310,7 @@ export class PMF {
   /*
    * Helper for chaining multiple identical attacks
    */
-  replicate(n: number, eps = this.epsilon): PMF[] {
+  replicate(n: number): PMF[] {
     if (!Number.isInteger(n) || n <= 0) {
       throw new Error("combineN(n): n must be a positive integer");
     }
