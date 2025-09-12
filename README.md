@@ -1,20 +1,23 @@
-[![npm version](https://img.shields.io/npm/v/@yipe/dice.svg)](https://www.npmjs.com/package/@dpr/dice)
+[![npm version](https://img.shields.io/npm/v/@yipe/dice.svg)](https://www.npmjs.com/package/@yipe/dice)
 [![License: MIT](https://img.shields.io/badge/License-MIT-007ec6.svg)](LICENSE)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Ready-3178c6?logo=typescript)
 ![Dice Roll](https://img.shields.io/badge/Dice-20%20sided-007ec6?logo=dungeonsanddragons)
+![Size](https://img.shields.io/bundlephobia/minzip/@yipe/dice?)
 
-[![GitHub issues](https://img.shields.io/github/issues/yipe/dice.svg)](https://github.com/yipe/dice/issues)
+![Last Commit](https://img.shields.io/github/last-commit/yipe/dice?logo=github)
+![Dependencies](https://img.shields.io/librariesio/release/npm/@yipe/dice?logo=npm)
+[![GitHub issues](https://img.shields.io/github/issues/yipe/dice.svg?logo=github)](https://github.com/yipe/dice/issues)
 [![Build Status](https://github.com/yipe/dice/actions/workflows/ci.yml/badge.svg)](https://github.com/yipe/dice/actions)
-[![Tests](https://img.shields.io/github/actions/workflow/status/yipe/dice/ci.yml?label=tests)](https://github.com/yipe/dice/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-passing-4c1.svg?logo=vitest&logoColor=white)](https://github.com/yipe/dice/actions/workflows/ci.yml)
 
-# 🎲 @dpr/dice
+# 🎲 @yipe/dice
 
 A TypeScript library for **D&D 5e damage-per-round (DPR) calculations**, designed for players, Dungeon Masters, and developers who want to analyze combat mathematically.
 
 This library powers [dprcalc.com](https://dprcalc.com) and provides a precise, composable way to model dice rolls, attacks, and outcomes with probability mass functions (PMFs) — not just averages. This allows for rich charting and statistics with full outcome attribution.
 
 ```ts
-import { parse } from "@dpr/dice";
+import { parse } from "@yipe/dice";
 
 const attack = parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)");
 console.log("DPR:", attack.mean());
@@ -34,9 +37,9 @@ console.log("DPR:", attack.mean());
 
 ```bash
 # Install with npm or yarn
-npm install @dpr/dice
+npm install @yipe/dice
 # or
-yarn add @dpr/dice
+yarn add @yipe/dice
 ```
 
 ## 📦 Core Concepts
@@ -53,7 +56,7 @@ yarn add @dpr/dice
 Here's a simple example of calculating damage for a basic attack:
 
 ```ts
-import { parse, DiceQuery } from "@dpr/dice";
+import { parse, DiceQuery } from "@yipe/dice";
 
 const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
 
@@ -75,7 +78,7 @@ DPR: 4.35
 Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:
 
 ```ts
-import { parse, DiceQuery } from "@dpr/dice";
+import { parse, DiceQuery } from "@yipe/dice";
 
 function damageRiderExample() {
   const attack = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)");
@@ -112,7 +115,7 @@ function damageRiderExample() {
 You can generate full statistical distributions for visualization or reporting.
 
 ```ts
-import { parse, DiceQuery } from "@dpr/dice";
+import { parse, DiceQuery } from "@yipe/dice";
 
 const query2 = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
 console.table(query2.toChartSeries());
@@ -232,7 +235,6 @@ Here is the basic example:
 
 ## 🧱 Roadmap
 
-- [ ] **Publish** to npm as `@dpr/dice`
 - [ ] Create a **web playground** with live examples
 - [ ] Consider creating higher-level APIs: `Turn`, `Attack`, `DamageRider`
 - [ ] Simplify and improve PMF and Query interface ergonomics
