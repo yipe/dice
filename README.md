@@ -1,8 +1,8 @@
 [![npm version](https://img.shields.io/npm/v/@yipe/dice.svg)](https://www.npmjs.com/package/@yipe/dice)
 [![License: MIT](https://img.shields.io/badge/License-MIT-007ec6.svg)](LICENSE)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Ready-3178c6?logo=typescript)
-![Dice Roll](https://img.shields.io/badge/Dice-20%20sided-007ec6?logo=dungeonsanddragons)
-![Size](https://img.shields.io/bundlephobia/minzip/@yipe/dice?)
+![Size](https://img.shields.io/bundlephobia/minzip/@yipe/dice?logo=npm&logoColor=fff&label=Size)
+![Dice](https://dprcalc.com/api/roll)
 
 ![Last Commit](https://img.shields.io/github/last-commit/yipe/dice?logo=github)
 ![Dependencies](https://img.shields.io/librariesio/release/npm/@yipe/dice?logo=npm)
