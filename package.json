@@ -56,7 +56,7 @@
     "test": "vitest run",
     "test:watch": "vitest watch",
     "prepare": "yarn build",
-    "prepublishOnly": "yarn check && yarn test && yarn build",
+    "prepublishOnly": "yarn typecheck && yarn test && yarn build",
     "example": "tsx examples/run.ts"
   },
   "publishConfig": {
