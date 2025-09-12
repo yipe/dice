@@ -1,7 +1,8 @@
 [![npm version](https://img.shields.io/npm/v/@yipe/dice.svg)](https://www.npmjs.com/package/@dpr/dice)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue?logo=typescript)
-![Dice Roll](https://img.shields.io/badge/Dice-20%20sided-red?logo=dungeonsanddragons)
+[![License: MIT](https://img.shields.io/badge/License-MIT-007ec6.svg)](LICENSE)
+![TypeScript](https://img.shields.io/badge/TypeScript-Ready-3178c6?logo=typescript)
+![Dice Roll](https://img.shields.io/badge/Dice-20%20sided-007ec6?logo=dungeonsanddragons)
+
 [![GitHub issues](https://img.shields.io/github/issues/yipe/dice.svg)](https://github.com/yipe/dice/issues)
 [![Build Status](https://github.com/yipe/dice/actions/workflows/ci.yml/badge.svg)](https://github.com/yipe/dice/actions)
 [![Tests](https://img.shields.io/github/actions/workflow/status/yipe/dice/ci.yml?label=tests)](https://github.com/yipe/dice/actions/workflows/ci.yml)
