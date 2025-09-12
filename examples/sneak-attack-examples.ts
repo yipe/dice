@@ -235,11 +235,6 @@ export function simpleVariantC(inputs: SneakAttackInputs) {
 
   const [pS, pC] = attacks.firstSuccessSplit(["hit", "crit"], ["crit"]);
 
-  // Optional: quick assert if you want to see the numbers
-  // console.log({ pFirstNonCrit, pFirstCrit, pAny, pNone, sum: pFirstNonCrit + pFirstCrit });
-
-  // Exclusive Sneak: 6d6 if first hit crits, 3d6 if first hit non-crit, else 0
-
   const sneak = PMF.exclusive([
     [parse(saCritExpr), pC],
     [parse(saBaseExpr), pS],
