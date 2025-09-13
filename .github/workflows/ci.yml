@@ -44,7 +44,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Typecheck
-        run: yarn check
+        run: yarn typecheck
 
       - name: Build
         run: yarn build
