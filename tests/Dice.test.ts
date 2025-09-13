@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse, TEST_EPS } from "../src/index";
+import { EPS, parse } from "../src/index";
 
 describe("Dice Parser Tests", () => {
   describe("Basic Dice Expressions", () => {
@@ -407,7 +407,7 @@ describe("Dice Parser Tests", () => {
     it("handles large dice", () => {
       const result = parse("d100");
       expect(result.support().length).toBe(100);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles many dice", () => {
@@ -434,14 +434,14 @@ describe("Dice Parser Tests", () => {
         result.outcomeAt(1, "hit")
       );
 
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("parses combine operation", () => {
       const result = parse("d6&d4");
       expect(result.min()).toBe(1);
       expect(result.max()).toBe(6);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("parses add operation with ~", () => {
@@ -459,7 +459,7 @@ describe("Dice Parser Tests", () => {
       expect(result.outcomeAt(4, "hit")).toBeGreaterThan(
         result.outcomeAt(5, "hit")
       );
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
   });
 
@@ -495,7 +495,7 @@ describe("Dice Parser Tests", () => {
       const result = parse("d1");
       expect(result.support().length).toEqual(1);
       expect(result.support()).toEqual([1]);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles very large dice", () => {
@@ -528,7 +528,7 @@ describe("Dice Parser Tests", () => {
       expect(result.support().length).toBe(11);
       expect(result.min()).toBe(2);
       expect(result.max()).toBe(12);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("Critical hit with complex expression", () => {
@@ -536,7 +536,7 @@ describe("Dice Parser Tests", () => {
       expect(result.support().length).toBe(11);
       expect(result.min()).toBe(5);
       expect(result.max()).toBe(15);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("ttest xcrit2 does not work without parens", () => {
@@ -554,7 +554,7 @@ describe("Dice Parser Tests", () => {
       expect(result.max()).toBe(6);
       expect(result.outcomeAt(1, "crit")).toBeGreaterThan(0);
       expect(result.outcomeAt(6, "crit")).toBeGreaterThan(0);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("tests specific complex xcrit2 expression", () => {
@@ -564,7 +564,7 @@ describe("Dice Parser Tests", () => {
       expect(result.max()).toBe(12);
       expect(result.outcomeAt(1, "crit")).toBe(0);
       expect(result.outcomeAt(2, "crit")).toBeGreaterThan(0);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
   });
 
@@ -626,7 +626,7 @@ describe("Dice Parser Tests", () => {
       expect(result.max()).toBe(107);
       expect(result.outcomeAt(0, "missNone")).toBe(0.1);
 
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
 
       // TODO - add more here
     });
@@ -638,7 +638,7 @@ describe("Dice Parser Tests", () => {
       expect(result.min()).toBe(0);
       expect(result.max()).toBe(63);
 
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
 
       // TODO - add more here
     });
@@ -650,7 +650,7 @@ describe("Dice Parser Tests", () => {
       expect(result.min()).toBe(0); // Can miss
       expect(result.max()).toBe(70); // Actual max from complex max operations
 
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
 
       // Todo - add more here
     });
@@ -679,28 +679,28 @@ describe("Dice Parser Tests", () => {
       const result = parse("d4 - 10");
       expect(result.min()).toBe(-9); // 1-10 = -9
       expect(result.max()).toBe(-6); // 4-10 = -6
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles very large numbers", () => {
       const result = parse("d6 + 9999");
       expect(result.min()).toBe(10000); // 1+9999 = 10000
       expect(result.max()).toBe(10005); // 6+9999 = 10005
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles fractional results with division", () => {
       const result = parse("d10 / 3");
       expect(result.min()).toBe(1);
       expect(result.max()).toBe(4);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles fractional results with floor division", () => {
       const result = parse("d10 // 3");
       expect(result.min()).toBe(0); // floor(1/3) = 0
       expect(result.max()).toBe(3); // floor(10/3) = 3
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles chained comparison operations", () => {
@@ -713,21 +713,21 @@ describe("Dice Parser Tests", () => {
       const result = parse("d6 > 3 < 5");
       expect(result.min()).toBe(3);
       expect(result.max()).toBe(5);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles keep operations with constants", () => {
       const result = parse("kh2(d6 + 5)");
       expect(result.min()).toBe(6);
       expect(result.max()).toBe(11);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles multiple advantage layers", () => {
       const result = parse("(d20!) > (d20!)");
       expect(result.min()).toBe(1);
       expect(result.max()).toBe(20);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
 
       // TODO - add more here
     });
@@ -739,21 +739,21 @@ describe("Dice Parser Tests", () => {
       expect(result.support().length).toBe(100000);
       expect(result.min()).toBe(1);
       expect(result.max()).toBe(100000);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles many small dice", () => {
       const result = parse("100d2");
       expect(result.min()).toBe(100);
       expect(result.max()).toBe(200);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles many small dice", () => {
       const result = parse("100d6");
       expect(result.min()).toBe(100);
       expect(result.max()).toBe(600);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles deeply nested expressions", () => {
@@ -766,28 +766,28 @@ describe("Dice Parser Tests", () => {
       const result = parse("(d6 reroll 1) + (d4 reroll 1)");
       expect(result.min()).toBe(2);
       expect(result.max()).toBe(10);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles equality checks with arithmetic", () => {
       const result = parse("(d8 = 4) + 2");
       expect(result.min()).toBe(0);
       expect(result.max()).toBe(3);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles advantage with large modifiers", () => {
       const result = parse("d20! + 50");
       expect(result.min()).toBe(51);
       expect(result.max()).toBe(70);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
 
     it("handles complex keep with multiple dice types", () => {
       const result = parse("kh1(d4 + d6 + d8)");
       expect(result.min()).toBe(3);
       expect(result.max()).toBe(18);
-      expect(result.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(result.mass()).toBeCloseTo(1, EPS);
     });
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { fullRoundSimulationExample } from "../examples/other-examples";
-import { clearParserCache, parse, PMF, TEST_EPS } from "../src/index";
+import { clearParserCache, EPS, parse, PMF } from "../src/index";
 import { DiceQuery } from "../src/query";
 
 function seriesOf(pmf: PMF) {
@@ -246,8 +246,8 @@ describe("DiceQuery Comprehensive", () => {
     const _scaled = a1.scaleMass(0.5); // must NOT mutate a1
     expect(seriesOf(a1)).toEqual(before);
     expect(seriesOf(_scaled)).not.toEqual(before);
-    expect(a1.mass()).toBeCloseTo(1, TEST_EPS);
-    expect(_scaled.mass()).toBeCloseTo(0.5, TEST_EPS);
+    expect(a1.mass()).toBeCloseTo(1, EPS);
+    expect(_scaled.mass()).toBeCloseTo(0.5, EPS);
   });
 
   it("withProbability returns new PMF and doesn’t mutate payload", () => {

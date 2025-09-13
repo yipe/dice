@@ -1,6 +1,6 @@
 import { PMF } from "./pmf";
 import type { OutcomeType } from "./types";
-import { COMPUTATIONAL_EPS } from "./types";
+import { EPS } from "./types";
 
 /**
  * Query interface for analyzing dice roll probability distributions.
@@ -1511,7 +1511,7 @@ export class DiceQuery {
   public firstSuccessSplit(
     successOutcome: string | string[],
     subsetOutcome: string | string[],
-    eps = COMPUTATIONAL_EPS
+    eps = EPS
   ): readonly [pSuccess: number, pSubset: number, pAny: number, pNone: number] {
     const pmfs = this.singles;
     if (!pmfs.length) {

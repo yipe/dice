@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { PMF } from "../src/pmf";
-import { Bin, TEST_EPS } from "../src/types";
+import { Bin, EPS } from "../src/types";
 
 // Helper function to create a uniform die PMF
 function uniformDie(sides: number): PMF {
@@ -8,7 +8,7 @@ function uniformDie(sides: number): PMF {
   for (let i = 1; i <= sides; i++) {
     m.set(i, { p: 1 / sides, count: {} });
   }
-  return new PMF(m, TEST_EPS, true);
+  return new PMF(m, EPS, true);
 }
 
 // Helper function to create PMF from simple distribution
@@ -22,7 +22,7 @@ function pmfFrom(map: Record<number, number>, label?: string): PMF {
     if (label) count[label] = p;
     m.set(Number(k), { p, count });
   }
-  return new PMF(m, TEST_EPS, true);
+  return new PMF(m, EPS, true);
 }
 
 describe("PMF Advanced Operations", () => {
@@ -626,7 +626,7 @@ describe("PMF Advanced Operations", () => {
         const multi = new Map<number, Bin>();
         multi.set(1, { p: 0.4, count: { hit: 0.3, crit: 0.1 } });
         multi.set(6, { p: 0.6, count: { hit: 0.4, crit: 0.2 } });
-        const multiPMF = new PMF(multi, TEST_EPS, true);
+        const multiPMF = new PMF(multi, EPS, true);
 
         const critOnly = multiPMF.filterOutcome("crit");
 

@@ -1,4 +1,4 @@
-import { DiceQuery, OutcomeType, parse, PMF, TEST_EPS } from "../src/index";
+import { DiceQuery, OutcomeType, parse, PMF } from "../src/index";
 import { fxd, pct, sep } from "./print";
 
 /** Build a DiceQuery from a single expression (keeps provenance as one "single"). */
@@ -233,9 +233,9 @@ function greatWeaponMaster() {
   const gwm = (ac: number) =>
     makeQuery(`(d20 + 3 AC ${ac}) * (2d6 + 14) crit (2d6)`);
 
-  const results = [];
+  const results: { AC: number; "Normal DPR": string; "GWM DPR": string }[] = [];
 
-  let foundAC = undefined;
+  let foundAC: number | undefined = undefined;
   for (let ac = 10; ac <= 20; ac++) {
     const n = baseline(ac).mean();
     const g = gwm(ac).mean();
@@ -513,13 +513,10 @@ function roundDefinition(
   const riderBase = parse(oncePerTurnRider);
   const riderCrit = riderBase.convolve(riderBase); // “double” dice
 
-  const smite = PMF.exclusive(
-    [
-      [riderCrit, pCritFirstApprox],
-      [riderBase, pHitFirstApprox],
-    ],
-    TEST_EPS
-  );
+  const smite = PMF.exclusive([
+    [riderCrit, pCritFirstApprox],
+    [riderBase, pHitFirstApprox],
+  ]);
 
   const oa = PMF.withProbability(parse(oaExpr), oaChance);
 

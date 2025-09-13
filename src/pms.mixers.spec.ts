@@ -1,9 +1,8 @@
 import { beforeEach } from "node:test";
 import { describe, expect, it } from "vitest";
 import { DiceQuery, parse, PMF } from "./index";
-import { TEST_EPS } from "./types";
+import { EPS } from "./types";
 
-const EPS = TEST_EPS;
 const attackExpr = "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)";
 
 // --- tolerant comparison helper (use instead of strict .toEqual on floats) ---
@@ -79,7 +78,7 @@ describe("PMF.withProbability", () => {
   it("does not mutate the payload PMF", () => {
     const payload = parse("3d6");
     const snap = seriesOf(payload);
-    const _g = PMF.withProbability(payload, 0.25);
+    PMF.withProbability(payload, 0.25);
     expect(seriesOf(payload)).toEqual(snap);
   });
 

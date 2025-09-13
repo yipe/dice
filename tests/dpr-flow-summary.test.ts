@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "../src/index";
 import { DiceQuery } from "../src/query";
-import { OutcomeType, TEST_EPS } from "../src/types";
+import { EPS, OutcomeType } from "../src/types";
 
 describe("DPR Complete Flow Summary", () => {
   it("demonstrates complete flow: parsing -> pmf -> query with invariants", () => {
@@ -101,7 +101,7 @@ describe("DPR Complete Flow Summary", () => {
     expect(mean).toBeCloseTo(6.85, 1);
     expect(variance).toBeCloseTo(17.03, 1);
     expect(stdev).toBeCloseTo(4.13, 1);
-    expect(Math.abs(stdev - Math.sqrt(variance))).toBeLessThan(TEST_EPS);
+    expect(Math.abs(stdev - Math.sqrt(variance))).toBeLessThan(EPS);
 
     const min = query.min();
     const max = query.max();

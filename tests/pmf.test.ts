@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DiceQuery, parse, PMF, TEST_EPS } from "../src/index";
+import { DiceQuery, EPS, parse, PMF } from "../src/index";
 
 function uniformDie(sides: number): PMF {
   const m = new Map<number, { p: number; count: Record<string, number> }>();
@@ -352,8 +352,8 @@ describe("PMF.addScaled", () => {
       new DiceQuery([ba]).toChartSeries()
     );
     // Inputs unchanged
-    expect(new DiceQuery([a]).totalMass()).toBeCloseTo(1, TEST_EPS);
-    expect(new DiceQuery([b]).totalMass()).toBeCloseTo(1, TEST_EPS);
+    expect(new DiceQuery([a]).totalMass()).toBeCloseTo(1, EPS);
+    expect(new DiceQuery([b]).totalMass()).toBeCloseTo(1, EPS);
   });
 
   it("convolve is associative", () => {
@@ -377,8 +377,8 @@ describe("PMF.addScaled", () => {
       new DiceQuery(ref).toChartSeries()
     );
     // a and zero untouched
-    expect(new DiceQuery([a]).totalMass()).toBeCloseTo(1, TEST_EPS);
-    expect(new DiceQuery([zero]).totalMass()).toBeCloseTo(1, TEST_EPS);
+    expect(new DiceQuery([a]).totalMass()).toBeCloseTo(1, EPS);
+    expect(new DiceQuery([zero]).totalMass()).toBeCloseTo(1, EPS);
   });
 
   it("compact and normalize are pure", () => {
@@ -413,7 +413,7 @@ describe("PMF.addScaled", () => {
     const pAny = new DiceQuery([a1, a2]).probAtLeastOne(["hit", "crit"]);
     const smite = parse("3d6").scaleMass(pAny);
     const q = new DiceQuery([a1, a2, smite]);
-    expect(q.totalMass()).toBeCloseTo(1, TEST_EPS);
+    expect(q.totalMass()).toBeCloseTo(1, EPS);
   });
 
   it("withProbability matches branch with zero failure PMF", () => {

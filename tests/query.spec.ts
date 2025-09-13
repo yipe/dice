@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DiceQuery, parse, PMF } from "../src/index";
-import { TEST_EPS } from "../src/types";
+import { EPS } from "../src/types";
 
 function pmfFrom(map: Record<number, number>, label?: string): PMF {
   const m = new Map<number, { p: number; count: Record<string, number> }>();
@@ -512,9 +512,9 @@ describe("E2E: real expressions (original)", () => {
   it("each expression yields a normalized PMF and sane bounds", () => {
     for (const expr of cases) {
       const P = parse(expr);
-      expect(Math.abs(P.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(P.mass() - 1)).toBeLessThan(EPS);
       expect(P.min()).toBeLessThanOrEqual(P.max());
-      expect(P.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(P.mass()).toBeCloseTo(1, EPS);
     }
   });
 

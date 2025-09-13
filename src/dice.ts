@@ -5,10 +5,9 @@ import type {
   Bin,
   DamageDistribution,
   OutcomeLabelMap,
-  OutcomeType} from "./types";
-import {
-  COMPUTATIONAL_EPS
+  OutcomeType,
 } from "./types";
+import { EPS } from "./types";
 
 /**
  * @internal
@@ -433,7 +432,7 @@ export class Dice {
    * Convert dice to PMF using OutcomeType labels directly from damage distribution.
    * This is much cleaner than the original complex distribution conversion.
    */
-  public toPMF(numEpsilon: number = COMPUTATIONAL_EPS): PMF {
+  public toPMF(numEpsilon: number = EPS): PMF {
     const total = this.total();
     if (total === 0) return PMF.empty(numEpsilon);
 

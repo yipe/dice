@@ -1,12 +1,11 @@
 import { LRUCache } from "./lru-cache";
 import { DiceQuery } from "./query";
 import type { Bin, OutcomeLabelMap } from "./types";
-import { COMPUTATIONAL_EPS } from "./types";
+import { EPS } from "./types";
 
 const cacheEnabled = true;
 
-const EPSILON = COMPUTATIONAL_EPS;
-const pmfCache = new LRUCache<string, PMF>(1000);
+export const pmfCache = new LRUCache<string, PMF>(1000);
 
 /**
  * Probability Mass Function for discrete damage distributions.
@@ -37,18 +36,18 @@ export class PMF {
 
   constructor(
     public readonly map: Map<number, Bin> = new Map(),
-    public readonly epsilon = EPSILON,
+    public readonly epsilon = EPS,
     public readonly normalized = false,
     public readonly identifier: string = `anon#${PMF.__anonIdCounter++}`,
     private _preservedProvidence = true
   ) {}
 
-  static empty(epsilon = EPSILON, identifier = "empty") {
+  static empty(epsilon = EPS, identifier = "empty") {
     return new PMF(new Map(), epsilon, false, identifier);
   }
 
   // This has a single bin at value 0, mass of 1
-  static zero(epsilon = EPSILON): PMF {
+  static zero(epsilon = EPS): PMF {
     const m = new Map();
     m.set(0, { p: 1, count: { miss: 1 }, attr: {} });
     return new PMF(m, epsilon, false, "zero");
@@ -261,6 +260,13 @@ export class PMF {
     return this._preservedProvidence;
   }
 
+  private getPowerCacheKey(n: number, eps: number): string {
+    const id = this.identifier;
+    let key = `${id}`;
+    for (let i = 1; i < n; i++) key += `+${id}`;
+    return `${key}@${eps}`;
+  }
+
   /**
    * Efficiently computes this PMF convolved with itself `n` times.
    * Uses exponentiation by squaring to reduce total convolutions.
@@ -279,7 +285,7 @@ export class PMF {
 
     const epsilon = eps ?? this.epsilon;
 
-    const key = getPowerCacheKey(this, n, epsilon);
+    const key = this.getPowerCacheKey(n, epsilon);
     if (cacheEnabled) {
       const cached = pmfCache?.get(key);
       if (cached) return cached;
@@ -781,7 +787,7 @@ export class PMF {
    * - Similar PMF lists share common prefixes (A+B, (A+B)+C, etc.)
    * - Order-independent cache keys work better with consistent build patterns
    */
-  static convolveMany(pmfList: PMF[], eps = EPSILON): PMF {
+  static convolveMany(pmfList: PMF[], eps = EPS): PMF {
     if (pmfList.length === 0) return PMF.empty(eps);
     if (pmfList.length === 1) return pmfList[0];
 
@@ -809,7 +815,7 @@ export class PMF {
   }) {
     return new PMF(
       new Map(jsonData.bins),
-      EPSILON,
+      EPS,
       !!jsonData.normalized,
       jsonData.identifier || "fromJSON"
     );
@@ -1075,11 +1081,4 @@ export class PMF {
   query(): DiceQuery {
     return new DiceQuery(this);
   }
-}
-
-export function getPowerCacheKey(base: PMF, n: number, eps: number): string {
-  const id = base.identifier;
-  let key = `${id}`;
-  for (let i = 1; i < n; i++) key += `+${id}`;
-  return `${key}@${eps}`;
 }

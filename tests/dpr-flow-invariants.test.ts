@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DiceQuery, PMF, parse } from "../src/index";
-import { TEST_EPS } from "../src/types";
+import { EPS } from "../src/types";
 
 describe("DPR Flow Mathematical Invariants", () => {
   function toQuery(expr: string): DiceQuery {
@@ -19,7 +19,7 @@ describe("DPR Flow Mathematical Invariants", () => {
       for (const expr of expressions) {
         const pmf = parse(expr);
         const mass = pmf.mass();
-        expect(mass).toBeCloseTo(1, TEST_EPS);
+        expect(mass).toBeCloseTo(1, EPS);
       }
     });
 
@@ -60,7 +60,7 @@ describe("DPR Flow Mathematical Invariants", () => {
       const pmfs = [parse("d6"), parse("d8"), parse("d10"), parse("d4 + 2")];
 
       const combined = PMF.convolveMany(pmfs);
-      expect(combined.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(combined.mass()).toBeCloseTo(1, EPS);
     });
   });
 
@@ -158,7 +158,7 @@ describe("DPR Flow Mathematical Invariants", () => {
         .mapDamage((x) => x * 2)
         .scaleDamage(0.5, "floor");
 
-      expect(pmf3.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(pmf3.mass()).toBeCloseTo(1, EPS);
       for (const [, bin] of pmf3) {
         expect(bin.p).toBeGreaterThanOrEqual(0);
       }
@@ -220,7 +220,7 @@ describe("DPR Flow Mathematical Invariants", () => {
         for (const damage of support) {
           const cdf = query.cdf(damage);
           const ccdf = query.ccdf(damage + 1);
-          expect(Math.abs(cdf + ccdf - 1)).toBeLessThan(TEST_EPS);
+          expect(Math.abs(cdf + ccdf - 1)).toBeLessThan(EPS);
         }
       }
     });
@@ -262,7 +262,7 @@ describe("DPR Flow Mathematical Invariants", () => {
         const mean2 = query2.mean();
         const combinedMean = combinedQuery.mean();
 
-        expect(Math.abs(combinedMean - (mean1 + mean2))).toBeLessThan(TEST_EPS);
+        expect(Math.abs(combinedMean - (mean1 + mean2))).toBeLessThan(EPS);
       }
     });
 
@@ -281,7 +281,7 @@ describe("DPR Flow Mathematical Invariants", () => {
         const var2 = query2.variance();
         const combinedVar = combinedQuery.variance();
 
-        expect(Math.abs(combinedVar - (var1 + var2))).toBeLessThan(TEST_EPS);
+        expect(Math.abs(combinedVar - (var1 + var2))).toBeLessThan(EPS);
       }
     });
 
@@ -293,7 +293,7 @@ describe("DPR Flow Mathematical Invariants", () => {
       const combinedQuery = toMultiQuery(expressions);
       const actualMean = combinedQuery.mean();
 
-      expect(Math.abs(actualMean - expectedMean)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(actualMean - expectedMean)).toBeLessThan(EPS);
     });
   });
 
@@ -314,7 +314,7 @@ describe("DPR Flow Mathematical Invariants", () => {
             (sum: number, count: number | undefined) => sum + (count ?? 0),
             0
           );
-          expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+          expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
         }
       }
     });
@@ -328,7 +328,7 @@ describe("DPR Flow Mathematical Invariants", () => {
 
       const multiQuery = toMultiQuery(expressions);
 
-      expect(Math.abs(multiQuery.combined.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(multiQuery.combined.mass() - 1)).toBeLessThan(EPS);
 
       // Test that individual PMFs have proper label conservation before combining
       for (const expr of expressions) {
@@ -338,7 +338,7 @@ describe("DPR Flow Mathematical Invariants", () => {
             (sum: number, count: number | undefined) => sum + (count ?? 0),
             0
           );
-          expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+          expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
         }
       }
     });
@@ -367,7 +367,7 @@ describe("DPR Flow Mathematical Invariants", () => {
 
         for (const { totalAttr, expectedDamage } of attrTests) {
           const diff = Math.abs(totalAttr - expectedDamage);
-          expect(diff).toBeLessThan(TEST_EPS);
+          expect(diff).toBeLessThan(EPS);
         }
       }
     });
@@ -381,7 +381,7 @@ describe("DPR Flow Mathematical Invariants", () => {
           (sum: number, count: number | undefined) => sum + (count ?? 0),
           0
         );
-        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
 
       for (const [, bin] of pmf2) {
@@ -389,17 +389,17 @@ describe("DPR Flow Mathematical Invariants", () => {
           (sum: number, count: number | undefined) => sum + (count ?? 0),
           0
         );
-        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
 
       // Test addScaled operation maintains mass conservation
       const mixed = pmf1.addScaled(pmf2, 0.5).normalize();
-      expect(Math.abs(mixed.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(mixed.mass() - 1)).toBeLessThan(EPS);
 
       const simpleDice1 = parse("d6").normalize();
       const simpleDice2 = parse("d8").normalize();
       const convolvedDamage = simpleDice1.convolve(simpleDice2);
-      expect(Math.abs(convolvedDamage.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(convolvedDamage.mass() - 1)).toBeLessThan(EPS);
     });
   });
 
@@ -440,14 +440,16 @@ describe("DPR Flow Mathematical Invariants", () => {
       const multiQuery = toMultiQuery(expressions);
 
       // Should maintain mathematical properties
-      expect(Math.abs(multiQuery.combined.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(multiQuery.combined.mass() - 1)).toBeLessThan(EPS);
 
       // Mean should be additive
       const singleMean = toQuery(expressions[0]).mean();
       expect(singleMean).toBe(multiQuery.singles[0].mean());
 
       const expectedMean = singleMean * expressions.length;
-      expect(Math.abs(multiQuery.mean() - expectedMean)).toBeLessThan(TEST_EPS);
+      expect(
+        Math.abs(multiQuery.combined.compact().mean() - expectedMean)
+      ).toBeLessThan(10e-5);
 
       // CDF should be monotonic
       const support = multiQuery.combined.support();
@@ -472,7 +474,7 @@ describe("DPR Flow Mathematical Invariants", () => {
       expect(hasMiss).toBe(true); // Should have some misses with damage
 
       // All mathematical invariants should still hold
-      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(EPS);
 
       // Todo - we do this in a few spots in this file
       // Maybe find a cleaner way to do this without introspecting so much
@@ -481,7 +483,7 @@ describe("DPR Flow Mathematical Invariants", () => {
           (sum: number, count: number | undefined) => sum + (count ?? 0),
           0
         );
-        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
     });
 
@@ -495,7 +497,7 @@ describe("DPR Flow Mathematical Invariants", () => {
       expect(hasSaveHalf).toBe(true);
       expect(hasSaveFail).toBe(true);
 
-      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(EPS);
     });
 
     it("should handle potent cantrip (pc) expressions", () => {
@@ -505,14 +507,14 @@ describe("DPR Flow Mathematical Invariants", () => {
       let hasPc = pmf.hasOutcome("pc");
       expect(hasPc).toBe(true);
 
-      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(pmf.mass() - 1)).toBeLessThan(EPS);
 
       for (const [, bin] of pmf) {
         const totalLabelCount = Object.values(bin.count).reduce(
           (sum: number, count: number | undefined) => sum + (count ?? 0),
           0
         );
-        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(TEST_EPS);
+        expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
     });
   });

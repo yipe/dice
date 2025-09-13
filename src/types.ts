@@ -2,10 +2,7 @@
 export type OutcomeLabelMap = Partial<Record<string, number>>;
 
 /** Computational epsilon for pruning negligible probabilities. */
-export const COMPUTATIONAL_EPS = 1e-40;
-
-/** Test tolerance for floating-point precision errors. */
-export const TEST_EPS = 1e-10;
+export const EPS = 1e-12;
 
 /** A probability bin for a specific damage value. */
 export interface Bin {

@@ -10,7 +10,7 @@ import {
   variant5_evOnly,
   variant6_sequencePartitioning,
 } from "../examples/sneak-attack-examples";
-import { TEST_EPS } from "../src/types";
+import { EPS } from "../src/types";
 
 describe("Sneak Attack Variants", () => {
   it("should match the expected values", () => {
@@ -34,14 +34,14 @@ describe("Sneak Attack Variants", () => {
     const v5 = variant5_evOnly(inputs);
     const v6 = variant6_sequencePartitioning(inputs);
 
-    expect(va).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(vb).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v1).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v2).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v3).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v4).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v5).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v6).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
+    expect(va).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(vb).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v1).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v2).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v3).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v4).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v5).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v6).toBeCloseTo(inputs.expectedValue!, EPS);
   });
 
   it("should work with advantage", () => {
@@ -65,14 +65,14 @@ describe("Sneak Attack Variants", () => {
     const v5 = variant5_evOnly(inputs);
     const v6 = variant6_sequencePartitioning(inputs);
 
-    expect(va).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(vb).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v1).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v2).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v3).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v4).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v5).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v6).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
+    expect(va).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(vb).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v1).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v2).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v3).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v4).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v5).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v6).toBeCloseTo(inputs.expectedValue!, EPS);
   });
 
   it("should work with disadvantage", () => {
@@ -96,14 +96,14 @@ describe("Sneak Attack Variants", () => {
     const v5 = variant5_evOnly(inputs);
     const v6 = variant6_sequencePartitioning(inputs);
 
-    expect(va).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(vb).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v1).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v2).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v3).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v4).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v5).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
-    expect(v6).toBeCloseTo(inputs.expectedValue!, TEST_EPS);
+    expect(va).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(vb).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v1).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v2).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v3).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v4).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v5).toBeCloseTo(inputs.expectedValue!, EPS);
+    expect(v6).toBeCloseTo(inputs.expectedValue!, EPS);
   });
 });
 

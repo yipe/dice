@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse, TEST_EPS } from "../src/index";
+import { EPS, parse } from "../src/index";
 import { DiceQuery } from "../src/query";
 
 function pmf(expr: string) {
@@ -39,9 +39,9 @@ describe("E2E: real expressions (original)", () => {
   it("each expression yields a normalized PMF and sane bounds", () => {
     for (const expr of cases) {
       const P = pmf(expr);
-      expect(Math.abs(P.mass() - 1)).toBeLessThan(TEST_EPS);
+      expect(Math.abs(P.mass() - 1)).toBeLessThan(EPS);
       expect(P.min()).toBeLessThanOrEqual(P.max());
-      expect(P.mass()).toBeCloseTo(1, TEST_EPS);
+      expect(P.mass()).toBeCloseTo(1, EPS);
     }
   });
 
