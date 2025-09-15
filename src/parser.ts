@@ -48,7 +48,7 @@ export function parse(expression: string, n: number = 0): PMF {
 
   const chars = [...cleaned];
 
-  let result = undefined;
+  let result: Dice | undefined = undefined;
   try {
     result = parseExpression(chars, n);
   } catch (error) {
@@ -126,7 +126,7 @@ function parseExpression(arr: string[], n: number): Dice {
       critNorm = crit.total();
       crit = op.call(crit, parseBinaryArgument(arg, arr, n));
 
-      critNorm = critNorm ? crit.total() / critNorm : 1;
+      critNorm = crit && critNorm ? crit.total() / critNorm : 1;
     }
 
     // Handle save
@@ -145,7 +145,7 @@ function parseExpression(arr: string[], n: number): Dice {
       saveNorm = save.total();
       finalResult = finalResult.deleteFace(min);
       save = op.call(save, parseBinaryArgument(arg, arr, n));
-      saveNorm = saveNorm ? save.total() / saveNorm : 1;
+      saveNorm = save && saveNorm ? save.total() / saveNorm : 1;
     }
 
     // Handle half damage on hit (potent cantrip)
@@ -165,7 +165,7 @@ function parseExpression(arr: string[], n: number): Dice {
 
       pc = op.call(pc, parseBinaryArgument(arg, arr, n)).divideRoundDown(2); // parse the damage
 
-      const missAfter = pc.total();
+      const missAfter = pc ? pc.total() : 0;
       pcNorm = missBefore ? missAfter / missBefore : 1;
     }
 
@@ -187,7 +187,7 @@ function parseExpression(arr: string[], n: number): Dice {
       finalResult = finalResult.deleteFace(min);
 
       miss = op.call(miss, parseBinaryArgument(arg, arr, n));
-      missNorm = missNorm ? miss.total() / missNorm : 1;
+      missNorm = miss && missNorm ? miss.total() / missNorm : 1;
     }
 
     let norm = finalResult.total();

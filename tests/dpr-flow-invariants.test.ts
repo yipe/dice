@@ -485,6 +485,12 @@ describe("DPR Flow Mathematical Invariants", () => {
         );
         expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
+
+      expect(query.mean()).toBeCloseTo(3.05, 2);
+      expect(query.variance()).toBeCloseTo(2.514, 2);
+      expect(query.stddev()).toBeCloseTo(1.586, 2);
+      expect(query.min()).toBe(1);
+      expect(query.max()).toBe(6);
     });
 
     it("should handle save expressions with proper labels", () => {
@@ -498,6 +504,13 @@ describe("DPR Flow Mathematical Invariants", () => {
       expect(hasSaveFail).toBe(true);
 
       expect(Math.abs(pmf.mass() - 1)).toBeLessThan(EPS);
+
+      const query = toQuery(expr);
+      expect(query.mean()).toBeCloseTo(5.8, 2);
+      expect(query.variance()).toBeCloseTo(3.96, 2);
+      expect(query.stddev()).toBeCloseTo(1.99, 2);
+      expect(query.min()).toBe(4);
+      expect(query.max()).toBe(8);
     });
 
     it("should handle potent cantrip (pc) expressions", () => {
@@ -516,6 +529,13 @@ describe("DPR Flow Mathematical Invariants", () => {
         );
         expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
+
+      const query = toQuery(expr);
+      expect(query.mean()).toBeCloseTo(2.7, 2);
+      expect(query.variance()).toBeCloseTo(3.076, 2);
+      expect(query.stddev()).toBeCloseTo(1.754, 2);
+      expect(query.min()).toBe(0);
+      expect(query.max()).toBe(6);
     });
   });
 });

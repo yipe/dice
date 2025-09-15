@@ -1,6 +1,6 @@
 import { LRUCache } from "./lru-cache";
 import { DiceQuery } from "./query";
-import type { Bin, OutcomeLabelMap } from "./types";
+import type { Bin, OutcomeLabelMap, Rounding } from "./types";
 import { EPS } from "./types";
 
 const cacheEnabled = true;
@@ -9,17 +9,6 @@ export const pmfCache = new LRUCache<string, PMF>(1000);
 
 /**
  * Probability Mass Function for discrete damage distributions.
- *
- * Represents the probability distribution of dice roll outcomes with support for:
- * - Damage values and their probabilities
- * - Outcome type tracking (hit, miss, crit, etc)
- * - Damage attribution by outcome type
- *
- * Core operations:
- * - convolve(): Convolve two PMFs to represent multiple dice/attacks
- * - addScaled(): Add a scaled PMF branch (for conditional outcomes)
- * - mapDamage(): Transform damage values (for modifiers, resistances)
- * - normalize(): Ensure probabilities sum to 1.0
  */
 export class PMF {
   // Unique ID generator for anonymous PMFs to avoid cache key collisions
@@ -39,7 +28,7 @@ export class PMF {
     public readonly epsilon = EPS,
     public readonly normalized = false,
     public readonly identifier: string = `anon#${PMF.__anonIdCounter++}`,
-    private _preservedProvidence = true
+    private _preservedProvenance = true
   ) {}
 
   static empty(epsilon = EPS, identifier = "empty") {
@@ -51,6 +40,10 @@ export class PMF {
     const m = new Map();
     m.set(0, { p: 1, count: { miss: 1 }, attr: {} });
     return new PMF(m, epsilon, false, "zero");
+  }
+
+  static delta(value: number, epsilon = EPS): PMF {
+    return PMF.fromMap(new Map([[value, 1]]), epsilon);
   }
 
   // This creates a single bin at value 0, but with weight 0.
@@ -181,7 +174,7 @@ export class PMF {
    */
   static exclusive(
     options: Array<{ pmf: PMF; weight: number } | [PMF, number]>,
-    eps = 1e-12
+    eps = EPS
   ): PMF {
     const items = options.map((o) =>
       Array.isArray(o) ? { pmf: o[0], weight: o[1] } : o
@@ -215,9 +208,8 @@ export class PMF {
    *   [pCrit, critPMF],
    * ]);
    */
-  static mixN(weights: [number, PMF][]): PMF {
+  static mixN(weights: [number, PMF][], eps = EPS): PMF {
     // Treat tiny/negative as zero; keep performance clean
-    const eps = 1e-12;
     const filtered = weights.filter(([w]) => w > eps);
 
     if (filtered.length === 0) {
@@ -246,18 +238,18 @@ export class PMF {
   // This is a convenience method for when we use power
   // TODO: It can be smarter in the future, and we can also add it to query
   // That way statistics operations on invalid PMFs can throw an error
-  // TODO… how can we detect if manually merging two queries' combined PMFs, as that loses providence?
-  private setPreservedProvidence(preserved: boolean) {
-    if (!this._preservedProvidence && preserved) {
+  // TODO… how can we detect if manually merging two queries' combined PMFs, as that loses provenance?
+  private setPreservedProvenance(preserved: boolean) {
+    if (!this._preservedProvenance && preserved) {
       throw new Error(
-        "Preserved providence is already set to false, cannot fix that"
+        "Preserved provenance is already set to false, cannot fix that"
       );
     }
-    this._preservedProvidence = preserved;
+    this._preservedProvenance = preserved;
   }
 
-  public preservedProvidence(): boolean {
-    return this._preservedProvidence;
+  public preservedProvenance(): boolean {
+    return this._preservedProvenance;
   }
 
   private getPowerCacheKey(n: number, eps: number): string {
@@ -306,7 +298,7 @@ export class PMF {
       }
     }
 
-    result.setPreservedProvidence(false);
+    result.setPreservedProvenance(false);
     if (cacheEnabled) {
       pmfCache?.set(key, result);
     }
@@ -338,7 +330,7 @@ export class PMF {
   outcomeMass(outcome: string): number {
     let totalProbabilityMass = 0;
     for (const { p, count } of this.map.values()) {
-      totalProbabilityMass += p * (count[outcome] as number);
+      totalProbabilityMass += p * ((count[outcome] as number) ?? 0);
     }
     return totalProbabilityMass;
   }
@@ -676,20 +668,15 @@ export class PMF {
 
     // Normalize-by-value on non-raw path
     const norm = (x: PMF) =>
-      raw ? x : Math.abs(x.mass() - 1) <= 1e-12 ? x : x.normalize();
+      raw ? x : Math.abs(x.mass() - 1) <= epsilon ? x : x.normalize();
     const A0 = norm(this);
     const B0 = norm(other);
 
-    // 🔑 Canonicalize operand order by identifier (so A,B and B,A are identical paths)
     const [A, B] = A0.identifier <= B0.identifier ? [A0, B0] : [B0, A0];
-
-    // Build order-independent cache key (use your v4 + fingerprints here if you like)
     const cacheKey = this.getPMFCombineCacheKey(A, B, epsilon, raw);
-
     const cached = pmfCache?.get(cacheKey);
     if (cached) return cached;
 
-    // Convolution (order doesn't matter mathematically; we use the canonical A,B anyway)
     const combinedMap = new Map<number, Bin>();
     for (const [aVal, aBin] of A.map) {
       for (const [bVal, bBin] of B.map) {
@@ -717,21 +704,20 @@ export class PMF {
       }
     }
 
-    // Build result with a *canonical* identifier too
     let result = new PMF(
       combinedMap,
       epsilon,
       !raw,
-      `${A.identifier}${raw ? "*" : "+"}${B.identifier}` // ← canonical order
+      `${A.identifier}${raw ? "*" : "+"}${B.identifier}`
     );
 
     // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
     const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
     const mGot = result.mass();
-    if (mExp !== 0 && Math.abs(mGot - mExp) > 1e-12) {
+    if (mExp !== 0 && Math.abs(mGot - mExp) > epsilon) {
       result = result.scaleMass(mExp / mGot);
     }
-    if (!raw && Math.abs(result.mass() - 1) > 1e-12)
+    if (!raw && Math.abs(result.mass() - 1) > epsilon)
       result = result.normalize();
 
     pmfCache?.set(cacheKey, result);
@@ -993,6 +979,23 @@ export class PMF {
     return false;
   }
 
+  tailProbGE(t: number): number {
+    let s = 0;
+    for (const [x, rec] of this) {
+      const p = typeof rec === "number" ? rec : rec.p;
+      if (p > 0 && x >= t) s += p;
+    }
+    return s;
+  }
+
+  tailProbGT(t: number): number {
+    let s = 0;
+    for (const [x, rec] of this) {
+      if (x > t) s += rec.p;
+    }
+    return s;
+  }
+
   /**
    * Returns a new PMF containing only bins where the specified outcome has non-zero probability.
    * This creates a marginal distribution for the given outcome type, with probabilities
@@ -1041,7 +1044,6 @@ export class PMF {
       `filter(${this.identifier},${outcome})`
     );
   }
-
   /**
    * Calculates probabilities for first-success outcomes across n independent attempts.
    *
@@ -1076,6 +1078,97 @@ export class PMF {
     const pNone = 1 - pSpecificSuccess - pGeneralSuccess; // Should equal pFailAll
 
     return { pSpecificSuccess, pGeneralSuccess, pNone, pAny };
+  }
+
+  mapValues(
+    f: (v: number) => number,
+    eps: number = EPS,
+    opts?: { rounding?: Rounding; preserveCounts?: boolean }
+  ): PMF {
+    const rounding = opts?.rounding ?? "none";
+    const preserveCounts = opts?.preserveCounts ?? true;
+
+    const round = (x: number) =>
+      rounding === "floor"
+        ? Math.floor(x)
+        : rounding === "ceil"
+        ? Math.ceil(x)
+        : rounding === "round"
+        ? Math.round(x)
+        : x;
+
+    // Accumulate probs and merged counts
+    const probs = new Map<number, number>();
+    const counts = new Map<number, Record<string, number>>();
+
+    for (const [v, rec] of this) {
+      if (Math.abs(rec.p) < eps) continue;
+      const u = round(f(v));
+      probs.set(u, (probs.get(u) ?? 0) + rec.p);
+
+      if (preserveCounts) {
+        // Merge counts if present
+        const rec = this.map.get(v);
+        const src = typeof rec === "number" ? undefined : rec?.count;
+        if (src) {
+          const dest = counts.get(u) ?? {};
+          for (const k in src) {
+            dest[k] = (dest[k] ?? 0) + (src[k] as number);
+          }
+          counts.set(u, dest);
+        }
+      }
+    }
+
+    // Build PMF with merged counts, then normalize
+    const internal = new Map<number, Bin>();
+    for (const [u, p] of probs) {
+      internal.set(u, { p, count: counts.get(u) ?? {} });
+    }
+    // Normalize via pmfFromMap to keep one source of truth
+    return PMF.fromMap(
+      new Map(Array.from(internal, ([u, b]) => [u, b.p] as [number, number])),
+      eps
+    );
+  }
+
+  static fromMap(
+    m: Map<number, number>,
+    eps: number = EPS,
+    { requireIntegerValues = true }: { requireIntegerValues?: boolean } = {}
+  ): PMF {
+    const filtered: Array<[number, number]> = [];
+    for (const [v, p] of m) {
+      if (!Number.isFinite(v) || !Number.isFinite(p)) continue;
+      if (p <= 0 || Math.abs(p) < eps) continue;
+      if (requireIntegerValues && !Number.isInteger(v)) {
+        throw new Error(`fromMap: non-integer outcome ${v}`);
+      }
+      filtered.push([v, p]);
+    }
+
+    if (filtered.length === 0) {
+      throw new Error("fromMap: empty or invalid input map");
+    }
+
+    // Kahan sum for stability
+    let sum = 0;
+    let c = 0;
+    for (const [, p] of filtered) {
+      const y = p - c;
+      const t = sum + y;
+      c = t - sum - y;
+      sum = t;
+    }
+    if (sum <= 0) throw new Error("pmfFromMap: probabilities sum to 0");
+
+    filtered.sort((a, b) => a[0] - b[0]);
+
+    const internal = new Map<number, Bin>();
+    for (const [v, p] of filtered) {
+      internal.set(v, { p: p / sum, count: {} }); // keep count object present for consistency
+    }
+    return new PMF(internal, eps);
   }
 
   query(): DiceQuery {

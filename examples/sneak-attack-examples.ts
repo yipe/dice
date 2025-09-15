@@ -1,10 +1,8 @@
 // TODO - make a test file that calls these with advantage and disadvantage variants!
 
 import { DiceQuery, PMF, parse } from "../src/index";
+import { EPS } from "../src/types";
 import { printTableWithTab } from "./print";
-
-// Use 1e-12 for probability and mass tolerances in these examples
-const EPS = 1e-12;
 
 // Helper: conditionally include extra damage (like Sneak Attack), otherwise 0
 const conditionally = (pmf: PMF, chance: number) =>
@@ -200,7 +198,7 @@ export function simpleVariantB(inputs: SneakAttackInputs) {
     PMF.branch(
       hit,
       miss,
-      normalHitChance / Math.max(normalHitChance + missChance, 1e-12)
+      normalHitChance / Math.max(normalHitChance + missChance, EPS)
     ),
     critChance
   );
@@ -214,7 +212,7 @@ export function simpleVariantB(inputs: SneakAttackInputs) {
     PMF.branch(
       parse(inputs.saDamage),
       PMF.zero(),
-      saOnHit / Math.max(saOnHit + saOnNone, 1e-12)
+      saOnHit / Math.max(saOnHit + saOnNone, EPS)
     ),
     saOnCrit
   );

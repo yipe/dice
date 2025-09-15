@@ -60,9 +60,9 @@ describe("Complex Attack End-to-End Test", () => {
       const pmf = parse(complexExpression);
       const query = new DiceQuery(pmf.power(4));
 
-      // This is illegal because power() doesn't preserve providence
+      // This is illegal because power() doesn't preserve provenance
       const actualHitChance = query.probAtLeastOne(["hit", "crit"]);
-      expect(query.singles[0].preservedProvidence()).toBe(false);
+      expect(query.singles[0].preservedProvenance()).toBe(false);
       expect(actualHitChance).toBeGreaterThan(1);
     });
 
@@ -70,7 +70,7 @@ describe("Complex Attack End-to-End Test", () => {
       const pmf = parse(complexExpression);
       const query = new DiceQuery([pmf, pmf, pmf, pmf]);
       const actualHitChance = query.probAtLeastOne(["hit", "crit"]);
-      expect(query.singles[0].preservedProvidence()).toBe(true);
+      expect(query.singles[0].preservedProvenance()).toBe(true);
       expect(actualHitChance).toBeCloseTo(0.9984, 3);
     });
 

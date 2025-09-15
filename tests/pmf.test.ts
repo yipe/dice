@@ -427,3 +427,117 @@ describe("PMF.addScaled", () => {
     );
   });
 });
+
+describe("PMF outcome and attribution tests", () => {
+  it("outcomeMass calculates total mass for a given outcome", () => {
+    const m = new Map();
+    m.set(10, { p: 0.4, count: { hit: 0.4, miss: 0 } });
+    m.set(20, { p: 0.6, count: { hit: 0.5, crit: 0.1 } });
+    const pmf = new PMF(m);
+
+    expect(pmf.outcomeMass("hit")).toBeCloseTo(0.4 * 0.4 + 0.6 * 0.5, 12);
+    expect(pmf.outcomeMass("crit")).toBeCloseTo(0.6 * 0.1, 12);
+    expect(pmf.outcomeMass("miss")).toBeCloseTo(0.4 * 0, 12);
+    expect(pmf.outcomeMass("nonexistent")).toBe(0);
+  });
+
+  it("pruneRelative removes low-probability bins", () => {
+    const m = new Map();
+    m.set(0, { p: 0.01, count: {} }); // min, kept
+    m.set(1, { p: 0.001, count: {} }); // pruned
+    m.set(2, { p: 0.9, count: {} }); // peak
+    m.set(3, { p: 0.08, count: {} }); // kept, p >= 0.1 * 0.9 = 0.09 is false, but it's close
+    m.set(4, { p: 0.009, count: {} }); // pruned
+    m.set(5, { p: 0.01, count: {} }); // max, kept
+    const pmf = new PMF(m);
+
+    const pruned = pmf.pruneRelative(0.1);
+    expect(pruned.map.has(0)).toBe(true);
+    expect(pruned.map.has(1)).toBe(false);
+    expect(pruned.map.has(2)).toBe(true);
+    expect(pruned.map.has(3)).toBe(false); // this one is pruned because 0.08 < 0.1 * 0.9
+    expect(pruned.map.has(4)).toBe(false);
+    expect(pruned.map.has(5)).toBe(true);
+  });
+
+  it("pruneRelative respects minBins", () => {
+    const m = new Map();
+    m.set(0, { p: 0.01, count: {} });
+    m.set(1, { p: 0.02, count: {} });
+    m.set(2, { p: 0.9, count: {} });
+    m.set(3, { p: 0.03, count: {} });
+    m.set(4, { p: 0.04, count: {} });
+    const pmf = new PMF(m);
+
+    // epsRel=0.1 would prune everything except 2, 0, 4. minBins=4 should keep 3 as well.
+    const pruned = pmf.pruneRelative(0.1, 4);
+    expect(pruned.map.size).toBe(4);
+    expect(pruned.map.has(2)).toBe(true); // peak
+    expect(pruned.map.has(4)).toBe(true); // top-K
+    expect(pruned.map.has(3)).toBe(true); // top-K
+    expect(pruned.map.has(0)).toBe(true); // min is kept
+  });
+
+  it("outcomeAttributionAt retrieves attribution data", () => {
+    const m = new Map();
+    m.set(10, {
+      p: 0.5,
+      count: { hit: 1 },
+      attr: { fire: 5, cold: 5 },
+    });
+    m.set(20, { p: 0.5, count: { crit: 1 }, attr: { fire: 20 } });
+    const pmf = new PMF(m);
+
+    expect(pmf.outcomeAttributionAt(10, "fire")).toBe(5);
+    expect(pmf.outcomeAttributionAt(10, "cold")).toBe(5);
+    expect(pmf.outcomeAttributionAt(20, "fire")).toBe(20);
+    expect(pmf.outcomeAttributionAt(20, "cold")).toBe(0);
+    expect(pmf.outcomeAttributionAt(15, "fire")).toBe(0);
+  });
+
+  describe("firstSuccessWeights", () => {
+    it("calculates weights for n=1", () => {
+      const { pSpecificSuccess, pGeneralSuccess, pNone } =
+        PMF.firstSuccessWeights(0.6, 0.1, 1);
+      expect(pSpecificSuccess).toBeCloseTo(0.1, 12);
+      expect(pGeneralSuccess).toBeCloseTo(0.5, 12);
+      expect(pNone).toBeCloseTo(0.4, 12);
+    });
+
+    it("calculates weights for n > 1", () => {
+      const pSuccess = 0.6;
+      const pSpecial = 0.1;
+      const n = 3;
+      const pFail = 1 - pSuccess;
+      const pFailAll = pFail ** n;
+      const pAny = 1 - pFailAll;
+
+      const expectedSpecific = (pSpecial / pSuccess) * pAny;
+      const expectedGeneral = ((pSuccess - pSpecial) / pSuccess) * pAny;
+
+      const { pSpecificSuccess, pGeneralSuccess, pNone } =
+        PMF.firstSuccessWeights(pSuccess, pSpecial, n);
+
+      expect(pSpecificSuccess).toBeCloseTo(expectedSpecific, 12);
+      expect(pGeneralSuccess).toBeCloseTo(expectedGeneral, 12);
+      expect(pNone).toBeCloseTo(pFailAll, 12);
+      expect(pSpecificSuccess + pGeneralSuccess + pNone).toBeCloseTo(1.0, 12);
+    });
+
+    it("handles pSuccess = 0", () => {
+      const { pSpecificSuccess, pGeneralSuccess, pNone } =
+        PMF.firstSuccessWeights(0, 0, 5);
+      expect(pSpecificSuccess).toBe(0);
+      expect(pGeneralSuccess).toBe(0);
+      expect(pNone).toBe(1);
+    });
+
+    it("handles pSuccess = 1", () => {
+      const { pSpecificSuccess, pGeneralSuccess, pNone } =
+        PMF.firstSuccessWeights(1, 0.2, 5);
+      expect(pSpecificSuccess).toBeCloseTo(0.2, 12);
+      expect(pGeneralSuccess).toBeCloseTo(0.8, 12);
+      expect(pNone).toBeCloseTo(0, 12);
+    });
+  });
+});

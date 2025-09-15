@@ -23,8 +23,7 @@ describe("Dice Parser Tests", () => {
 
     it("Roll a d20, but reroll on 1 (halfling d20) - shorthand", () => {
       const result = parse("hd20");
-      // Same behavior as reroll
-      expect(result.support()).toContain(1); // 1s are still present
+      expect(result.support()).toContain(1);
       expect(result.support()).toContain(20);
       expect(result.faceTotal()).toBe(210);
     });

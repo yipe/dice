@@ -6,7 +6,7 @@ import { EPS } from "./types";
 const attackExpr = "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)";
 
 // --- tolerant comparison helper (use instead of strict .toEqual on floats) ---
-function expectSeriesClose(a: any[], b: any[], eps = 1e-12) {
+function expectSeriesClose(a: any[], b: any[], eps = EPS) {
   const sa = [...a].sort((u, v) => u.x - v.x);
   const sb = [...b].sort((u, v) => u.x - v.x);
   expect(sa.length).toBe(sb.length);

@@ -17,13 +17,13 @@ export class DiceQuery {
   public readonly singles: PMF[];
   public readonly combined: PMF;
 
-  constructor(singles: PMF | PMF[], combined?: PMF) {
+  constructor(singles: PMF | PMF[], combined?: PMF, eps = EPS) {
     this.singles = Array.isArray(singles) ? singles : [singles];
-    const c = combined ?? PMF.convolveMany(this.singles);
-    this.combined = Math.abs(c.mass() - 1) <= 1e-12 ? c : c.normalize();
     if (this.singles.some((s) => s === undefined)) {
       throw new Error("DiceQuery contains undefined singles");
     }
+    const c = combined ?? PMF.convolveMany(this.singles);
+    this.combined = Math.abs(c.mass() - 1) <= eps ? c : c.normalize();
   }
 
   private static readonly DEFAULT_OUTCOMES: readonly OutcomeType[] = [
@@ -376,27 +376,18 @@ export class DiceQuery {
    * - "How much damage comes from miss effects (like save-for-half spells)?"
    */
   expectedDamageFrom(labels: OutcomeType | OutcomeType[]): number {
-    // Handle single label case (backward compatibility)
-    if (typeof labels === "string") {
-      return this._expectedDamageFromSingle(labels);
-    }
+    const wanted = Array.isArray(labels) ? labels : [labels];
 
-    // For multiple labels, sum the attr values for all specified labels
-    let totalExpectedDamage = 0;
-    for (const [, probabilityBin] of this.combined) {
-      for (const label of labels) {
-        totalExpectedDamage += probabilityBin.attr?.[label] || 0;
+    let total = 0;
+    // By linearity of expectation, we can sum the expected damages from each individual PMF. This avoids issues with the `count` aggregation during
+    for (const single of this.singles) {
+      for (const [dmg, bin] of single) {
+        let p = 0;
+        for (const label of wanted) p += bin.count[label] ?? 0;
+        total += dmg * p;
       }
     }
-    return totalExpectedDamage;
-  }
-
-  private _expectedDamageFromSingle(label: OutcomeType): number {
-    let totalExpectedDamage = 0;
-    for (const [, probabilityBin] of this.combined) {
-      totalExpectedDamage += probabilityBin.attr?.[label] || 0;
-    }
-    return totalExpectedDamage;
+    return total;
   }
 
   /**
@@ -667,7 +658,7 @@ export class DiceQuery {
    */
   toStackedChartData(
     labels: OutcomeType[] = [],
-    epsilon = 1e-12
+    epsilon = EPS
   ): { labels: number[]; datasets: Array<{ label: string; data: number[] }> } {
     const damageValues = this.combined.support();
 

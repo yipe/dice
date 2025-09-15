@@ -140,6 +140,14 @@ describe("DiceQuery Comprehensive", () => {
       expect(query.probAtLeastOne("hit")).toBe(0);
     });
 
+    it("should throw an error if singles array contains undefined", () => {
+      const validPMF = parse("1d6");
+      // @ts-expect-error - Testing invalid input
+      expect(() => new DiceQuery([validPMF, undefined])).toThrow(
+        "DiceQuery contains undefined singles"
+      );
+    });
+
     it("should handle queries with only misses", () => {
       // Attack that always misses
       const pmf = parse("(d20 AC 25) * (1d6)");
@@ -671,5 +679,152 @@ describe("DiceQuery Comprehensive", () => {
     expect(q.max()).toBeCloseTo(124.0, 12);
     expect(q.percentiles([0.25, 0.5, 0.75])).toEqual([20, 29, 37]);
     expect(q.totalMass()).toBeCloseTo(1, 12);
+  });
+});
+
+describe("DiceQuery Transformations and Outcomes", () => {
+  describe("Probability Functions", () => {
+    it("probAtLeastK should calculate correct probabilities", () => {
+      const attack = parse("(d20 + 5 AC 15) * (1d6)"); // 55% hit rate
+      const query = new DiceQuery([attack, attack, attack]);
+
+      // P(at least 2 hits) = P(2 hits) + P(3 hits)
+      const p2 = query.probExactlyK("hit", 2);
+      const p3 = query.probExactlyK("hit", 3);
+      expect(query.probAtLeastK("hit", 2)).toBeCloseTo(p2 + p3, 6);
+      expect(query.probAtLeastK("hit", 0)).toBe(1);
+      expect(query.probAtLeastK("hit", 4)).toBe(0);
+    });
+
+    it("probAtMostK should calculate correct probabilities", () => {
+      const attack = parse("(d20 + 5 AC 15) * (1d6)"); // 55% hit rate
+      const query = new DiceQuery([attack, attack, attack]);
+
+      // P(at most 1 hit) = P(0 hits) + P(1 hit)
+      const p0 = query.probExactlyK("hit", 0);
+      const p1 = query.probExactlyK("hit", 1);
+      expect(query.probAtMostK("hit", 1)).toBeCloseTo(p0 + p1, 6);
+      expect(query.probAtMostK("hit", 3)).toBeCloseTo(1, 6);
+    });
+
+    it("probDamageGreaterThan should calculate correct tail probability", () => {
+      const query = new DiceQuery([parse("2d6")]); // Min 2, Max 12, Mean 7
+      expect(query.probDamageGreaterThan(12)).toBe(0);
+      expect(query.probDamageGreaterThan(1)).toBeCloseTo(1, 6);
+      expect(query.probDamageGreaterThan(6)).toBeCloseTo(
+        query.probTotalAtLeast(7),
+        6
+      );
+    });
+  });
+
+  describe("Outcome Functions", () => {
+    it("outcomeKeys should return the correct keys", () => {
+      const query = new DiceQuery([
+        parse("(d20 + 5 AC 15) * (1d6) crit (2d6)"),
+      ]);
+      const keys = query.outcomeKeys();
+      expect(keys).toContain("hit");
+      expect(keys).toContain("crit");
+      expect(keys).toContain("missNone");
+    });
+
+    it("outcomeTotals should calculate correct total probabilities", () => {
+      const query = new DiceQuery([
+        parse("(d20 + 5 AC 15) * (1d6) crit (2d6)"),
+      ]);
+      const totals = query.outcomeTotals();
+      expect(totals.get("hit")).toBeCloseTo(0.5, 6); // Hits on 10-19 (10/20)
+      expect(totals.get("crit")).toBeCloseTo(0.05, 6); // Crits on 20 (1/20)
+      expect(totals.get("missNone")).toBeCloseTo(0.45, 6); // Misses on 1-9 (9/20)
+    });
+
+    it("outcomeDamageRanges should calculate correct damage ranges", () => {
+      const query = new DiceQuery([
+        parse("(d20 + 5 AC 15) * (1d6) crit (2d6)"),
+      ]);
+      const ranges = query.outcomeDamageRanges();
+      const hitRange = ranges.get("hit");
+      const critRange = ranges.get("crit");
+
+      expect(hitRange?.min).toBe(1);
+      expect(hitRange?.max).toBe(6);
+      expect(hitRange?.avg).toBeCloseTo(3.5, 6);
+
+      expect(critRange?.min).toBe(2);
+      expect(critRange?.max).toBe(12);
+      expect(critRange?.avg).toBeCloseTo(7, 6);
+    });
+  });
+
+  describe("Transformation Functions", () => {
+    it("compact should remove low-probability outcomes", () => {
+      const pmf = new PMF(
+        new Map([
+          [1, { p: 0.9, count: {} }],
+          [2, { p: 1e-15, count: {} }],
+        ])
+      );
+      const query = new DiceQuery([pmf]);
+      const compactedQuery = query.compact();
+      expect(compactedQuery.combined.map.has(1)).toBe(true);
+      expect(compactedQuery.combined.map.has(2)).toBe(false);
+    });
+
+    it("normalize should scale probabilities to sum to 1", () => {
+      const pmf = new PMF(
+        new Map([
+          [1, { p: 1, count: {} }],
+          [2, { p: 1, count: {} }],
+        ])
+      );
+      const query = new DiceQuery([pmf]);
+      const normalizedQuery = query.normalize();
+      expect(normalizedQuery.combined.mass()).toBeCloseTo(1, 6);
+      expect(normalizedQuery.combined.map.get(1)?.p).toBeCloseTo(0.5, 6);
+      expect(normalizedQuery.combined.map.get(2)?.p).toBeCloseTo(0.5, 6);
+    });
+
+    it("addScaled should add a scaled branch and re-normalize", () => {
+      const query1 = new DiceQuery([parse("1d6")]);
+      const query2 = new DiceQuery([parse("1d4")]);
+      const combined = query1.addScaled(query2, 0.5);
+
+      // The DiceQuery constructor will re-normalize the mass to 1.
+      expect(combined.combined.mass()).toBeCloseTo(1, 6);
+
+      // Check a combined probability, scaled by the new total mass (1.5)
+      const p1_original = 1 / 6;
+      const p2_original = 1 / 4;
+      const expectedP = (p1_original + 0.5 * p2_original) / 1.5;
+      expect(combined.combined.map.get(1)?.p).toBeCloseTo(expectedP, 6);
+    });
+
+    it("scaleMass should scale probabilities and re-normalize", () => {
+      const query = new DiceQuery([parse("1d6")]);
+      const scaled = query.scaleMass(0.5);
+
+      // The DiceQuery constructor will re-normalize the mass to 1.
+      expect(scaled.combined.mass()).toBeCloseTo(1, 6);
+
+      // Probabilities should be scaled, but since it's a uniform distribution,
+      // re-normalizing makes them the same as the original.
+      expect(scaled.combined.map.get(1)?.p).toBeCloseTo(1 / 6, 6);
+    });
+
+    it("mapDamage should apply a function to damage values", () => {
+      const query = new DiceQuery([parse("1d6")]);
+      const mapped = query.mapDamage((d) => d * 2);
+      expect(mapped.combined.support()).toEqual([2, 4, 6, 8, 10, 12]);
+      expect(mapped.combined.mean()).toBeCloseTo(7, 6);
+    });
+
+    it("scaleDamage should scale damage values with rounding", () => {
+      const query = new DiceQuery([parse("1d6")]);
+      const scaled = query.scaleDamage(0.5, "floor");
+      expect(scaled.combined.support()).toEqual([0, 1, 2, 3]);
+      const scaledUp = query.scaleDamage(1.5, "ceil");
+      expect(scaledUp.combined.support()).toEqual([2, 3, 5, 6, 8, 9]);
+    });
   });
 });

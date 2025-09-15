@@ -33,8 +33,6 @@ console.log("DPR:", attack.mean());
 
 ## 🚀 Installation
 
-(COMING SOON!)
-
 ```bash
 # Install with npm or yarn
 npm install @yipe/dice

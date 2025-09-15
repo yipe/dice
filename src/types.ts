@@ -25,3 +25,5 @@ export type OutcomeType =
   | "saveHalf"
   | "saveFail"
   | "pc";
+
+export type Rounding = "none" | "floor" | "round" | "ceil";
