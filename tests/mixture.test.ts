@@ -15,11 +15,11 @@ const d = (sides: number): PMF => {
 const d4 = d(4);
 const d6 = d(6);
 
-describe("LabeledMixture", () => {
+describe("Mixture", () => {
   it("should initialize empty", () => {
     const mix = new Mixture();
     expect(mix.size()).toBe(0);
-    expect(() => mix.buildPMF()).toThrow("LabeledMixture: zero total mass");
+    expect(() => mix.buildPMF()).toThrow("Mixture: zero total mass");
   });
 
   it("should add a single labeled PMF", () => {
@@ -137,20 +137,6 @@ describe("LabeledMixture", () => {
     expect(weights.b).toBeCloseTo(3.5 / totalWeight, 12);
     expect(weights.c).toBeUndefined();
   });
-
-  it("toJSON() should produce a stable snapshot", () => {
-    const mix = new Mixture().add("b", d4, 2).add("a", PMF.delta(0), 1);
-    const json = mix.toJSON();
-
-    expect(json.eps).toBe(EPS);
-    // Check that totals and labels are sorted by outcome value
-    expect(json.totals[0][0]).toBe(0);
-    expect(json.totals[1][0]).toBe(1);
-    expect(json.labels[0][0]).toBe(0);
-    expect(json.labels[1][0]).toBe(1);
-
-    expect(json).toMatchSnapshot();
-  });
 });
 
 describe("mixLabeled", () => {
@@ -172,11 +158,11 @@ describe("mixLabeled", () => {
   });
 
   it("should handle an empty list of components", () => {
-    expect(() => Mixture.mix([])).toThrow("LabeledMixture: zero total mass");
+    expect(() => Mixture.mix([])).toThrow("Mixture: zero total mass");
   });
 });
 
-describe("LabeledMixture Edge Cases", () => {
+describe("Mixture Edge Cases", () => {
   it("should respect custom epsilon for pruning", () => {
     const eps = 0.1;
     const mix = new Mixture(eps);

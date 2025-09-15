@@ -67,7 +67,7 @@ export class Mixture<L extends string = string> {
       c = t - grand - y;
       grand = t;
     }
-    if (!(grand > 0)) throw new Error("LabeledMixture: zero total mass");
+    if (!(grand > 0)) throw new Error("Mixture: zero total mass");
 
     const internal = new Map<number, Bin>();
     for (const [v, m] of this.totals) {
