@@ -441,7 +441,7 @@ describe("PMF outcome and attribution tests", () => {
     expect(pmf.outcomeMass("nonexistent")).toBe(0);
   });
 
-  it("pruneRelative removes low-probability bins", () => {
+  it("prune removes low-probability bins", () => {
     const m = new Map();
     m.set(0, { p: 0.01, count: {} }); // min, kept
     m.set(1, { p: 0.001, count: {} }); // pruned
@@ -451,7 +451,7 @@ describe("PMF outcome and attribution tests", () => {
     m.set(5, { p: 0.01, count: {} }); // max, kept
     const pmf = new PMF(m);
 
-    const pruned = pmf.pruneRelative(0.1);
+    const pruned = pmf.prune(0.1);
     expect(pruned.map.has(0)).toBe(true);
     expect(pruned.map.has(1)).toBe(false);
     expect(pruned.map.has(2)).toBe(true);
@@ -460,7 +460,7 @@ describe("PMF outcome and attribution tests", () => {
     expect(pruned.map.has(5)).toBe(true);
   });
 
-  it("pruneRelative respects minBins", () => {
+  it("prune respects minBins", () => {
     const m = new Map();
     m.set(0, { p: 0.01, count: {} });
     m.set(1, { p: 0.02, count: {} });
@@ -470,7 +470,7 @@ describe("PMF outcome and attribution tests", () => {
     const pmf = new PMF(m);
 
     // epsRel=0.1 would prune everything except 2, 0, 4. minBins=4 should keep 3 as well.
-    const pruned = pmf.pruneRelative(0.1, 4);
+    const pruned = pmf.prune(0.1, 4);
     expect(pruned.map.size).toBe(4);
     expect(pruned.map.has(2)).toBe(true); // peak
     expect(pruned.map.has(4)).toBe(true); // top-K

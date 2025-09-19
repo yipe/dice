@@ -813,7 +813,7 @@ export class PMF {
    * optionally guarantees at least `minBins` survivors by adding top-K.
    * Returns a new, non-normalized PMF.
    */
-  pruneRelative(epsRel: number, minBins = 0): PMF {
+  prune(epsRel: number, minBins = 0): PMF {
     const size = this.map.size;
     if (size === 0) return this;
 
@@ -827,7 +827,7 @@ export class PMF {
       if (dmg > maxDamage) maxDamage = dmg;
     }
     if (peak === 0)
-      return new PMF(new Map(this.map), this.epsilon, false, this.identifier);
+      return new PMF(new Map(this.map), epsRel, false, this.identifier);
 
     const thresh = epsRel * peak;
     const entries = [...this.map.entries()];
@@ -880,7 +880,7 @@ export class PMF {
     }
 
     // Return non-normalized PMF
-    return new PMF(prunedMap, this.epsilon, false, `prune(${this.identifier})`);
+    return new PMF(prunedMap, epsRel, false, `prune(${this.identifier})`);
   }
 
   /** NEW - REVIEW IF THESE ARE USEFUL OR DUPLCIATIVE?  */
