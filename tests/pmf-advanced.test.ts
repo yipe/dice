@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { PMF } from "../src/pmf";
-import { Bin, EPS } from "../src/types";
+import { Bin, EPS, PMF } from "../src/index";
 
 // Helper function to create a uniform die PMF
 function uniformDie(sides: number): PMF {

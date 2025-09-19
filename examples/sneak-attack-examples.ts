@@ -1,7 +1,7 @@
 // TODO - make a test file that calls these with advantage and disadvantage variants!
 
+import { EPS } from "../src/common/types";
 import { DiceQuery, PMF, parse } from "../src/index";
-import { EPS } from "../src/types";
 import { printTableWithTab } from "./print";
 
 // Helper: conditionally include extra damage (like Sneak Attack), otherwise 0

@@ -1,7 +1,7 @@
 import { beforeEach } from "node:test";
 import { describe, expect, it } from "vitest";
-import { DiceQuery, parse, PMF } from "./index";
-import { EPS } from "./types";
+import { EPS } from "../src/common/types";
+import { DiceQuery, parse, PMF } from "../src/index";
 
 const attackExpr = "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)";
 

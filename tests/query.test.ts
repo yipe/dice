@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { fullRoundSimulationExample } from "../examples/other-examples";
-import { clearParserCache, EPS, parse, PMF } from "../src/index";
-import { DiceQuery } from "../src/query";
+import { clearParserCache, DiceQuery, EPS, parse, PMF } from "../src/";
 
 function seriesOf(pmf: PMF) {
   return new DiceQuery(pmf).toChartSeries();

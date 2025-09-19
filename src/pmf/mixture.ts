@@ -1,6 +1,6 @@
+import type { Bin } from "../common/types";
+import { EPS } from "../common/types";
 import { PMF } from "./pmf";
-import type { Bin } from "./types";
-import { EPS } from "./types";
 
 type BinEntries = Iterable<[number, Bin]>;
 

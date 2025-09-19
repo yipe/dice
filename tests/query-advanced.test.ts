@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { parse } from "../src/parser";
-import { PMF } from "../src/pmf";
-import { DiceQuery } from "../src/query";
-import { Bin, OutcomeType } from "../src/types";
+import { Bin, DiceQuery, OutcomeType, parse, PMF } from "../src/index";
 
 // Helper function to create a uniform die PMF
 function uniformDie(sides: number): PMF {

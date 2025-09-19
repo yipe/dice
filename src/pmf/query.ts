@@ -1,6 +1,6 @@
+import type { OutcomeType } from "../common/types";
+import { EPS } from "../common/types";
 import { PMF } from "./pmf";
-import type { OutcomeType } from "./types";
-import { EPS } from "./types";
 
 /**
  * Query interface for analyzing dice roll probability distributions.

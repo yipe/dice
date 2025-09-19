@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { LRUCache } from "../src/lru-cache";
-import { PMF } from "../src/pmf";
+import { LRUCache, PMF } from "../src/index";
 
 describe("PMF Convolution Caching", () => {
   // Simple test PMFs for cache testing

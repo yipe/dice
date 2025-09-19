@@ -1,7 +1,7 @@
+import { LRUCache } from "../common/lru-cache";
+import type { OutcomeType } from "../common/types";
+import type { PMF } from "../pmf/pmf";
 import { Dice } from "./dice";
-import { LRUCache } from "./lru-cache";
-import type { PMF } from "./pmf";
-import type { OutcomeType } from "./types";
 
 type DiceOperation = ((this: Dice, other: Dice | number) => Dice) & {
   unary?: boolean;

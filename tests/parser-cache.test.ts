@@ -4,7 +4,7 @@ import {
   getCachingEnabled,
   parse,
   setCachingEnabled,
-} from "../src/parser";
+} from "../src/index";
 
 describe("Parser Cache Control", () => {
   beforeEach(() => {

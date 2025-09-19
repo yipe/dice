@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { Dice } from "../src/dice";
-import { DamageDistribution, OutcomeType } from "../src/types";
+import { DamageDistribution, OutcomeType } from "../src/common/types";
+import { Dice } from "../src/parser/dice";
 
 describe("Dice Outcome Management", () => {
   let dice: Dice;

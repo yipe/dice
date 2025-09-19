@@ -1,7 +1,7 @@
-import { LRUCache } from "./lru-cache";
+import { LRUCache } from "../common/lru-cache";
+import type { Bin, OutcomeLabelMap, Rounding } from "../common/types";
+import { EPS } from "../common/types";
 import { DiceQuery } from "./query";
-import type { Bin, OutcomeLabelMap, Rounding } from "./types";
-import { EPS } from "./types";
 
 const cacheEnabled = true;
 

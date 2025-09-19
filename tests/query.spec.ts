@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DiceQuery, parse, PMF } from "../src/index";
-import { EPS } from "../src/types";
+import { DiceQuery, EPS, parse, PMF } from "../src/index";
 
 function pmfFrom(map: Record<number, number>, label?: string): PMF {
   const m = new Map<number, { p: number; count: Record<string, number> }>();

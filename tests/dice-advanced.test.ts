@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { Dice } from "../src/dice";
+import { Dice } from "../src/parser/dice";
 
 describe("Dice Advanced Methods", () => {
   let d6: Dice;

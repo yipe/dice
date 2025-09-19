@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../src/index";
-import { DiceQuery } from "../src/query";
-import { EPS, OutcomeType } from "../src/types";
+import { DiceQuery, EPS, OutcomeType, parse } from "../src/index";
 
 describe("DPR Complete Flow Summary", () => {
   it("demonstrates complete flow: parsing -> pmf -> query with invariants", () => {

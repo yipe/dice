@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../src/parser";
+import { parse } from "../src/index";
 
 describe.skip("Parser Error Handling", () => {
   describe("Invalid Token Errors", () => {

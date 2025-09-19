@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { EPS } from "../src/common/types";
 import { DiceQuery, PMF, parse } from "../src/index";
-import { EPS } from "../src/types";
 
 describe("DPR Flow Mathematical Invariants", () => {
   function toQuery(expr: string): DiceQuery {

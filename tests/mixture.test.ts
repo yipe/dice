@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Mixture } from "../src/mixture";
-import { PMF } from "../src/pmf";
-import { EPS } from "../src/types";
+import { EPS, Mixture, PMF } from "../src/index";
 
 // Helper to create a PMF for a fair die.
 const d = (sides: number): PMF => {

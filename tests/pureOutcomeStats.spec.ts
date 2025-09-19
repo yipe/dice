@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../src/index";
-import { DiceQuery } from "../src/query";
+import { DiceQuery, parse } from "../src/";
 
 function pmf(expr: string) {
   return parse(expr);
