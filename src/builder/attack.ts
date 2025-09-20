@@ -1,5 +1,8 @@
-import type { DiceQuery, OutcomeType } from "../";
-import { EPS, Mixture, PMF } from "../";
+import type { OutcomeType } from "../common/types";
+import { EPS } from "../common/types";
+import { Mixture } from "../pmf/mixture";
+import { PMF } from "../pmf/pmf";
+import type { DiceQuery } from "../pmf/query";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";

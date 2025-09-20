@@ -1,4 +1,4 @@
-import { PMF } from "../";
+import { PMF } from "../pmf/pmf";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
 import { RollBuilder } from "./roll";

@@ -1,4 +1,4 @@
-import type { PMF } from "../";
+import type { PMF } from "../pmf/pmf";
 import type { RollBuilder } from "./roll";
 
 export type RollFactory = {

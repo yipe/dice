@@ -1,5 +1,5 @@
-import type { PMF } from "../";
-import { LRUCache } from "../";
+import { LRUCache } from "../common/lru-cache";
+import type { PMF } from "../pmf/pmf";
 import { RollBuilder } from "./roll";
 import type { RollFactory } from "./types";
 
