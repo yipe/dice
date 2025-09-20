@@ -1,6 +1,6 @@
 {
   "name": "@yipe/dice",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A high-performance dice probability engine for D&D 5e DPR calculations. Powers dprcalc.com.",
   "keywords": [
     "dnd",
@@ -31,6 +31,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./builder": {
+      "import": {
+        "types": "./dist/builder/index.d.ts",
+        "default": "./dist/builder/index.js"
+      },
+      "require": {
+        "types": "./dist/builder/index.d.cts",
+        "default": "./dist/builder/index.cjs"
       }
     },
     "./package.json": "./package.json"

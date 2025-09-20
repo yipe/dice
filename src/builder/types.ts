@@ -1,4 +1,20 @@
 import type { PMF } from "../";
+import type { RollBuilder } from "./roll";
+
+export type RollFactory = {
+  (count: number, sides?: number, modifier?: number): RollBuilder;
+  (count: number, die: RollBuilder, modifier?: number): RollBuilder;
+  d(sides: number): RollBuilder;
+  hd20(): RollBuilder;
+  d4(): RollBuilder;
+  d6(): RollBuilder;
+  d8(): RollBuilder;
+  d10(): RollBuilder;
+  d12(): RollBuilder;
+  d20(): RollBuilder;
+  d100(): RollBuilder;
+  flat(n: number): RollBuilder;
+};
 
 export type RollType = "flat" | "advantage" | "disadvantage" | "elven accuracy";
 export type KeepMode = "highest" | "lowest";
