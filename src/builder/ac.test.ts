@@ -32,7 +32,7 @@ describe("AttackRollBuilder", () => {
         .ac(18);
 
       expect(multiBonusAttack.toExpression()).toBe(
-        "(d20 + 1d4 + 1d6 + 8 AC 18)"
+        "(d20 + 1d6 + 1d4 + 8 AC 18)"
       );
       expect(multiBonusAttack.toPMF()).toBeDefined();
     });
@@ -113,7 +113,7 @@ describe("AttackRollBuilder", () => {
     it("should allow chaining multiple plus calls", () => {
       const chainedBonus = d20.plus(d4).plus(d6).plus(2).plus(6).ac(14);
 
-      expect(chainedBonus.toExpression()).toBe("(d20 + 1d4 + 1d6 + 8 AC 14)");
+      expect(chainedBonus.toExpression()).toBe("(d20 + 1d6 + 1d4 + 8 AC 14)");
       expect(chainedBonus.toPMF()).toBeDefined();
     });
 
@@ -153,7 +153,7 @@ describe("AttackRollBuilder", () => {
       const multiDiceAttack = d20.plus(d4).plus(d6).plus(d8).plus(5).ac(15);
 
       expect(multiDiceAttack.toExpression()).toBe(
-        "(d20 + 1d4 + 1d6 + 1d8 + 5 AC 15)"
+        "(d20 + 1d8 + 1d6 + 1d4 + 5 AC 15)"
       );
       expect(multiDiceAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -161,9 +161,7 @@ describe("AttackRollBuilder", () => {
 
     it("should chain multiple identical dice bonuses", () => {
       const doubleBlessAttack = d20.plus(d4).plus(d4).plus(6).ac(16);
-      expect(doubleBlessAttack.toExpression()).toBe(
-        "(d20 + 1d4 + 1d4 + 6 AC 16)"
-      );
+      expect(doubleBlessAttack.toExpression()).toBe("(d20 + 2d4 + 6 AC 16)");
       expect(doubleBlessAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
     });
@@ -503,7 +501,7 @@ describe("AttackRollBuilder", () => {
         const pmf = attack.toPMF();
 
         expect(attack.toExpression()).toBe(
-          "(d20 + 5 AC 15) * (2d6 + 1d8 + 5) crit (4d6 + 2d8 + 5)"
+          "(d20 + 5 AC 15) * (1d8 + 2d6 + 5) crit (2d8 + 4d6 + 5)"
         );
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBe(0);
@@ -666,7 +664,7 @@ describe("AttackRollBuilder", () => {
         .ac(12)
         .onHit(roll(2).d6().plus(3).plus(d8).plus(5).plus(4, d4));
       expect(action.toExpression()).toBe(
-        "(d20 + 2 AC 12) * (2d6 + 1d8 + 4d4 + 8) crit (4d6 + 2d8 + 8d4 + 8)"
+        "(d20 + 2 AC 12) * (1d8 + 2d6 + 4d4 + 8) crit (2d8 + 4d6 + 8d4 + 8)"
       );
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF()?.mean()).toBeCloseTo(17.3, 5);
@@ -679,7 +677,7 @@ describe("AttackRollBuilder", () => {
         .onHit(roll(2).d6().plus(3).addRoll().d8().plus(5).addRoll(4).d4())
         .onMiss(roll.flat(1));
       expect(action.toExpression()).toBe(
-        "(d20 + 5 AC 15) * (2d6 + 1d8 + 4d4 + 8) crit (4d6 + 2d8 + 8d4 + 8) miss (1)"
+        "(d20 + 5 AC 15) * (1d8 + 2d6 + 4d4 + 8) crit (2d8 + 4d6 + 8d4 + 8) miss (1)"
       );
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF()?.mean()).toBeCloseTo(17.75, 5);
@@ -726,7 +724,7 @@ describe("AttackRollBuilder", () => {
         )
         .onMiss(roll.flat(1));
       expect(action.toExpression()).toBe(
-        "(d20 + 5 AC 15) * (2d6 + 3>d8 + 4(d4 reroll 1 reroll 2) + 8) xcrit4 (4d6 + 2(3>d8) + 8(d4 reroll 1 reroll 2) + 8) miss (1)"
+        "(d20 + 5 AC 15) * (3>d8 + 2d6 + 4(d4 reroll 1 reroll 2) + 8) xcrit4 (2(3>d8) + 4d6 + 8(d4 reroll 1 reroll 2) + 8) miss (1)"
       );
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF()?.mean()).toBeCloseTo(22.75625, 5);
@@ -818,5 +816,50 @@ describe("AttackRollBuilder", () => {
       attackConfig.ac = 25;
       expect(acBuilder.attackConfig.ac).toBe(15);
     });
+  });
+});
+
+describe("Combined Dice Expression Generation", () => {
+  it("should merge identical dice and sort by sides", () => {
+    const complexAttack = d20
+      .plus(2, d6)
+      .plus(2, d8)
+      .plus(2, d6)
+      .plus(5)
+      .ac(15);
+    expect(complexAttack.toExpression()).toBe("(d20 + 2d8 + 4d6 + 5 AC 15)");
+  });
+
+  it("should not merge dice with different reroll configs", () => {
+    const rerollAttack = d20.plus(2, d6).plus(2, d6.reroll(1)).plus(5).ac(15);
+    expect(rerollAttack.toExpression()).toBe(
+      "(d20 + 2(d6 reroll 1) + 2d6 + 5 AC 15)"
+    );
+  });
+
+  it("should not merge dice with different minimum configs", () => {
+    const minAttack = d20.plus(2, d6).plus(2, d6.minimum(2)).plus(5).ac(15);
+    expect(minAttack.toExpression()).toBe("(d20 + 2(3>d6) + 2d6 + 5 AC 15)");
+  });
+
+  it("should handle subtraction correctly", () => {
+    const subtractAttack = d20.plus(2, d8).minus(1, d6).plus(5).ac(15);
+    expect(subtractAttack.toExpression()).toBe("(d20 + 2d8 - 1d6 + 5 AC 15)");
+  });
+
+  it("should sort dice of different types", () => {
+    const sortAttack = d20.plus(1, d6).plus(1, d4).plus(1, d8).plus(5).ac(15);
+    expect(sortAttack.toExpression()).toBe("(d20 + 1d8 + 1d6 + 1d4 + 5 AC 15)");
+  });
+
+  it("should merge multiple sets of the same dice", () => {
+    const multiMergeAttack = d20
+      .plus(1, d8)
+      .plus(1, d6)
+      .plus(1, d8)
+      .plus(1, d6)
+      .plus(5)
+      .ac(15);
+    expect(multiMergeAttack.toExpression()).toBe("(d20 + 2d8 + 2d6 + 5 AC 15)");
   });
 });
