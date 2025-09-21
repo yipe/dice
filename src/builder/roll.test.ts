@@ -278,14 +278,14 @@ describe("RollBuilder", () => {
 
     it("should handle keepHighest() method", () => {
       const builder = roll(5).d6().keepHighest(5, 3);
-      expect(builder.toExpression()).toBe("5kh3(1d6)");
+      expect(builder.toExpression()).toBe("5kh3(5d6)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(13.43017, 5);
     });
 
     it("should handle keepLowest() method", () => {
       const builder = roll(4).d8().keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(1d8)");
+      expect(builder.toExpression()).toBe("4kl2(4d8)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(5.841796875, 5);
     });
@@ -309,14 +309,14 @@ describe("RollBuilder", () => {
 
     it("should handle complex keepHighest scenario", () => {
       const builder = roll(6).d8().plus(2).keepHighest(6, 4);
-      expect(builder.toExpression()).toBe("6kh4(1d8) + 2");
+      expect(builder.toExpression()).toBe("6kh4(6d8) + 2");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(24.5086, 1);
     });
 
     it("should handle complex keepLowest scenario", () => {
       const builder = roll(8).d10().plus(3).keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(1d10) + 3");
+      expect(builder.toExpression()).toBe("4kl2(8d10) + 3");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(10.033, 3);
     });
@@ -412,7 +412,7 @@ describe("RollBuilder", () => {
         .addRoll(2)
         .d6()
         .keepLowest(2, 1);
-      expect(builder.toExpression()).toBe("6kh4(1d8) + 2kl1(1d6) + 3");
+      expect(builder.toExpression()).toBe("6kh4(6d8) + 2kl1(2d6) + 3");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(28.0, 1);
     });
@@ -763,6 +763,45 @@ describe("RollBuilder", () => {
       const builder = roll(1, 20).minus(subtractedRoll);
       expect(builder.toExpression()).toBe("d20 - 1d8 + 1d4");
       expect(builder.toPMF().mean()).toBeCloseTo(10.5 - 4.5 + 2.5);
+    });
+  });
+
+  describe("doubleDice()", () => {
+    it("should double normal dice", () => {
+      const builder = roll(2, 6, 5).doubleDice();
+      expect(builder.toExpression()).toBe("4d6 + 5");
+    });
+
+    it("should double keepHighest dice", () => {
+      const builder = roll(1).d(6).keepHighest(4, 3).doubleDice();
+      expect(builder.toExpression()).toBe("4kh3(2d6)");
+    });
+
+    it("should double keepLowest dice", () => {
+      const builder = roll(1).d(6).keepLowest(4, 3).doubleDice();
+      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    });
+
+    it("should keepLowest double dice", () => {
+      const builder = roll(1).d(6).doubleDice().keepLowest(4, 3);
+      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    });
+
+    it("should not affect modifiers", () => {
+      const builder = roll(0).plus(5).doubleDice();
+      expect(builder.toExpression()).toBe("5");
+    });
+
+    it("should handle rolls with no dice", () => {
+      const builder = new RollBuilder().doubleDice();
+      expect(builder.toExpression()).toBe("0");
+    });
+
+    it("should double multiple dice configs", () => {
+      const builder = roll(2, 6).plus(roll(3, 8)).doubleDice();
+      // Order might vary based on sorting, but counts should be correct
+      expect(builder.toExpression()).toContain("6d8");
+      expect(builder.toExpression()).toContain("4d6");
     });
   });
 

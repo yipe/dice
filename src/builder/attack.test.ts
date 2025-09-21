@@ -189,4 +189,26 @@ describe("AttackBuilder", () => {
       expect(resolution.weights.hit).toBeCloseTo(1 - 40 / 400);
     });
   });
+
+  describe("Complex Attack Strings", () => {
+    it("should double crit dice for keepHighest", () => {
+      const attack = d20
+        .plus(13)
+        .ac(20)
+        .onHit(roll(1).d(4).keepHighest(2, 1).plus(2));
+      expect(attack.toExpression()).toBe(
+        "(d20 + 13 AC 20) * (2kh1(1d4) + 2) crit (2kh1(2d4) + 2)"
+      );
+    });
+
+    it("should double crit dice for keepLowest", () => {
+      const attack = d20
+        .plus(10)
+        .ac(18)
+        .onHit(roll(1).d(6).keepLowest(3, 2).plus(3));
+      expect(attack.toExpression()).toBe(
+        "(d20 + 10 AC 18) * (3kl2(1d6) + 3) crit (3kl2(2d6) + 3)"
+      );
+    });
+  });
 });
