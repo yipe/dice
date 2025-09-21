@@ -547,11 +547,10 @@ export class RollBuilder {
             this.configToSingleExpressionWithoutModifier(
               {
                 ...config,
-                count: 1,
+                count: config.count,
                 modifier: 0,
                 rollType: "flat",
                 keep: undefined,
-                bestOf: 0,
               },
               false
             );
