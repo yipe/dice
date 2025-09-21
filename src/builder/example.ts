@@ -163,7 +163,7 @@ export const advHd20ExprExpected = "hd20 > hd20";
  * Note that reroll(1) applies to the immediate roll before it.
  */
 export const complexDamage = roll(2, d6).plus(d8).plus(4, d4).reroll(1).plus(5);
-export const complexDamageExprExpected = "1d8 + 2d6 + 4(d4 reroll 1) + 5";
+export const complexDamageExprExpected = "4(d4 reroll 1) + 1d8 + 2d6 + 5";
 
 /** Double dice (useful for crit damage duplication) */
 export const doubledD8 = d8.plus(5).doubleDice();
