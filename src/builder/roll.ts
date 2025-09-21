@@ -373,12 +373,40 @@ export class RollBuilder {
       }
     }
 
-    const diceConfigs = Array.from(configGroups.values())
+    const rootConfig = this.getRootDieConfig();
+    const groupedConfigs = Array.from(configGroups.values());
+    let rootD20Group: { config: RollConfig; totalCount: number } | undefined;
+
+    if (rootConfig && rootConfig.sides === 20) {
+      const rootIndex = groupedConfigs.findIndex(
+        ({ config }) =>
+          config.sides === rootConfig.sides &&
+          config.rollType === rootConfig.rollType &&
+          config.reroll === rootConfig.reroll &&
+          config.explode === rootConfig.explode &&
+          config.minimum === rootConfig.minimum &&
+          config.bestOf === rootConfig.bestOf &&
+          JSON.stringify(config.keep) === JSON.stringify(rootConfig.keep)
+      );
+
+      if (rootIndex !== -1) {
+        rootD20Group = groupedConfigs.splice(rootIndex, 1)[0];
+      }
+    }
+
+    const sortedDiceConfigs = groupedConfigs
       .map(({ config, totalCount }) => ({
         ...config,
         count: totalCount,
       }))
       .sort((a, b) => {
+        const aHasPriority = a.reroll > 0 || a.minimum > 0;
+        const bHasPriority = b.reroll > 0 || b.minimum > 0;
+
+        if (aHasPriority !== bHasPriority) {
+          return aHasPriority ? -1 : 1;
+        }
+
         if (b.sides !== a.sides) return b.sides - a.sides;
 
         // Add a complexity score for sorting when sides are equal
@@ -392,23 +420,30 @@ export class RollBuilder {
         return complexity(b) - complexity(a);
       });
 
+    const diceConfigs = rootD20Group
+      ? [
+          { ...rootD20Group.config, count: rootD20Group.totalCount },
+          ...sortedDiceConfigs,
+        ]
+      : sortedDiceConfigs;
+
     const totalModifier = this.subRollConfigs.reduce(
       (sum, config) => sum + config.modifier,
       0
     );
     if (diceConfigs.length === 0) return totalModifier.toString();
 
-    const rootConfig = this.getRootDieConfig();
-    const newRootConfig = rootConfig
+    const rootDieConfig = this.getRootDieConfig();
+    const newRootConfig = rootDieConfig
       ? diceConfigs.find(
           (c) =>
-            c.sides === rootConfig.sides &&
-            c.rollType === rootConfig.rollType &&
-            c.reroll === rootConfig.reroll &&
-            c.explode === rootConfig.explode &&
-            c.minimum === rootConfig.minimum &&
-            c.bestOf === rootConfig.bestOf &&
-            c.keep === rootConfig.keep
+            c.sides === rootDieConfig.sides &&
+            c.rollType === rootDieConfig.rollType &&
+            c.reroll === rootDieConfig.reroll &&
+            c.explode === rootDieConfig.explode &&
+            c.minimum === rootDieConfig.minimum &&
+            c.bestOf === rootDieConfig.bestOf &&
+            c.keep === rootDieConfig.keep
         )
       : undefined;
 

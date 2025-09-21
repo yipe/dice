@@ -724,7 +724,7 @@ describe("AttackRollBuilder", () => {
         )
         .onMiss(roll.flat(1));
       expect(action.toExpression()).toBe(
-        "(d20 + 5 AC 15) * (3>d8 + 2d6 + 4(d4 reroll 1 reroll 2) + 8) xcrit4 (2(3>d8) + 4d6 + 8(d4 reroll 1 reroll 2) + 8) miss (1)"
+        "(d20 + 5 AC 15) * (3>d8 + 4(d4 reroll 1 reroll 2) + 2d6 + 8) xcrit4 (2(3>d8) + 8(d4 reroll 1 reroll 2) + 4d6 + 8) miss (1)"
       );
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF()?.mean()).toBeCloseTo(22.75625, 5);
