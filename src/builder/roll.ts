@@ -543,7 +543,19 @@ export class RollBuilder {
       case "flat":
         if (config.keep) {
           const mode = config.keep.mode === "highest" ? "kh" : "kl";
-          mainExpression = `${config.keep.total}${mode}${config.keep.count}(${baseDie})`;
+          const baseDieExpression =
+            this.configToSingleExpressionWithoutModifier(
+              {
+                ...config,
+                count: 1,
+                modifier: 0,
+                rollType: "flat",
+                keep: undefined,
+                bestOf: 0,
+              },
+              false
+            );
+          mainExpression = `${config.keep.total}${mode}${config.keep.count}(${baseDieExpression})`;
         } else {
           const isComplex = baseDie.length > `d${config.sides}`.length;
           const isHalflingShorthand = baseDie === "hd20";

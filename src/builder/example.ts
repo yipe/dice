@@ -141,11 +141,11 @@ export const min2OnD6ExprExpected = "2>d6";
 
 /** Keep highest 3 of 4d6. */
 export const kh3Of4d6 = roll(4, d6).keepHighest(4, 3);
-export const kh3Of4d6ExprExpected = "4kh3(d6)";
+export const kh3Of4d6ExprExpected = "4kh3(1d6)";
 
 /** Keep lowest 2 of 4d8. */
 export const kl2Of4d8 = roll(4, d8).keepLowest(4, 2);
-export const kl2Of4d8ExprExpected = "4kl2(d8)";
+export const kl2Of4d8ExprExpected = "4kl2(1d8)";
 
 /** Advantage on d20. */
 export const advD20 = d20.withAdvantage();

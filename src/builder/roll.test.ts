@@ -44,12 +44,12 @@ export const testCases: {
   {
     label: "Keep Highest",
     config: { keep: { total: 4, count: 3, mode: "highest" }, sides: 6 },
-    expected: "4kh3(d6)",
+    expected: "4kh3(1d6)",
   },
   {
     label: "Keep Lowest",
     config: { keep: { total: 5, count: 2, mode: "lowest" }, sides: 10 },
-    expected: "5kl2(d10)",
+    expected: "5kl2(1d10)",
   },
   {
     label: "Halfling Dice (shorthand)",
@@ -278,14 +278,14 @@ describe("RollBuilder", () => {
 
     it("should handle keepHighest() method", () => {
       const builder = roll(5).d6().keepHighest(5, 3);
-      expect(builder.toExpression()).toBe("5kh3(d6)");
+      expect(builder.toExpression()).toBe("5kh3(1d6)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(13.43017, 5);
     });
 
     it("should handle keepLowest() method", () => {
       const builder = roll(4).d8().keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(d8)");
+      expect(builder.toExpression()).toBe("4kl2(1d8)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(5.841796875, 5);
     });
@@ -309,14 +309,14 @@ describe("RollBuilder", () => {
 
     it("should handle complex keepHighest scenario", () => {
       const builder = roll(6).d8().plus(2).keepHighest(6, 4);
-      expect(builder.toExpression()).toBe("6kh4(d8) + 2");
+      expect(builder.toExpression()).toBe("6kh4(1d8) + 2");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(24.5086, 1);
     });
 
     it("should handle complex keepLowest scenario", () => {
       const builder = roll(8).d10().plus(3).keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(d10) + 3");
+      expect(builder.toExpression()).toBe("4kl2(1d10) + 3");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(10.033, 3);
     });
@@ -412,7 +412,7 @@ describe("RollBuilder", () => {
         .addRoll(2)
         .d6()
         .keepLowest(2, 1);
-      expect(builder.toExpression()).toBe("6kh4(d8) + 2kl1(d6) + 3");
+      expect(builder.toExpression()).toBe("6kh4(1d8) + 2kl1(1d6) + 3");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(28.0, 1);
     });
