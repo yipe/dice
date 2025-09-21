@@ -122,7 +122,7 @@ describe("RollBuilder", () => {
 
     expect(crazyChain.toExpression()).toEqual(paladinSmite.toExpression());
     expect(crazyChain.toExpression()).toEqual(
-      "2(d6 reroll 1 reroll 2) + 3d8 + 5"
+      "3d8 + 2(d6 reroll 1 reroll 2) + 5"
     );
   });
 
@@ -200,7 +200,7 @@ describe("RollBuilder", () => {
         .addRoll(4)
         .d4()
         .reroll(1);
-      expect(builder.toExpression()).toBe("2d6 + 1d8 + 4(d4 reroll 1) + 5");
+      expect(builder.toExpression()).toBe("1d8 + 2d6 + 4(d4 reroll 1) + 5");
     });
 
     it("should handle flat modifiers as a roll part when adding", () => {
@@ -218,7 +218,7 @@ describe("RollBuilder", () => {
         .plus(roll(1).d8())
         .plus(5)
         .plus(roll(4).d4().reroll(1));
-      expect(builder.toExpression()).toBe("2d6 + 1d8 + 4(d4 reroll 1) + 5");
+      expect(builder.toExpression()).toBe("1d8 + 2d6 + 4(d4 reroll 1) + 5");
     });
 
     it("should handle multiple rolls with plus but tighter", () => {
@@ -231,7 +231,7 @@ describe("RollBuilder", () => {
         .plus(d8)
         .plus(5)
         .plus(roll(4).d4().reroll(1));
-      expect(builder.toExpression()).toBe("2d6 + 1d8 + 4(d4 reroll 1) + 5");
+      expect(builder.toExpression()).toBe("1d8 + 2d6 + 4(d4 reroll 1) + 5");
     });
 
     it("should handle multiple rolls with plus but even tighter", () => {
@@ -241,7 +241,7 @@ describe("RollBuilder", () => {
       // Step 4:  roll(2).d6().plus(d8).plus(roll(4, 4).reroll(1)).plus(5)
       const builder = roll(2).d6().plus(d8).plus(roll(4, 4).reroll(1)).plus(5);
       // This is no longer broken because builders are immutable
-      expect(builder.toExpression()).toBe("2d6 + 1d8 + 4(d4 reroll 1) + 5");
+      expect(builder.toExpression()).toBe("1d8 + 2d6 + 4(d4 reroll 1) + 5");
     });
 
     it("should handle multiple rolls with plus but tightest?", () => {
@@ -252,7 +252,7 @@ describe("RollBuilder", () => {
       // Final:   roll(2, 6).add(d8).add(roll(4, 4).reroll(1)).plus(5)
 
       const builder = roll(2, 6).plus(d8).plus(roll(4, 4).reroll(1)).plus(5);
-      expect(builder.toExpression()).toBe("2d6 + 1d8 + 4(d4 reroll 1) + 5");
+      expect(builder.toExpression()).toBe("1d8 + 2d6 + 4(d4 reroll 1) + 5");
     });
 
     //   it('should handle multiple rolls with plus but tightest? - with roll builder', () => {

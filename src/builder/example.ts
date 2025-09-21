@@ -97,7 +97,7 @@ export const singleD20ExprExpected = "d20";
 
 /** Adding a bunch */
 export const addAWholeBunch = d6.plus(d8).plus(d10).plus(d12).plus(d20);
-export const addAWholeBunchExprExpected = "1d6 + 1d8 + 1d10 + 1d12 + 1d20";
+export const addAWholeBunchExprExpected = "1d20 + 1d12 + 1d10 + 1d8 + 1d6";
 
 /** Subtracting a bunch */
 export const subtractAWholeBunch = d6
@@ -105,14 +105,15 @@ export const subtractAWholeBunch = d6
   .minus(d10)
   .minus(d12)
   .minus(d20);
-export const subtractAWholeBunchExprExpected = "1d6 - 1d8 - 1d10 - 1d12 - 1d20";
+export const subtractAWholeBunchExprExpected =
+  "-1d20 - 1d12 - 1d10 - 1d8 + 1d6"; // For now it just sorts by die size
 
 export const addingMultipleConstants = d6.plus(2).plus(4);
 export const addingMultipleConstantsExprExpected = "1d6 + 6";
 
 //** More realistic chaining example */
 export const realisticChaining = roll(3, d6).plus(2, d8).plus(4);
-export const realisticChainingExprExpected = "3d6 + 2d8 + 4";
+export const realisticChainingExprExpected = "2d8 + 3d6 + 4";
 
 // ------------------------------
 // Reroll, minimum, keep mechanics, advantage/disadvantage
@@ -162,7 +163,7 @@ export const advHd20ExprExpected = "hd20 > hd20";
  * Note that reroll(1) applies to the immediate roll before it.
  */
 export const complexDamage = roll(2, d6).plus(d8).plus(4, d4).reroll(1).plus(5);
-export const complexDamageExprExpected = "2d6 + 1d8 + 4(d4 reroll 1) + 5";
+export const complexDamageExprExpected = "1d8 + 2d6 + 4(d4 reroll 1) + 5";
 
 /** Double dice (useful for crit damage duplication) */
 export const doubledD8 = d8.plus(5).doubleDice();

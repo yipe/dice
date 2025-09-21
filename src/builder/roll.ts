@@ -350,9 +350,48 @@ export class RollBuilder {
   }
 
   toExpression(): string {
-    const diceConfigs = this.subRollConfigs.filter(
+    const originalDiceConfigs = this.subRollConfigs.filter(
       (config) => config.sides && config.sides > 0
     );
+
+    const configGroups = new Map<
+      string,
+      { config: RollConfig; totalCount: number }
+    >();
+
+    for (const config of originalDiceConfigs) {
+      const keyConfig: Partial<RollConfig> = { ...config };
+      delete keyConfig.count;
+      delete keyConfig.modifier;
+      const key = JSON.stringify(keyConfig);
+
+      const existingGroup = configGroups.get(key);
+      if (existingGroup) {
+        existingGroup.totalCount += config.count;
+      } else {
+        configGroups.set(key, { config, totalCount: config.count });
+      }
+    }
+
+    const diceConfigs = Array.from(configGroups.values())
+      .map(({ config, totalCount }) => ({
+        ...config,
+        count: totalCount,
+      }))
+      .sort((a, b) => {
+        if (b.sides !== a.sides) return b.sides - a.sides;
+
+        // Add a complexity score for sorting when sides are equal
+        const complexity = (c: RollConfig) =>
+          (c.reroll > 0 ? 1 : 0) +
+          (c.minimum > 0 ? 1 : 0) +
+          (c.explode > 0 ? 1 : 0) +
+          (c.bestOf > 0 ? 1 : 0) +
+          (c.keep ? 1 : 0);
+
+        return complexity(b) - complexity(a);
+      });
+
     const totalModifier = this.subRollConfigs.reduce(
       (sum, config) => sum + config.modifier,
       0
@@ -360,12 +399,24 @@ export class RollBuilder {
     if (diceConfigs.length === 0) return totalModifier.toString();
 
     const rootConfig = this.getRootDieConfig();
+    const newRootConfig = rootConfig
+      ? diceConfigs.find(
+          (c) =>
+            c.sides === rootConfig.sides &&
+            c.rollType === rootConfig.rollType &&
+            c.reroll === rootConfig.reroll &&
+            c.explode === rootConfig.explode &&
+            c.minimum === rootConfig.minimum &&
+            c.bestOf === rootConfig.bestOf &&
+            c.keep === rootConfig.keep
+        )
+      : undefined;
 
     // Generate dice expressions without individual modifiers
     const diceExpressions = diceConfigs.map((config) =>
       this.configToSingleExpressionWithoutModifier(
         config,
-        config === rootConfig
+        config === newRootConfig
       )
     );
 
