@@ -197,7 +197,10 @@ export class RollBuilder {
   /** Apply one-pass reroll threshold (k): reroll faces 1..k once, must keep. */
   reroll(value: number): RollBuilder {
     if (isNaN(value)) throw new Error("Invalid NaN value for reroll");
+    if (value === this.lastConfig.reroll) return this;
+
     const newConfigs = this.getSubRollConfigs();
+
     newConfigs[newConfigs.length - 1].reroll = value;
     return new (this.constructor as new (
       configs: readonly RollConfig[]

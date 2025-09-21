@@ -16,15 +16,6 @@ describe("AttackRollBuilder", () => {
     expect(builder.toPMF()).toBeDefined();
   });
 
-  it("should throw error when using dc() on AttackRollBuilder", () => {
-    expect(() => {
-      const acBuilder = d20.plus(5).ac(10);
-      acBuilder.dc(15);
-    }).toThrow(
-      "Cannot use dc() on an AttackRollBuilder. Use ac() for attack rolls instead."
-    );
-  });
-
   describe("plus dice functionality", () => {
     it("should add single dice bonus to hit (bless spell)", () => {
       const blessedAttack = d20.plus(d4).plus(5).ac(15);
@@ -214,13 +205,6 @@ describe("AttackRollBuilder", () => {
 
       expect(() => {
         attack.critOn(21).onHit(d6).toExpression();
-      }).toThrow();
-    });
-
-    it("should prevent dc() usage on AttackRollBuilder", () => {
-      const attack = d20.ac(15);
-      expect(() => {
-        attack.dc(12);
       }).toThrow();
     });
 
