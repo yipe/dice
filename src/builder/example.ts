@@ -1,6 +1,13 @@
-import { DiceQuery } from "../";
-import type { ACBuilder, DCBuilder, RollBuilder } from "./";
-import { d10, d12, d20, d4, d6, d8, flat, hd20, roll } from "./";
+import { DiceQuery } from "../pmf/query";
+
+// eslint-disable-next-line import/no-unassigned-import
+import "./ac"; // for side effects of prototype augmentation
+import type { ACBuilder } from "./ac";
+// eslint-disable-next-line import/no-unassigned-import
+import "./dc"; // for side effects of prototype augmentation
+import type { DCBuilder } from "./dc";
+import { d10, d12, d20, d4, d6, d8, flat, hd20, roll } from "./factory";
+import type { RollBuilder } from "./roll";
 import type { SaveBuilder } from "./save";
 
 // ------------------------------
@@ -8,6 +15,8 @@ import type { SaveBuilder } from "./save";
 // There are a number of ways to specify a roll.
 // This optimizes for a fluent readable syntax, but the more explicit syntax can also be used for more advanced rolls.
 // ------------------------------
+
+//const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
 
 /* A basic attack. Note that it auto-creates a crit roll. */
 export const fullAttack = d20.plus(5).ac(10).onHit(2, d6);

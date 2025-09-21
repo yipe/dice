@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DiceQuery, parse, PMF } from "../src/index";
+import { parse } from "../src/parser/parser";
+import { PMF } from "../src/pmf/pmf";
+import { DiceQuery } from "../src/pmf/query";
 
 describe("Complex Attack End-to-End Test", () => {
   const complexExpression =

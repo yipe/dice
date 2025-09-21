@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { d6, roll } from "./";
 import * as examples from "./example";
+import { d6, roll } from "./factory";
 
 const builderMap: Record<string, any> = {
   basic2d6Plus3: examples.basic2d6Plus3,

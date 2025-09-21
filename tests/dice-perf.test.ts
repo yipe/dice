@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../src/index";
+import { parse } from "../src/parser/parser";
 import { TEST_EXPRESSIONS } from "./dice-perf-helper";
 
 describe("DicePerfPMF - PMF Performance Test Logic", () => {

@@ -158,19 +158,11 @@ export class PMF {
    *  - A PMF representing its outcome (e.g., damage dice).
    *  - A weight representing its probability of being selected.
    *
-   * This is useful for modeling situations like:
-   *  - Sneak Attack: 6d6 if first hit is a crit, 3d6 if first hit is non-crit, 0 otherwise.
-   *  - Multiple exclusive spells: Fireball vs Cone of Cold vs nothing.
-   *
    * Notes:
-   *  - If the total weight is less than 1, a zero PMF will automatically be added to
-   *    make up the remaining probability.
-   *  - Throws an error if the total weight is greater than 1 (invalid probability sum).
+   *  - If total weight < 1 (within eps), leftover mass is assumed to be PMF.zero()
    *
-   * @param options Array of `{ pmf, weight }` objects, each representing an outcome and its probability.
-   * @param label Optional name for debugging or charting.
-   * @param eps Optional tolerance for floating point rounding
-   * @returns A single PMF representing the exclusive mixture of all options.
+   * @param options Array of `{ pmf, weight }` or `[PMF, number]`.
+   * @param eps Optional tolerance for floating point rounding.
    */
   static exclusive(
     options: Array<{ pmf: PMF; weight: number } | [PMF, number]>,
@@ -180,24 +172,76 @@ export class PMF {
       Array.isArray(o) ? { pmf: o[0], weight: o[1] } : o
     );
 
-    const totalWeight = items.reduce((s, { weight }) => s + weight, 0);
-    if (totalWeight - 1 > eps) {
+    // Validate weights
+    for (const { weight } of items) {
+      if (!Number.isFinite(weight) || weight < -eps) {
+        throw new Error(`PMF.exclusive: invalid weight ${weight}.`);
+      }
+    }
+
+    // Sum and check
+    let totalWeight = items.reduce((s, { weight }) => s + weight, 0);
+
+    // Normalize tiny negatives to 0 and tiny overshoot to 1 when within eps
+    if (Math.abs(totalWeight) <= eps) totalWeight = 0;
+    if (Math.abs(1 - totalWeight) <= eps) totalWeight = 1;
+
+    if (totalWeight > 1 + eps) {
       throw new Error(
         `PMF.exclusive: total weight ${totalWeight.toFixed(6)} exceeds 1.`
       );
     }
 
-    let out = items.reduce(
-      (acc, { pmf, weight }) => (weight > 0 ? acc.addScaled(pmf, weight) : acc),
-      PMF.empty(eps)
-    );
-    const leftover = 1 - totalWeight;
+    // Accumulate scaled components, skipping near-zero weights
+    let out = PMF.empty(eps);
+    for (const { pmf, weight } of items) {
+      if (weight > eps) out = out.addScaled(pmf, weight);
+    }
+
+    // Add leftover mass at zero outcome
+    const leftover = Math.max(0, 1 - totalWeight);
     if (leftover > eps) {
       out = out.addScaled(PMF.zero(), leftover);
     }
+
     return out;
   }
 
+  /**
+   * PMF.mix()
+   *
+   * Builds a PMF as a linear combination of input PMFs with the given weights.
+   * Unlike `exclusive`, this does NOT:
+   *  - enforce that weights sum to 1
+   *  - add leftover probability to δ0 (PMF.zero())
+   *
+   * Use when outcomes are not mutually exclusive, or for interpolation/blending.
+   *
+   * @param options Array of `{ pmf, weight }` or `[PMF, number]`.
+   * @param eps Optional tolerance for skipping tiny weights.
+   */
+  static mix(
+    options: Array<{ pmf: PMF; weight: number } | [PMF, number]>,
+    eps = EPS
+  ): PMF {
+    const items = options.map((o) =>
+      Array.isArray(o) ? { pmf: o[0], weight: o[1] } : o
+    );
+
+    // Validate weights, but do not constrain their sum.
+    for (const { weight } of items) {
+      if (!Number.isFinite(weight)) {
+        throw new Error(`PMF.mix: invalid weight ${weight}.`);
+      }
+    }
+
+    let out = PMF.empty(eps);
+    for (const { pmf, weight } of items) {
+      if (Math.abs(weight) <= eps) continue; // ignore crumbs
+      out = out.addScaled(pmf, weight);
+    }
+    return out;
+  }
   /**
    * General-purpose N-way mixture.
    * weights: Array of [weight, PMF].

@@ -1,9 +1,8 @@
-import type { DiceQuery, PMF } from "../index";
+import type { PMF } from "../pmf/pmf";
+import type { DiceQuery } from "../pmf/query";
 import { astFromRollConfigs, pmfFromRollBuilder } from "./ast";
-import type { RollConfig } from "./index";
-import { ACBuilder, DCBuilder } from "./index";
 import type { ExpressionNode } from "./nodes";
-import type { RollType } from "./types";
+import type { RollConfig, RollType } from "./types";
 
 export const defaultConfig: RollConfig = {
   count: 1,
@@ -339,22 +338,12 @@ export class RollBuilder {
   d20 = () => this.d(20);
   d100 = () => this.d(100);
 
-  ac(targetAC: number) {
-    if (isNaN(targetAC)) throw new Error("Invalid NaN value for targetAC");
-    return new ACBuilder(this, targetAC);
-  }
-
   withElvenAccuracy() {
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].rollType = "elven accuracy";
     return new (this.constructor as new (
       configs: readonly RollConfig[]
     ) => RollBuilder)(newConfigs);
-  }
-
-  dc(saveDC: number) {
-    if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");
-    return new DCBuilder(this).dc(saveDC);
   }
 
   toExpression(): string {
@@ -400,6 +389,10 @@ export class RollBuilder {
   toPMF(eps: number = 0): PMF {
     // Main AST entry point
     return pmfFromRollBuilder(this, eps);
+  }
+
+  get pmf() {
+    return this.toPMF();
   }
 
   toQuery(eps: number = 0): DiceQuery {

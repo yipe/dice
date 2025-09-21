@@ -55,4 +55,5 @@ export type SaveResolution = Resolution & {
 export interface CheckBuilder {
   resolve(eps?: number): Resolution;
   toExpression(): string;
+  readonly pmf: PMF;
 }

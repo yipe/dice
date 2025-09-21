@@ -5,7 +5,8 @@ import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
-import type { DCBuilder, RollBuilder } from "./index";
+import type { DCBuilder } from "./dc";
+import type { RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
 
 export type SaveOutcome = "normal" | "half";
@@ -63,6 +64,10 @@ export class SaveBuilder implements CheckBuilder {
   // By default, create PMF with no pruning
   toPMF(eps: number = 0): PMF {
     return this.resolve(eps).pmf;
+  }
+
+  get pmf() {
+    return this.toPMF();
   }
 
   // By default, create query on PMF with no pruning

@@ -63,9 +63,8 @@ export class AttackBuilder implements CheckBuilder {
 
     if (this.hitEffect) {
       effectPart = `(${this.hitEffect.toExpression()})`;
-      let crit = undefined;
       if (this.critEffect !== null) {
-        crit = this.critEffect ?? this.hitEffect.copy().doubleDice();
+        const crit = this.critEffect ?? this.hitEffect.copy().doubleDice();
 
         const critThreshold = this.check.critThreshold;
         if (critThreshold < 15 || critThreshold > 20) {
@@ -188,6 +187,10 @@ export class AttackBuilder implements CheckBuilder {
   // By default, create PMF with no pruning
   toPMF(eps: number = 0): PMF {
     return this.resolve(eps).pmf;
+  }
+
+  get pmf() {
+    return this.toPMF();
   }
 
   // By default, create query on PMF with no pruning

@@ -1,9 +1,13 @@
 // TODO - make a test file that calls these with advantage and disadvantage variants!
 
-import { EPS } from "../src/common/types";
-import { DiceQuery, PMF, parse } from "../src/index";
+// eslint-disable-next-line import/no-unassigned-import
+import "../src/builder/ac"; // for side effects of prototype augmentation
+import { d20, d4, d6, roll } from "../src/builder/factory";
+import { EPS, onAnyHit, onCritOnly } from "../src/common/types";
+import { parse } from "../src/parser/parser";
+import { PMF } from "../src/pmf/pmf";
+import { DiceQuery } from "../src/pmf/query";
 import { printTableWithTab } from "./print";
-
 // Helper: conditionally include extra damage (like Sneak Attack), otherwise 0
 const conditionally = (pmf: PMF, chance: number) =>
   PMF.branch(pmf, PMF.zero(), Math.max(0, Math.min(1, chance)));
@@ -242,6 +246,26 @@ export function simpleVariantC(inputs: SneakAttackInputs) {
   // Two identical attacks + exclusive Sneak rider
   return new DiceQuery([attack, attack, sneak]).mean();
 }
+
+// 1. Determine the probability of any hit (hit or crit) and a crit only across 2 attacks
+// 2. Calculate the expected damage of sneak attack in both scenarios
+// 3. Create a full round with all of those damage outcomes
+function sneakAttackFromBuilder() {
+  const attackPMF = d20.plus(8).ac(16).onHit(d4.plus(4)).pmf;
+  const sneakAttack = roll(3, d6);
+  const attacks = new DiceQuery([attackPMF, attackPMF]);
+  const [pHit, pCrit] = attacks.firstSuccessSplit(onAnyHit, onCritOnly);
+  const sneakPMF = PMF.exclusive([
+    [sneakAttack.pmf, pHit],
+    [sneakAttack.doubleDice().pmf, pCrit],
+  ]);
+
+  return new DiceQuery([attackPMF, attackPMF, sneakPMF]);
+}
+
+const simpleVariantD = () => {
+  return sneakAttackFromBuilder().mean();
+};
 
 export function simpleSneakOncePerRoundFromPMFs(
   inputs: SneakAttackInputs
@@ -785,6 +809,7 @@ export function runAllSneakAttackExamples() {
   const va = simpleVariantA(inputs);
   const vb = simpleVariantB(inputs);
   const vc = simpleVariantC(inputs);
+  const vd = simpleVariantD();
   const v1 = variant1_mainDirectBlend(inputs);
   const v2 = variant2_mainCheckMixtures(inputs);
   const v3 = variant3_closedFormN(inputs);
@@ -800,6 +825,7 @@ export function runAllSneakAttackExamples() {
       ["A", "Direct blend example", va.toFixed(5)],
       ["B", "Check mixtures example", vb.toFixed(5)],
       ["C", "Simple example", vc.toFixed(5)],
+      ["D", "Builder example", vd.toFixed(5)],
       ["1", "Direct blend", v1.toFixed(5)],
       ["2", "Check mixtures", v2.toFixed(5)],
       ["3", "Closed-form N (PMF)", v3.toFixed(5)],

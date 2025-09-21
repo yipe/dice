@@ -1,6 +1,6 @@
-import { builderPMFCache } from ".";
 import { LRUCache, PMF } from "../";
 import { d20RollPMF } from "./d20";
+import { builderPMFCache } from "./factory";
 import type {
   AddNode,
   ConstantNode,

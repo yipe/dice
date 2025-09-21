@@ -10,7 +10,7 @@ import {
   variant5_evOnly,
   variant6_sequencePartitioning,
 } from "../examples/sneak-attack-examples";
-import { EPS } from "../src/index";
+import { EPS } from "../src/common/types";
 
 describe("Sneak Attack Variants", () => {
   it("should match the expected values", () => {
