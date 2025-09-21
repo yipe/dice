@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse } from "../";
+import { parse } from "../parser/parser";
 import { d20, d4, d6, d8, roll } from "./";
 
 describe("SaveRollBuilder", () => {

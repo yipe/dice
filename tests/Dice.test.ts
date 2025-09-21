@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EPS, parse } from "../src/index";
+import { EPS } from "../src/common/types";
+import { parse } from "../src/parser/parser";
 
 describe("Dice Parser Tests", () => {
   describe("Basic Dice Expressions", () => {

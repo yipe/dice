@@ -27,3 +27,12 @@ export type OutcomeType =
   | "pc";
 
 export type Rounding = "none" | "floor" | "round" | "ceil";
+
+export const onAnyHit: OutcomeType[] = ["hit", "crit"];
+export const onCritOnly: OutcomeType[] = ["crit"];
+export const onHitOnly: OutcomeType[] = ["hit"];
+export const onMissOnly: OutcomeType[] = ["missNone", "missDamage"];
+export const onMissDamageOnly: OutcomeType[] = ["missDamage"];
+export const onSaveHalfOnly: OutcomeType[] = ["saveHalf"];
+export const onSaveFailOnly: OutcomeType[] = ["saveFail"];
+export const onPotentCantripOnly: OutcomeType[] = ["pc"];

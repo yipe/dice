@@ -14,12 +14,17 @@
 
 A TypeScript library for **D&D 5e damage-per-round (DPR) calculations**, designed for players, Dungeon Masters, and developers who want to analyze combat mathematically.
 
-This library powers [dprcalc.com](https://dprcalc.com) and provides a precise, composable way to model dice rolls, attacks, and outcomes with probability mass functions (PMFs) — not just averages. This allows for rich charting and statistics with full outcome attribution.
+This library powers [dprcalc.com](https://dprcalc.com) and provides a precise, composable way to model dice rolls, attacks, and outcomes with probability mass functions (PMFs) — not just averages. This allows for rich charting and statistics with full outcome attribution. It provides two main entry points: a fluent typescript interface or a dice expression string.
 
 ```ts
 import { parse } from "@yipe/dice";
 
 const attack = parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)");
+console.log("DPR:", attack.mean());
+
+// or
+
+const attack = d20.plus(8).ac(16).onHit(d8.plus(4));
 console.log("DPR:", attack.mean());
 ```
 
@@ -56,7 +61,7 @@ Here's a simple example of calculating damage for a basic attack:
 ```ts
 import { parse, DiceQuery } from "@yipe/dice";
 
-const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
+const query = d20.plus(8).ac(16).onHit(d4.plus(4)).toQuery();
 
 console.log("Hit chance:", query.probAtLeastOne(["hit", "crit"]));
 console.log("Crit chance:", query.probAtLeastOne(["crit"]));
@@ -76,36 +81,22 @@ DPR: 4.35
 Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:
 
 ```ts
-import { parse, DiceQuery } from "@yipe/dice";
+import { DiceQuery } from "@yipe/dice";
 
-function damageRiderExample() {
-  const attack = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)");
-  const sneakAttack = parse("3d6");
-  const sneakAttackCrit = parse("6d6");
-
-  // Determine the probability of a success (hit or crit) and a crit
-  const attacks = new DiceQuery([attack, attack]);
-  const [pSuccess, pCrit] = attacks.firstSuccessSplit(
-    ["hit", "crit"],
-    ["crit"]
-  );
-
-  // Calculate the expected damage of sneak attack in both scenarios
-  const sneak = PMF.exclusive([
-    [sneakAttack, pSuccess],
-    [sneakAttackCrit, pCrit],
+function sneakAttack() {
+  const attackPMF = d20.plus(8).ac(16).onHit(d4.plus(4)).pmf;
+  const sneakAttack = roll(3, d6);
+  const attacks = new DiceQuery([attackPMF, attackPMF]);
+  const [pHit, pCrit] = attacks.firstSuccessSplit(onAnyHit, onCritOnly);
+  const sneakPMF = PMF.exclusive([
+    [sneakAttack.pmf, pHit],
+    [sneakAttack.doubleDice().pmf, pCrit],
   ]);
 
-  // Create a full round with all of those damage outcomes
-
-  const fullRound = new DiceQuery([attack, attack, sneak]);
-  const DPR = fullRound.mean();
-
-  console.log("full round DPR", DPR);
-
-  // Congrats, you can now chart and query this round!
-  return fullRound;
+  return new DiceQuery([attackPMF, attackPMF, sneakPMF]);
 }
+
+console.log("DPR with once-per-turn sneak attack: ", sneakAttack().mean());
 ```
 
 ## 📊 Statistics and Charts
@@ -235,7 +226,6 @@ Here is the basic example:
 
 - [ ] Create a **web playground** with live examples
 - [ ] Consider creating higher-level APIs: `Turn`, `Attack`, `DamageRider`
-- [ ] Simplify and improve PMF and Query interface ergonomics
 - [ ] Add more comprehensive 5e rule examples
 - [ ] Performance improvements for DPR-only calculations
 - [ ] Multi-round and sustained vs nova simulations

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { RollConfig } from "./";
-import { d4, d6, d8, roll, RollBuilder } from "./";
+import { d4, d6, d8, roll } from ".";
+import { RollBuilder } from "./roll";
+import type { RollConfig } from "./types";
 
 export const testCases: {
   label: string;
