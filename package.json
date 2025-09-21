@@ -24,30 +24,30 @@
   "packageManager": "yarn@4.9.4",
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     },
     "./builder": {
-      "import": {
-        "types": "./dist/builder/index.d.ts",
-        "default": "./dist/builder/index.js"
-      },
-      "require": {
-        "types": "./dist/builder/index.d.cts",
-        "default": "./dist/builder/index.cjs"
-      }
+      "types": "./dist/builder/index.d.ts",
+      "import": "./dist/builder/index.js",
+      "require": "./dist/builder/index.cjs"
     },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "builder": [
+        "dist/builder/index.d.ts"
+      ],
+      "": [
+        "dist/index.d.ts"
+      ]
+    }
+  },
   "directories": {
     "example": "examples",
     "test": "tests"
@@ -57,7 +57,10 @@
     "README.md",
     "LICENSE"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/builder/ac.js",
+    "./dist/builder/dc.js"
+  ],
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc -p config/tsconfig.build.json --noEmit",
