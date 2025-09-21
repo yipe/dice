@@ -36,12 +36,6 @@ export class ACBuilder extends RollBuilder {
     return new AttackBuilder(this, damageRoll);
   }
 
-  override dc(_: number): never {
-    throw new Error(
-      "Cannot use dc() on an AttackRollBuilder. Use ac() for attack rolls instead."
-    );
-  }
-
   get critThreshold(): number {
     return this.attackConfig.critThreshold;
   }
