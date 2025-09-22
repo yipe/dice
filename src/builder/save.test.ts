@@ -425,7 +425,7 @@ describe("SaveBuilder with bonus dice", () => {
     const damage = roll(2).d8();
     const builder = d20.plus(5).plus(d4).dc(15).onSaveFailure(damage);
 
-    expect(builder.toExpression()).toBe("(d20 + 1d4 + 5 DC 15) * (2d8)");
+    expect(builder.toExpression()).toBe("(d20 + 5 + 1d4 DC 15) * (2d8)");
 
     // Note - the parse() library's only real bug is that it doesn't handle adding rolls to the d20 roll properly.
     // One hack (for SINGLE rolls) is to SUBTRACT them from the AC/DC:
@@ -453,7 +453,7 @@ describe("SaveBuilder with bonus dice", () => {
       .saveHalf();
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 1d4 + 5 DC 15) * (2d8) save half"
+      "(d20 + 5 + 1d4 DC 15) * (2d8) save half"
     );
 
     const pmf = builder.resolve().pmf;
@@ -465,7 +465,7 @@ describe("SaveBuilder with bonus dice", () => {
     const damage = roll(2, d8);
     const builder = d20.plus(5).minus(d4).dc(15).onSaveFailure(damage);
 
-    expect(builder.toExpression()).toBe("(d20 - 1d4 + 5 DC 15) * (2d8)");
+    expect(builder.toExpression()).toBe("(d20 + 5 - 1d4 DC 15) * (2d8)");
 
     const fauxExpression = "(d20 + 5 DC (15+1d4)) * (2d8)";
     const fauxPMF = parse(fauxExpression);
@@ -490,7 +490,7 @@ describe("SaveBuilder with bonus dice", () => {
       .saveHalf();
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 1d4 + 5 DC 15) * (2(d8 reroll 1 reroll 2) + 1) save half"
+      "(d20 + 5 + 1d4 DC 15) * (2(d8 reroll 1 reroll 2) + 1) save half"
     );
 
     const pmf = builder.resolve().pmf;
@@ -519,7 +519,7 @@ describe("SaveBuilder with bonus dice", () => {
     expect(bonusDice[1].sides).toBe(8);
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 3d8 + 2d4 + 1 DC 30) * (8d6) save half"
+      "(d20 + 1 + 3d8 + 2d4 DC 30) * (8d6) save half"
     );
 
     const result = builder.resolve();
@@ -557,7 +557,7 @@ describe("SaveBuilder with bonus dice", () => {
     expect(bonusDice[3].sides).toBe(8);
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 2d8 - 2d8 + 3d4 - 1d4 + 1 DC 30) * (8d6) save half"
+      "(d20 + 1 + 2d8 - 2d8 + 3d4 - 1d4 DC 30) * (8d6) save half"
     );
 
     const result = builder.resolve();
@@ -595,7 +595,7 @@ describe("SaveBuilder with bonus dice", () => {
     expect(bonusDice[3].sides).toBe(8);
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 2d8 - 2d8 + 3d4 - 1d4 + 1 DC 30) * (8d6) save half"
+      "(d20 + 1 + 2d8 - 2d8 + 3d4 - 1d4 DC 30) * (8d6) save half"
     );
 
     const result = builder.resolve();

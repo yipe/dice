@@ -19,7 +19,7 @@ describe("AttackRollBuilder", () => {
   describe("plus dice functionality", () => {
     it("should add single dice bonus to hit (bless spell)", () => {
       const blessedAttack = d20.plus(d4).plus(5).ac(15);
-      expect(blessedAttack.toExpression()).toBe("(d20 + 1d4 + 5 AC 15)");
+      expect(blessedAttack.toExpression()).toBe("(d20 + 5 + 1d4 AC 15)");
       expect(blessedAttack.toPMF()).toBeDefined();
     });
 
@@ -32,7 +32,7 @@ describe("AttackRollBuilder", () => {
         .ac(18);
 
       expect(multiBonusAttack.toExpression()).toBe(
-        "(d20 + 1d6 + 1d4 + 8 AC 18)"
+        "(d20 + 8 + 1d6 + 1d4 AC 18)"
       );
       expect(multiBonusAttack.toPMF()).toBeDefined();
     });
@@ -46,7 +46,7 @@ describe("AttackRollBuilder", () => {
     it("should handle complex dice expressions as bonus", () => {
       const complexBonusAttack = roll.d20().plus(2, d4).plus(1).plus(6).ac(16);
 
-      expect(complexBonusAttack.toExpression()).toBe("(d20 + 2d4 + 7 AC 16)");
+      expect(complexBonusAttack.toExpression()).toBe("(d20 + 7 + 2d4 AC 16)");
       expect(complexBonusAttack.toPMF().mean()).toBe(29.5); // TODO: confirm
     });
 
@@ -54,7 +54,7 @@ describe("AttackRollBuilder", () => {
       const advBlessedAttack = d20.withAdvantage().plus(7).plus(d4).ac(14);
 
       expect(advBlessedAttack.toExpression()).toBe(
-        "(d20 > d20 + 1d4 + 7 AC 14)"
+        "(d20 > d20 + 7 + 1d4 AC 14)"
       );
       expect(advBlessedAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -68,7 +68,7 @@ describe("AttackRollBuilder", () => {
         .ac(17);
 
       expect(elvenBlessedAttack.toExpression()).toBe(
-        "(d20 > d20 > d20 + 1d4 + 9 AC 17)"
+        "(d20 > d20 > d20 + 9 + 1d4 AC 17)"
       );
       expect(elvenBlessedAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -78,7 +78,7 @@ describe("AttackRollBuilder", () => {
       const disBlessedAttack = d20.withDisadvantage().plus(d4).plus(6).ac(13);
 
       expect(disBlessedAttack.toExpression()).toBe(
-        "(d20 < d20 + 1d4 + 6 AC 13)"
+        "(d20 < d20 + 6 + 1d4 AC 13)"
       );
       expect(disBlessedAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -94,7 +94,7 @@ describe("AttackRollBuilder", () => {
     it("should work with crit threshold modifications", () => {
       const critBlessedAttack = d20.plus(d4).plus(7).ac(16).critOn(19);
 
-      expect(critBlessedAttack.toExpression()).toBe("(d20 + 1d4 + 7 AC 16)");
+      expect(critBlessedAttack.toExpression()).toBe("(d20 + 7 + 1d4 AC 16)");
       expect(critBlessedAttack.toPMF()).toBeDefined();
     });
 
@@ -113,7 +113,7 @@ describe("AttackRollBuilder", () => {
     it("should allow chaining multiple plus calls", () => {
       const chainedBonus = d20.plus(d4).plus(d6).plus(2).plus(6).ac(14);
 
-      expect(chainedBonus.toExpression()).toBe("(d20 + 1d6 + 1d4 + 8 AC 14)");
+      expect(chainedBonus.toExpression()).toBe("(d20 + 8 + 1d6 + 1d4 AC 14)");
       expect(chainedBonus.toPMF()).toBeDefined();
     });
 
@@ -125,7 +125,7 @@ describe("AttackRollBuilder", () => {
 
     it("should handle mixed positive and negative bonuses", () => {
       const mixedBonusAttack = d20.plus(d4).minus(1).plus(7).ac(15);
-      expect(mixedBonusAttack.toExpression()).toBe("(d20 + 1d4 + 6 AC 15)");
+      expect(mixedBonusAttack.toExpression()).toBe("(d20 + 6 + 1d4 AC 15)");
       expect(mixedBonusAttack.toPMF()).toBeDefined();
     });
   });
@@ -133,7 +133,7 @@ describe("AttackRollBuilder", () => {
   describe("plus dice-specific functionality", () => {
     it("should add single d4 bonus (bless spell)", () => {
       const blessedAttack = d20.plus(d4).plus(5).ac(15);
-      expect(blessedAttack.toExpression()).toBe("(d20 + 1d4 + 5 AC 15)");
+      expect(blessedAttack.toExpression()).toBe("(d20 + 5 + 1d4 AC 15)");
       expect(blessedAttack.toPMF()).toBeDefined();
       const pmf = blessedAttack.toPMF();
       expect(pmf).toBeDefined();
@@ -142,7 +142,7 @@ describe("AttackRollBuilder", () => {
 
     it("should add single d6 bonus (bardic inspiration)", () => {
       const inspiredAttack = d20.plus(d6).plus(6).ac(16);
-      expect(inspiredAttack.toExpression()).toBe("(d20 + 1d6 + 6 AC 16)");
+      expect(inspiredAttack.toExpression()).toBe("(d20 + 6 + 1d6 AC 16)");
       expect(inspiredAttack.toPMF()).toBeDefined();
       const pmf = inspiredAttack.toPMF();
       expect(pmf).toBeDefined();
@@ -153,7 +153,7 @@ describe("AttackRollBuilder", () => {
       const multiDiceAttack = d20.plus(d4).plus(d6).plus(d8).plus(5).ac(15);
 
       expect(multiDiceAttack.toExpression()).toBe(
-        "(d20 + 1d8 + 1d6 + 1d4 + 5 AC 15)"
+        "(d20 + 5 + 1d8 + 1d6 + 1d4 AC 15)"
       );
       expect(multiDiceAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -161,7 +161,7 @@ describe("AttackRollBuilder", () => {
 
     it("should chain multiple identical dice bonuses", () => {
       const doubleBlessAttack = d20.plus(d4).plus(d4).plus(6).ac(16);
-      expect(doubleBlessAttack.toExpression()).toBe("(d20 + 2d4 + 6 AC 16)");
+      expect(doubleBlessAttack.toExpression()).toBe("(d20 + 6 + 2d4 AC 16)");
       expect(doubleBlessAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
     });
@@ -169,14 +169,14 @@ describe("AttackRollBuilder", () => {
     it("should handle dice bonuses with modifiers", () => {
       const modifiedDiceAttack = d20.plus(2, d4).plus(2).plus(7).ac(17);
 
-      expect(modifiedDiceAttack.toExpression()).toBe("(d20 + 2d4 + 9 AC 17)");
+      expect(modifiedDiceAttack.toExpression()).toBe("(d20 + 9 + 2d4 AC 17)");
       expect(modifiedDiceAttack.toPMF()).toBeDefined();
     });
 
     it("should handle dice bonuses with reroll", () => {
       const rerollDiceAttack = d20.plus(1, d6).reroll(1).plus(5).ac(14);
       expect(rerollDiceAttack.toExpression()).toBe(
-        "(d20 + d6 reroll 1 + 5 AC 14)"
+        "(d20 + 5 + d6 reroll 1 AC 14)"
       );
       expect(rerollDiceAttack.toPMF()).toBeDefined();
       // TODO - calculate exact expected value
@@ -827,29 +827,29 @@ describe("Combined Dice Expression Generation", () => {
       .plus(2, d6)
       .plus(5)
       .ac(15);
-    expect(complexAttack.toExpression()).toBe("(d20 + 2d8 + 4d6 + 5 AC 15)");
+    expect(complexAttack.toExpression()).toBe("(d20 + 5 + 2d8 + 4d6 AC 15)");
   });
 
   it("should not merge dice with different reroll configs", () => {
     const rerollAttack = d20.plus(2, d6).plus(2, d6.reroll(1)).plus(5).ac(15);
     expect(rerollAttack.toExpression()).toBe(
-      "(d20 + 2(d6 reroll 1) + 2d6 + 5 AC 15)"
+      "(d20 + 5 + 2(d6 reroll 1) + 2d6 AC 15)"
     );
   });
 
   it("should not merge dice with different minimum configs", () => {
     const minAttack = d20.plus(2, d6).plus(2, d6.minimum(2)).plus(5).ac(15);
-    expect(minAttack.toExpression()).toBe("(d20 + 2(3>d6) + 2d6 + 5 AC 15)");
+    expect(minAttack.toExpression()).toBe("(d20 + 5 + 2(3>d6) + 2d6 AC 15)");
   });
 
   it("should handle subtraction correctly", () => {
     const subtractAttack = d20.plus(2, d8).minus(1, d6).plus(5).ac(15);
-    expect(subtractAttack.toExpression()).toBe("(d20 + 2d8 - 1d6 + 5 AC 15)");
+    expect(subtractAttack.toExpression()).toBe("(d20 + 5 + 2d8 - 1d6 AC 15)");
   });
 
   it("should sort dice of different types", () => {
     const sortAttack = d20.plus(1, d6).plus(1, d4).plus(1, d8).plus(5).ac(15);
-    expect(sortAttack.toExpression()).toBe("(d20 + 1d8 + 1d6 + 1d4 + 5 AC 15)");
+    expect(sortAttack.toExpression()).toBe("(d20 + 5 + 1d8 + 1d6 + 1d4 AC 15)");
   });
 
   it("should merge multiple sets of the same dice", () => {
@@ -860,6 +860,6 @@ describe("Combined Dice Expression Generation", () => {
       .plus(1, d6)
       .plus(5)
       .ac(15);
-    expect(multiMergeAttack.toExpression()).toBe("(d20 + 2d8 + 2d6 + 5 AC 15)");
+    expect(multiMergeAttack.toExpression()).toBe("(d20 + 5 + 2d8 + 2d6 AC 15)");
   });
 });

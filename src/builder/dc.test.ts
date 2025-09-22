@@ -163,7 +163,7 @@ describe("DCBuilder", () => {
     it("should generate correct expression with complex dice", () => {
       const builder = roll.d20().plus(2).addRoll(1).d6().plus(1).dc(16);
 
-      expect(builder.toExpression()).toBe("(d20 + 1d6 + 3 DC 16)"); // Modifiers are combined
+      expect(builder.toExpression()).toBe("(d20 + 3 + 1d6 DC 16)"); // Modifiers are combined
     });
 
     it("should generate correct expression with advantage", () => {
@@ -222,7 +222,7 @@ describe("DCBuilder", () => {
     it("should handle bonus to save", () => {
       const builder = d20.plus(3).addRoll(-1).d4().plus(2).dc(18);
       expect(builder.saveDC).toBe(18);
-      expect(builder.toExpression()).toBe("(d20 - 1d4 + 5 DC 18)"); // Modifiers are combined
+      expect(builder.toExpression()).toBe("(d20 + 5 - 1d4 DC 18)"); // Modifiers are combined
     });
   });
 
