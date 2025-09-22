@@ -341,14 +341,21 @@ export class RollBuilder {
     ) => RollBuilder)(configs);
   }
 
-  doubleDice(): RollBuilder {
+  scaleDice(scale: number): RollBuilder {
+    const scaleInt = Math.floor(scale);
+    if (scaleInt !== scale) throw new Error("Scale must be an integer");
+    if (scaleInt <= 0) throw new Error("Scale must be > 0");
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
-      return { ...config, count: config.count * 2 };
+      return { ...config, count: config.count * scaleInt };
     });
     return new (this.constructor as new (
       configs: readonly RollConfig[]
     ) => RollBuilder)(newConfigs);
+  }
+
+  doubleDice(): RollBuilder {
+    return this.scaleDice(2);
   }
 
   copy(): RollBuilder {
