@@ -24,6 +24,16 @@ export const testCases: {
     config: { count: 2, sides: 6, reroll: 2 },
     expected: "2(d6 reroll 1 reroll 2)",
   },
+  {
+    label: "Reroll with minimum",
+    config: { sides: 4, reroll: 2, minimum: 2 },
+    expected: "1(2>(d4 reroll 2 reroll 1))",
+  },
+  {
+    label: "Reroll with minimum and multiple dice",
+    config: { count: 2, sides: 4, reroll: 2, minimum: 2 },
+    expected: "2(2>(d4 reroll 2 reroll 1))",
+  },
   //   { label: 'Exploding dice (finite)', config: { count: 2, sides: 6, explode: 3 }, expected: '2(d6^3)' },
   //   { label: 'Exploding dice (infinite)', config: { sides: 8, explode: Infinity }, expected: 'd8^^' },
   {

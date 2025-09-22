@@ -16,6 +16,31 @@ export const defaultConfig: RollConfig = {
   rollType: "flat",
 };
 
+const rollConfigsEqual = (a: RollConfig, b: RollConfig) => {
+  return (
+    a.count === b.count &&
+    a.sides === b.sides &&
+    a.modifier === b.modifier &&
+    a.reroll === b.reroll &&
+    a.explode === b.explode &&
+    a.minimum === b.minimum &&
+    a.bestOf === b.bestOf &&
+    a.keep === b.keep &&
+    a.rollType === b.rollType
+  );
+};
+
+const configComplexityScore = (config: RollConfig) => {
+  return (
+    (config.reroll > 0 ? 1 : 0) +
+    (config.explode > 0 ? 1 : 0) +
+    (config.minimum > 0 ? 1 : 0) +
+    (config.bestOf > 0 ? 1 : 0) +
+    (config.keep !== undefined ? 1 : 0) +
+    (config.rollType !== "flat" ? 1 : 0)
+  );
+};
+
 // Fluent builder for dice to create PMFs with an AST
 export class RollBuilder {
   protected readonly subRollConfigs: readonly RollConfig[];
@@ -402,22 +427,9 @@ export class RollBuilder {
       .sort((a, b) => {
         const aHasPriority = a.reroll > 0 || a.minimum > 0;
         const bHasPriority = b.reroll > 0 || b.minimum > 0;
-
-        if (aHasPriority !== bHasPriority) {
-          return aHasPriority ? -1 : 1;
-        }
-
+        if (aHasPriority !== bHasPriority) return aHasPriority ? -1 : 1;
         if (b.sides !== a.sides) return b.sides - a.sides;
-
-        // Add a complexity score for sorting when sides are equal
-        const complexity = (c: RollConfig) =>
-          (c.reroll > 0 ? 1 : 0) +
-          (c.minimum > 0 ? 1 : 0) +
-          (c.explode > 0 ? 1 : 0) +
-          (c.bestOf > 0 ? 1 : 0) +
-          (c.keep ? 1 : 0);
-
-        return complexity(b) - complexity(a);
+        return configComplexityScore(b) - configComplexityScore(a);
       });
 
     const diceConfigs = rootD20Group
@@ -435,16 +447,7 @@ export class RollBuilder {
 
     const rootDieConfig = this.getRootDieConfig();
     const newRootConfig = rootDieConfig
-      ? diceConfigs.find(
-          (c) =>
-            c.sides === rootDieConfig.sides &&
-            c.rollType === rootDieConfig.rollType &&
-            c.reroll === rootDieConfig.reroll &&
-            c.explode === rootDieConfig.explode &&
-            c.minimum === rootDieConfig.minimum &&
-            c.bestOf === rootDieConfig.bestOf &&
-            c.keep === rootDieConfig.keep
-        )
+      ? diceConfigs.find((c) => rollConfigsEqual(c, rootDieConfig))
       : undefined;
 
     // Generate dice expressions without individual modifiers
@@ -518,7 +521,11 @@ export class RollBuilder {
     }
 
     if (config.minimum > 0) {
-      baseDie = `${config.minimum}>${baseDie}`;
+      if (config.reroll > 0 && !config.explode) {
+        baseDie = `${config.minimum}>(${baseDie})`;
+      } else {
+        baseDie = `${config.minimum}>${baseDie}`;
+      }
       if (config.reroll > 0 && config.explode > 0) {
         for (let i = 1; i <= config.reroll; i++) {
           baseDie += ` reroll ${i}`;
@@ -559,8 +566,8 @@ export class RollBuilder {
           const isComplex = baseDie.length > `d${config.sides}`.length;
           const isHalflingShorthand = baseDie === "hd20";
           const isD20Shorthand = baseDie === "d20" && isRootDie;
-          const hasMinimum = baseDie.startsWith("(") && baseDie.includes(">");
-          const hasReroll = baseDie.includes("reroll");
+          const hasMinimum = config.minimum > 0;
+          const hasReroll = config.reroll > 0;
           const hasExplode = false; //baseDie.includes('^')
           // For negative subtraction, use absolute value for display
           // For negative counts from factory function, treat as 1 (legacy behavior)
@@ -571,32 +578,23 @@ export class RollBuilder {
             : Math.abs(config.count);
 
           if (effectiveCount > 1) {
-            // Add extra parentheses when complex, but handle special cases:
-            // - If there's explode and reroll, add parentheses (complex single roll case)
-            // - If there's only minimum, don't add extra parentheses
-            // - If there's minimum and reroll, don't add extra parentheses (reroll goes inside minimum)
-            const shouldAddParentheses =
-              isComplex &&
-              ((hasExplode && hasReroll) || // Complex single roll: explode + reroll
-                (!hasMinimum && !hasReroll) || // Simple complex case
-                (hasReroll && !hasMinimum)); // Reroll without minimum
+            const shouldAddParentheses = isComplex;
             mainExpression = shouldAddParentheses
               ? `${effectiveCount}(${baseDie})`
               : `${effectiveCount}${baseDie}`;
           } else if (effectiveCount === 1) {
-            // For count 1, only omit the "1" prefix for special cases (d20, hd20, etc.)
-            // For negative subtraction, always show the "1" prefix
+            const needsParens = hasReroll && hasMinimum;
             if (config.isSubtraction) {
-              mainExpression = `1${baseDie}`;
+              mainExpression = needsParens ? `1(${baseDie})` : `1${baseDie}`;
             } else if (
               isComplex ||
               isHalflingShorthand ||
               isD20Shorthand ||
               config.count < 0
             ) {
-              mainExpression = baseDie;
+              mainExpression = needsParens ? `1(${baseDie})` : baseDie;
             } else {
-              mainExpression = `1${baseDie}`;
+              mainExpression = needsParens ? `1(${baseDie})` : `1${baseDie}`;
             }
           } else {
             mainExpression = baseDie;
