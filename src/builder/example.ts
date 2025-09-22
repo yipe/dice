@@ -213,7 +213,7 @@ export const basicAttackCheckExprExpected = "(d20 + 7 AC 15)";
 
 /** Attack with bless (bonus-to-hit via 1d4). */
 export const blessedAttack: ACBuilder = d20.plus(d4).plus(7).ac(15);
-export const blessedAttackExprExpected = "(d20 + 1d4 + 7 AC 15)";
+export const blessedAttackExprExpected = "(d20 + 7 + 1d4 AC 15)";
 
 /** Elven Accuracy (3d20 keep highest) attack to-hit. */
 export const elvenAccuracyAttack: ACBuilder = d20

@@ -386,10 +386,8 @@ export class RollBuilder {
       (config) => config.sides && config.sides > 0
     );
 
-    const configGroups = new Map<
-      string,
-      { config: RollConfig; totalCount: number }
-    >();
+    type Group = { config: RollConfig; totalCount: number };
+    const configGroups = new Map<string, Group>();
 
     for (const config of originalDiceConfigs) {
       const keyConfig: Partial<RollConfig> = { ...config };
@@ -407,17 +405,12 @@ export class RollBuilder {
 
     const rootConfig = this.getRootDieConfig();
     const groupedConfigs = Array.from(configGroups.values());
-    let rootD20Group: { config: RollConfig; totalCount: number } | undefined;
+    let rootD20Group: Group | undefined;
 
     if (rootConfig && rootConfig.sides === 20) {
       const rootIndex = groupedConfigs.findIndex(
         ({ config }) =>
-          config.sides === rootConfig.sides &&
-          config.rollType === rootConfig.rollType &&
-          config.reroll === rootConfig.reroll &&
-          config.explode === rootConfig.explode &&
-          config.minimum === rootConfig.minimum &&
-          config.bestOf === rootConfig.bestOf &&
+          rollConfigsEqual(config, rootConfig) &&
           JSON.stringify(config.keep) === JSON.stringify(rootConfig.keep)
       );
 
@@ -473,6 +466,12 @@ export class RollBuilder {
 
       if (i === 0) {
         result = (config.isSubtraction ? "-" : "") + expression;
+
+        // Add constants right after the root d20 die (if it's a d20)
+        if (config.sides === 20 && totalModifier !== 0) {
+          if (totalModifier > 0) result += ` + ${totalModifier}`;
+          else result += ` - ${Math.abs(totalModifier)}`;
+        }
       } else {
         // Use minus sign for negative subtraction, plus sign otherwise
         const operator = config.isSubtraction ? " - " : " + ";
@@ -480,8 +479,12 @@ export class RollBuilder {
       }
     }
 
-    if (totalModifier > 0) result += ` + ${totalModifier}`;
-    else if (totalModifier < 0) result += ` - ${Math.abs(totalModifier)}`;
+    // If constants weren't added after d20, add them at the end
+    if (diceConfigs.length === 0 || diceConfigs[0].sides !== 20) {
+      if (totalModifier > 0) result += ` + ${totalModifier}`;
+      else if (totalModifier < 0) result += ` - ${Math.abs(totalModifier)}`;
+    }
+
     return result.replace(/\+ -/g, "-");
   }
 
