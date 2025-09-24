@@ -156,6 +156,11 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
         const rerollOne = !!childDie && (childDie.reroll || 0) >= 1;
         return d20RollPMF(node.rollType, rerollOne);
       }
+
+      case "half": {
+        const childPMF = resolve(node.child, eps);
+        return childPMF.scaleDamage(0.5, "floor");
+      }
     }
   })();
 
@@ -167,10 +172,7 @@ export function pmfFromRollBuilder(
   rb: RollBuilder,
   eps: number = defaultEps
 ): PMF {
-  const configs: readonly RollConfig[] = rb.getSubRollConfigs?.() ?? [];
-  const ast =
-    astFromRollConfigs(configs) ||
-    ({ type: "constant", value: 0 } as ConstantNode);
+  const ast = rb.toAST();
   return resolve(ast, eps);
 }
 
@@ -257,6 +259,7 @@ function findDie(node: ExpressionNode): DieNode | undefined {
       return undefined;
     case "sum":
     case "d20Roll":
+    case "half":
       return findDie(node.child);
     case "keep":
       return findDie(node.child.child);
@@ -344,6 +347,8 @@ export function getASTSignature(node: ExpressionNode): string {
       return `keep{c:${node.count},m:${node.mode},ch:${getASTSignature(
         node.child
       )}}`;
+    case "half":
+      return `half{ch:${getASTSignature(node.child)}}`;
     case "add": {
       let constantValue = 0;
       const otherChildrenSigs: string[] = [];
