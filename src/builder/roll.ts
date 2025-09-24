@@ -578,7 +578,6 @@ export class RollBuilder {
           const isD20Shorthand = baseDie === "d20" && isRootDie;
           const hasMinimum = config.minimum > 0;
           const hasReroll = config.reroll > 0;
-          const hasExplode = false; //baseDie.includes('^')
           // For negative subtraction, use absolute value for display
           // For negative counts from factory function, treat as 1 (legacy behavior)
           const effectiveCount = config.isSubtraction
@@ -661,5 +660,43 @@ export class RollBuilder {
   get baseReroll(): number {
     const rootConfig = this.getRootDieConfig();
     return rootConfig?.reroll || 0;
+  }
+
+  half(): HalfRollBuilder {
+    return new HalfRollBuilder(this);
+  }
+}
+
+export class HalfRollBuilder extends RollBuilder {
+  constructor(private readonly innerRoll: RollBuilder) {
+    super(0); // dummy, we override methods
+  }
+
+  get lastConfig() {
+    return (this.innerRoll as any).lastConfig;
+  }
+
+  getSubRollConfigs(): readonly RollConfig[] {
+    return this.innerRoll.getSubRollConfigs();
+  }
+
+  toExpression(): string {
+    const innerExpression = this.innerRoll.toExpression();
+    return `(${innerExpression}) // 2`;
+  }
+
+  toAST(): ExpressionNode {
+    return {
+      type: "half",
+      child: this.innerRoll.toAST(),
+    };
+  }
+
+  toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  copy(): HalfRollBuilder {
+    return new HalfRollBuilder(this.innerRoll.copy());
   }
 }

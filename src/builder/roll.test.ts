@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { d4, d6, d8, roll } from ".";
-import { RollBuilder } from "./roll";
+import { HalfRollBuilder, RollBuilder } from "./roll";
 import type { RollConfig } from "./types";
 
 export const testCases: {
@@ -942,6 +942,80 @@ describe("RollBuilder", () => {
       expect(() => RollBuilder.fromArgs(1, 6, NaN)).toThrow(
         "Invalid NaN value for modOrRoll"
       );
+    });
+  });
+
+  describe("half() method", () => {
+    it("should create a half roll builder", () => {
+      const damage = roll(2).d6().plus(3);
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage).toBeInstanceOf(HalfRollBuilder);
+    });
+
+    it("should format expression with parentheses and //2", () => {
+      const damage = roll(2).d6().plus(3);
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage.toExpression()).toBe("(2d6 + 3) // 2");
+    });
+
+    it("should work with simple dice rolls", () => {
+      const damage = roll(1).d8();
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage.toExpression()).toBe("(1d8) // 2");
+    });
+
+    it("should work with complex expressions", () => {
+      const damage = roll(3).d6().plus(roll(2).d4()).plus(5);
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage.toExpression()).toBe("(3d6 + 2d4 + 5) // 2");
+    });
+
+    it("should work with advantage rolls", () => {
+      const damage = roll(2).d6().withAdvantage();
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage.toExpression()).toBe("(d6 > d6) // 2");
+    });
+
+    it("should produce correct AST", () => {
+      const damage = roll(1).d6().plus(3);
+      const halvedDamage = damage.half();
+      const ast = halvedDamage.toAST();
+
+      expect(ast.type).toBe("half");
+      expect(ast.child.type).toBe("add");
+    });
+
+    it("should calculate PMF correctly", () => {
+      const damage = roll(1).d4(); // 1-4 damage
+      const halvedDamage = damage.half();
+      const pmf = halvedDamage.toPMF();
+
+      // d4 halved should be: 1->0, 2->1, 3->1, 4->2
+      expect(pmf.pAt(0)).toBeCloseTo(0.25); // from rolling 1
+      expect(pmf.pAt(1)).toBeCloseTo(0.5); // from rolling 2 or 3
+      expect(pmf.pAt(2)).toBeCloseTo(0.25); // from rolling 4
+    });
+
+    it("should handle chaining methods after half", () => {
+      const damage = roll(2).d6();
+      const halvedDamage = damage.half();
+      const copiedDamage = halvedDamage.copy();
+
+      expect(copiedDamage.toExpression()).toBe("(2d6) // 2");
+      expect(copiedDamage).toBeInstanceOf(HalfRollBuilder);
+    });
+
+    it("should work with constants only", () => {
+      const damage = roll(0).plus(8); // just 8 damage
+      const halvedDamage = damage.half();
+
+      expect(halvedDamage.toExpression()).toBe("(8) // 2");
+      expect(halvedDamage.toPMF().pAt(4)).toBeCloseTo(1); // 8 // 2 = 4
     });
   });
 });
