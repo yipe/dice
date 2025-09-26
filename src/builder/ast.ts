@@ -66,28 +66,43 @@ export function astFromRollConfigs(
     }
 
     if (cfg.rollType === "flat" && cfg.keep && cfg.keep.total > 0) {
-      // Single pool definition per trial
-      const perTrial: SumNode = {
-        type: "sum",
-        count: cfg.keep.total,
-        child: node,
-      };
+      const baseCount = Math.max(1, Math.floor(Math.abs(count || 1)));
+      const trials = Math.max(1, Math.floor(cfg.keep.total));
+      const k = Math.max(0, Math.floor(cfg.keep.count));
 
-      // If we're keeping a single best result (kh1/kl1) and count>1,
-      // interpret count as number of independent trials and take the max/min across trials.
-      const trials = Math.max(1, Math.floor(Math.abs(count || 1)));
-      if (trials > 1 && cfg.keep.count === 1) {
-        // For highest, use maxOf; for lowest, we can map via negation if ever needed.
-        // Current use cases only require highest; lowest with trials>1 is not expected here.
-        node = { type: "maxOf", count: trials, child: perTrial } as any;
-      } else {
-        // Normal keep of top-k from a single pool
+      if (trials === baseCount) {
+        // Classic pool: keep K of N faces from N iid dice
+        const base: SumNode = { type: "sum", count: trials, child: node };
         node = {
           type: "keep",
           mode: cfg.keep.mode,
-          count: cfg.keep.count,
-          child: perTrial,
+          count: k,
+          child: base,
         } as KeepNode;
+      } else {
+        // Trials-of-sums: trials of (baseCount dice sum), keep K trial sums
+        const perTrial: SumNode = {
+          type: "sum",
+          count: baseCount,
+          child: node,
+        };
+        if (trials === 1) {
+          node = perTrial;
+        } else if (k === 1 && cfg.keep.mode === "highest") {
+          node = { type: "maxOf", count: trials, child: perTrial } as any;
+        } else {
+          const trialPool: SumNode = {
+            type: "sum",
+            count: trials,
+            child: perTrial,
+          };
+          node = {
+            type: "keep",
+            mode: cfg.keep.mode,
+            count: k,
+            child: trialPool,
+          } as KeepNode;
+        }
       }
     } else {
       const c = appliedRollType ? 1 : Math.max(1, count || 1);
@@ -152,15 +167,17 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
       }
 
       case "keep": {
-        const total = getTotalCount(node);
-        const die = findDie(node.child.child);
-        const perDie = die ? resolveSingleDie(die, eps) : PMF.delta(0, eps);
+        const totalTrials = getTotalCount(node);
+        const keepCount = Math.max(0, Math.min(node.count, totalTrials));
+        if (keepCount === 0 || totalTrials === 0) return PMF.delta(0, eps);
 
-        const keepCount = Math.max(0, Math.min(node.count, total));
-        if (keepCount === 0 || total === 0) return PMF.delta(0, eps);
+        // Resolve the per-trial PMF (the child of the Sum inside Keep)
+        const perTrialNode = node.child.child; // Sum(child: perTrial)
+        const perTrialPMF = resolve(perTrialNode, eps);
+
         return keepSumPMF(
-          perDie,
-          total,
+          perTrialPMF,
+          totalTrials,
           keepCount,
           node.mode === "highest",
           eps
@@ -365,6 +382,7 @@ function keepSumPMF(
   highest: boolean,
   eps: number = defaultEps
 ): PMF {
+  // Trivial/fast paths
   if (keep >= total) return single.power(total, eps);
   if (keep <= 0) return PMF.delta(0, eps);
 
@@ -379,28 +397,139 @@ function keepSumPMF(
   const cached = builderPMFCache.get(cacheKey);
   if (cached) return cached;
 
-  const support = single.support();
-  const probs = support.map((v) => ({ v, p: single.pAt(v) }));
-
-  // Enumerate all outcomes (s^n). Practical for small n and s.
-  const out = new Map<number, number>();
-
-  function dfs(i: number, accValues: number[], weight: number): void {
-    if (i === total) {
-      const sorted = [...accValues].sort((a, b) => (highest ? b - a : a - b));
-      let sum = 0;
-      for (let j = 0; j < keep; j++) sum += sorted[j];
-      out.set(sum, (out.get(sum) || 0) + weight);
-      return;
-    }
-    for (const { v, p } of probs) {
-      if (p <= 0) continue;
-      dfs(i + 1, [...accValues, v], weight * p);
+  // kh1/kl1 fast paths using max-of machinery
+  if (keep === 1) {
+    if (highest) {
+      return computeMaxOfPMF(single, total, eps);
+    } else {
+      // min of n i.i.d. == -max of n of negated variable
+      const neg = single.mapDamage((v) => -v);
+      const minPMF = computeMaxOfPMF(neg, total, eps).mapDamage((v) => -v);
+      builderPMFCache.set(cacheKey, minPMF);
+      return minPMF;
     }
   }
 
-  dfs(0, [], 1);
-  const result = PMF.fromMap(out, eps);
+  // DP over descending values; state = (used, remainingTrials) → map(sum -> prob)
+  // Transition by drawing X occurrences at current value v from remainingTrials r: X ~ Binom(r, p)
+  // Select t = min(X, keep - used) into the sum (highest picks first), then continue with r - X.
+
+  type SumMap = Map<number, number>;
+  let state: Map<string, SumMap> = new Map();
+  const keyOf = (used: number, r: number) => `${used}|${r}`;
+
+  state.set(keyOf(0, total), new Map([[0, 1]]));
+
+  const valuesDesc = highest
+    ? [...sortedSupport].sort((a, b) => b - a)
+    : [...sortedSupport].sort((a, b) => a - b);
+
+  const binomPMF = (r: number, p: number): number[] => {
+    if (r <= 0) return [1];
+    if (p <= eps) {
+      const arr = new Array(r + 1).fill(0);
+      arr[0] = 1;
+      return arr;
+    }
+    if (1 - p <= eps) {
+      const arr = new Array(r + 1).fill(0);
+      arr[r] = 1;
+      return arr;
+    }
+    const q = 1 - p;
+    const arr = new Array(r + 1).fill(0);
+
+    // stable recurrence from k=0
+    arr[0] = Math.pow(q, r);
+    const ratio = p / q;
+    for (let x = 1; x <= r; x++)
+      arr[x] = ((arr[x - 1] * (r - x + 1)) / x) * ratio;
+
+    // Normalize minor drift
+    let s = 0;
+    for (let x = 0; x <= r; x++) s += arr[x];
+    if (Math.abs(1 - s) > 1e-12) for (let x = 0; x <= r; x++) arr[x] /= s;
+
+    return arr;
+  };
+
+  const pruneMap = (m: SumMap, threshold: number): SumMap => {
+    if (threshold <= 0) return m;
+    const out = new Map<number, number>();
+    for (const [sum, pr] of m) if (pr >= threshold) out.set(sum, pr);
+    return out.size === m.size ? m : out;
+  };
+
+  const pruneState = (st: Map<string, SumMap>, threshold: number) => {
+    if (threshold <= 0) return st;
+    const out = new Map<string, SumMap>();
+    for (const [k, m] of st) {
+      const mm = pruneMap(m, threshold);
+      if (mm.size > 0) out.set(k, mm);
+    }
+    return out;
+  };
+
+  let processedMass = 0;
+  for (const v of valuesDesc) {
+    const p = single.pAt(v);
+    if (p <= 0) continue;
+    const q = Math.max(eps, 1 - processedMass);
+    const pCond = Math.min(1, p / q);
+    const next: Map<string, SumMap> = new Map();
+
+    for (const [k, m] of state) {
+      const [usedStr, rStr] = k.split("|");
+      const used = parseInt(usedStr, 10);
+      const r = parseInt(rStr, 10);
+      if (r === 0) {
+        // No trials left; carry state forward unchanged
+        const destKey = keyOf(used, 0);
+        const dest = next.get(destKey) ?? new Map<number, number>();
+        for (const [sum, pr] of m) dest.set(sum, (dest.get(sum) || 0) + pr);
+        next.set(destKey, dest);
+        continue;
+      }
+
+      const bin = binomPMF(r, pCond);
+      const remainingCapacity = keep - used;
+
+      for (let x = 0; x <= r; x++) {
+        const px = bin[x];
+        if (px <= eps) continue;
+        const t = Math.min(x, remainingCapacity);
+        const used2 = used + t;
+        const r2 = r - x;
+        const add = t * v;
+
+        const destKey = keyOf(used2, r2);
+        const dest = next.get(destKey) ?? new Map<number, number>();
+        for (const [sum, pr] of m) {
+          const s2 = sum + add;
+          const prob = pr * px;
+          const cur = dest.get(s2) || 0;
+          const nv = cur + prob;
+          if (nv >= eps) dest.set(s2, nv);
+        }
+        if (dest.size > 0) next.set(destKey, dest);
+      }
+    }
+
+    // Light pruning proportional to eps
+    state = pruneState(next, eps * 1e-6);
+    processedMass += p;
+  }
+
+  // Collect results where all trials assigned and exactly keep were used
+  const finalKey = keyOf(keep, 0);
+  const dist = state.get(finalKey) ?? new Map<number, number>();
+
+  if (dist.size === 0) {
+    // Fallback safety: return empty mass (should not happen)
+    return PMF.emptyMass();
+  }
+
+  const result = PMF.fromMap(dist, eps);
   builderPMFCache.set(cacheKey, result);
   return result;
 }

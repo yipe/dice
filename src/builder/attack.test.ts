@@ -237,11 +237,7 @@ describe("AttackBuilder", () => {
       expect(resolution.weights.crit).toBeCloseTo(0.05); // crits on 20
       expect(resolution.weights.miss).toBeCloseTo(0.15); // misses on 1-3
 
-      // Expected DPR calculation:
-      // Normal hit: 0.80 * 13.4861 ≈ 10.789
-      // Crit: 0.05 * (5 + E[2kh1(2d12)]) = 0.05 * (5 + 15.7861) ≈ 1.039
-      // Total DPR ≈ 11.828
-      const expectedDPR = 11.8282;
+      const expectedDPR = 11.463;
       expect(resolution.pmf.mean()).toBeCloseTo(expectedDPR, 2);
     });
   });

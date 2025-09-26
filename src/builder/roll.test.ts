@@ -328,7 +328,11 @@ describe("RollBuilder", () => {
       const builder = roll(8).d10().plus(3).keepLowest(4, 2);
       expect(builder.toExpression()).toBe("4kl2(8d10) + 3");
       expect(builder.toPMF()).toBeDefined();
-      expect(builder.toPMF()?.mean()).toBeCloseTo(10.033, 3);
+      // Interpretation: 4 trials of (8d10), keep the lowest 2 trial sums, then +3.
+      // Per-trial mean is 8*5.5 = 44, but picking the 2 minima of 4 lowers the total well below 2*44.
+      // The exact expectation is computed by DP over the per-trial PMF (order statistics of sums).
+      // See keepSumPMF DP in ast.ts.
+      expect(builder.toPMF()?.mean()).toBeCloseTo(80.1826, 3);
     });
 
     it("should handle copy() with multiple dice configurations", () => {
@@ -422,7 +426,9 @@ describe("RollBuilder", () => {
       // + 2kl1(2d6)
       expect(builder.toExpression()).toBe("4kh3(3d8) + 3");
       expect(builder.toPMF()).toBeDefined();
-      expect(builder.toPMF()?.mean()).toBeCloseTo(28.0, 1);
+      // Interpretation: 4 trials of (3d8), keep the highest 3 trial sums, then +3.
+      // Exact mean is E[sum of top-3 of 4 i.i.d. 3d8] + 3, computed via DP over the per-trial PMF.
+      expect(builder.toPMF()?.mean()).toBeCloseTo(47.6011, 3);
     });
   });
 
@@ -693,7 +699,7 @@ describe("RollBuilder", () => {
         const pmf = rollBuilder.toPMF();
         // Mean should be higher than 3d6 since we're keeping the highest 3 of 4
         expect(pmf.mean()).toBeGreaterThan(10.5); // 3d6 mean
-        expect(pmf.min()).toBe(3);
+        expect(pmf.min()).toBe(3); // verified, 3 is minimum
         expect(pmf.max()).toBe(18);
       });
 
