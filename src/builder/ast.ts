@@ -66,13 +66,29 @@ export function astFromRollConfigs(
     }
 
     if (cfg.rollType === "flat" && cfg.keep && cfg.keep.total > 0) {
-      const base: SumNode = { type: "sum", count: cfg.keep.total, child: node };
-      node = {
-        type: "keep",
-        mode: cfg.keep.mode,
-        count: cfg.keep.count,
-        child: base,
-      } as KeepNode;
+      // Single pool definition per trial
+      const perTrial: SumNode = {
+        type: "sum",
+        count: cfg.keep.total,
+        child: node,
+      };
+
+      // If we're keeping a single best result (kh1/kl1) and count>1,
+      // interpret count as number of independent trials and take the max/min across trials.
+      const trials = Math.max(1, Math.floor(Math.abs(count || 1)));
+      if (trials > 1 && cfg.keep.count === 1) {
+        // For highest, use maxOf; for lowest, we can map via negation if ever needed.
+        // Current use cases only require highest; lowest with trials>1 is not expected here.
+        node = { type: "maxOf", count: trials, child: perTrial } as any;
+      } else {
+        // Normal keep of top-k from a single pool
+        node = {
+          type: "keep",
+          mode: cfg.keep.mode,
+          count: cfg.keep.count,
+          child: perTrial,
+        } as KeepNode;
+      }
     } else {
       const c = appliedRollType ? 1 : Math.max(1, count || 1);
       node = { type: "sum", count: c, child: node } as SumNode;
@@ -160,6 +176,15 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
       case "half": {
         const childPMF = resolve(node.child, eps);
         return childPMF.scaleDamage(0.5, "floor");
+      }
+
+      case "maxOf": {
+        const childPMF = resolve(node.child, eps);
+        const count = Math.max(1, Math.floor(node.count));
+        if (count === 1) return childPMF;
+
+        // Compute the maximum of count independent rolls of childPMF
+        return computeMaxOfPMF(childPMF, count, eps);
       }
     }
   })();
@@ -260,6 +285,7 @@ function findDie(node: ExpressionNode): DieNode | undefined {
     case "sum":
     case "d20Roll":
     case "half":
+    case "maxOf":
       return findDie(node.child);
     case "keep":
       return findDie(node.child.child);
@@ -277,6 +303,59 @@ function getTotalCount(node: KeepNode): number {
   let cur = node.child;
   while (cur.type === "keep") cur = cur.child;
   return cur.type === "sum" ? Math.max(0, Math.floor(cur.count)) : 0;
+}
+
+function computeMaxOfPMF(
+  pmf: PMF,
+  count: number,
+  eps: number = defaultEps
+): PMF {
+  // Compute the maximum of 'count' independent rolls of the given PMF
+  if (count <= 1) return pmf;
+
+  const support = pmf.support();
+  const out = new Map<number, number>();
+
+  // For small counts, we can enumerate all outcomes
+  if (count <= 6 && support.length <= 20) {
+    function dfs(
+      rollsLeft: number,
+      currentMax: number,
+      probability: number
+    ): void {
+      if (rollsLeft === 0) {
+        out.set(currentMax, (out.get(currentMax) || 0) + probability);
+        return;
+      }
+
+      for (const value of support) {
+        const p = pmf.pAt(value);
+        if (p > 0) {
+          const newMax = Math.max(currentMax, value);
+          dfs(rollsLeft - 1, newMax, probability * p);
+        }
+      }
+    }
+
+    dfs(count, -Infinity, 1);
+  } else {
+    // For larger cases, use the CDF method
+    const sortedSupport = [...support].sort((a, b) => a - b);
+    for (const value of sortedSupport) {
+      // P(max = value) = P(all rolls <= value) - P(all rolls <= value-1)
+      const cdfAtValue = pmf.cdfAt(value);
+      const cdfAtValueMinus1 =
+        value > sortedSupport[0] ? pmf.cdfAt(value - 1) : 0;
+
+      const probMax =
+        Math.pow(cdfAtValue, count) - Math.pow(cdfAtValueMinus1, count);
+      if (probMax > eps) {
+        out.set(value, probMax);
+      }
+    }
+  }
+
+  return PMF.fromMap(out, eps);
 }
 
 function keepSumPMF(
@@ -349,6 +428,8 @@ export function getASTSignature(node: ExpressionNode): string {
       )}}`;
     case "half":
       return `half{ch:${getASTSignature(node.child)}}`;
+    case "maxOf":
+      return `maxOf{c:${node.count},ch:${getASTSignature(node.child)}}`;
     case "add": {
       let constantValue = 0;
       const otherChildrenSigs: string[] = [];

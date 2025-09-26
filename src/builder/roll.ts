@@ -345,6 +345,21 @@ export class RollBuilder {
     const scaleInt = Math.floor(scale);
     if (scaleInt !== scale) throw new Error("Scale must be an integer");
     if (scaleInt <= 0) throw new Error("Scale must be > 0");
+
+    // Special case for keepHighest/keepLowest when doubling (for crit hits)
+    if (scaleInt > 1) {
+      const configs = this.getSubRollConfigs();
+      if (configs.length === 1 && configs[0].keep && configs[0].count === 1) {
+        // Only apply special logic for single config with count=1 and keep operation
+        // This handles cases like roll(1).d(12).keepHighest(2,1).doubleDice()
+        const config = configs[0];
+        // For critical hits, double the count to get the "max of 2 pools" semantics
+        // This will display as 2kh1(2d12) but compute as max of 2 rolls of 2d12 sum
+        const newConfig = { ...config, count: scaleInt };
+        return new RollBuilder([newConfig]);
+      }
+    }
+
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
       return { ...config, count: config.count * scaleInt };
@@ -665,6 +680,11 @@ export class RollBuilder {
   half(): HalfRollBuilder {
     return new HalfRollBuilder(this);
   }
+
+  // Create a "max of N rolls" version of this roll for crit damage with keep operations
+  maxOf(count: number): MaxOfRollBuilder {
+    return new MaxOfRollBuilder(this, count);
+  }
 }
 
 export class HalfRollBuilder extends RollBuilder {
@@ -698,5 +718,95 @@ export class HalfRollBuilder extends RollBuilder {
 
   copy(): HalfRollBuilder {
     return new HalfRollBuilder(this.innerRoll.copy());
+  }
+}
+
+export class MaxOfRollBuilder extends RollBuilder {
+  constructor(
+    private readonly innerRoll: RollBuilder,
+    private readonly count: number,
+    private readonly diceCount?: number,
+    private readonly diceSides?: number
+  ) {
+    super(0); // dummy, we override methods
+  }
+
+  get lastConfig() {
+    return (this.innerRoll as any).lastConfig;
+  }
+
+  getSubRollConfigs(): readonly RollConfig[] {
+    return this.innerRoll.getSubRollConfigs();
+  }
+
+  toExpression(): string {
+    // Use the stored dice info to create the expression directly
+    if (this.diceCount && this.diceSides) {
+      return `max${this.count}(${this.diceCount}d${this.diceSides})`;
+    }
+
+    // If no stored dice info, fallback to simple max expression
+    return `max${this.count}(?d?)`;
+  }
+
+  private findDieInAST(node: any): any {
+    if (node.type === "die") return node;
+    if (node.child) return this.findDieInAST(node.child);
+    if (node.children) {
+      for (const child of node.children) {
+        const result = this.findDieInAST(child.node || child);
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+
+  toAST(): ExpressionNode {
+    // Use the stored dice info if available
+    if (this.diceCount && this.diceSides) {
+      const sumChild: ExpressionNode = {
+        type: "sum",
+        count: this.diceCount,
+        child: { type: "die", sides: this.diceSides },
+      };
+      return {
+        type: "maxOf",
+        count: this.count,
+        child: sumChild,
+      };
+    }
+
+    // Fallback: try to get from innerRoll
+    try {
+      const configs = this.innerRoll.getSubRollConfigs();
+      if (configs.length === 1 && configs[0].sides) {
+        const config = configs[0];
+        const sumChild: ExpressionNode = {
+          type: "sum",
+          count: config.count,
+          child: { type: "die", sides: config.sides },
+        };
+        return {
+          type: "maxOf",
+          count: this.count,
+          child: sumChild,
+        };
+      }
+    } catch (e) {
+      // Last resort: try parsing the expression (though this shouldn't work with current RollBuilder)
+    }
+
+    // Fallback - this shouldn't happen in normal usage
+    throw new Error(
+      `MaxOfRollBuilder.toAST(): Unsupported innerRoll configuration`
+    );
+  }
+
+  toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  copy(): MaxOfRollBuilder {
+    return new MaxOfRollBuilder(this.innerRoll.copy(), this.count);
   }
 }

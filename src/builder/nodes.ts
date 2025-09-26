@@ -5,7 +5,8 @@ export type ExpressionNode =
   | AddNode
   | KeepNode
   | D20RollNode
-  | HalfNode;
+  | HalfNode
+  | MaxOfNode;
 
 export type DieNode = {
   type: "die";
@@ -47,5 +48,11 @@ export type D20RollNode = {
 
 export type HalfNode = {
   type: "half";
+  child: ExpressionNode;
+};
+
+export type MaxOfNode = {
+  type: "maxOf";
+  count: number;
   child: ExpressionNode;
 };
