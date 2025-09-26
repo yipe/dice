@@ -210,5 +210,39 @@ describe("AttackBuilder", () => {
         "(d20 + 10 AC 18) * (3kl2(1d6) + 3) crit (3kl2(2d6) + 3)"
       );
     });
+
+    it("should handle 2kh1(1d12) with correct expected value", () => {
+      const attack = d20
+        .plus(11)
+        .ac(15)
+        .onHit(roll(1).d(12).keepHighest(2, 1).plus(5));
+      expect(attack.toExpression()).toBe(
+        "(d20 + 11 AC 15) * (2kh1(1d12) + 5) crit (2kh1(2d12) + 5)"
+      );
+
+      // Test the expected value of 2kh1(1d12) component
+      const keepHighestComponent = roll(1).d(12).keepHighest(2, 1);
+      const pmf = keepHighestComponent.toPMF();
+
+      // Expected value should be approximately 8.4861 according to mathematical calculation
+      expect(pmf.mean()).toBeCloseTo(8.4861, 3);
+
+      // Test the full damage roll expected value
+      const damageRoll = roll(1).d(12).keepHighest(2, 1).plus(5);
+      expect(damageRoll.toPMF().mean()).toBeCloseTo(13.4861, 3);
+      //
+      // Test attack resolution
+      const resolution = attack.resolve();
+      expect(resolution.weights.hit).toBeCloseTo(0.8); // hits on 4-19 (d20+11 vs AC 15)
+      expect(resolution.weights.crit).toBeCloseTo(0.05); // crits on 20
+      expect(resolution.weights.miss).toBeCloseTo(0.15); // misses on 1-3
+
+      // Expected DPR calculation:
+      // Normal hit: 0.80 * 13.4861 ≈ 10.789
+      // Crit: 0.05 * (5 + E[2kh1(2d12)]) = 0.05 * (5 + 15.7861) ≈ 1.039
+      // Total DPR ≈ 11.828
+      const expectedDPR = 11.8282;
+      expect(resolution.pmf.mean()).toBeCloseTo(expectedDPR, 2);
+    });
   });
 });

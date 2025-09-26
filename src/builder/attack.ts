@@ -64,7 +64,12 @@ export class AttackBuilder implements CheckBuilder {
     if (this.hitEffect) {
       effectPart = `(${this.hitEffect.toExpression()})`;
       if (this.critEffect !== null) {
-        const crit = this.critEffect ?? this.hitEffect.copy().doubleDice();
+        let crit: RollBuilder;
+        if (this.critEffect) {
+          crit = this.critEffect;
+        } else {
+          crit = this.hitEffect?.copy().doubleDice() ?? RollBuilder.fromArgs(0);
+        }
 
         const critThreshold = this.check.critThreshold;
         if (critThreshold < 15 || critThreshold > 20) {

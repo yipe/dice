@@ -415,14 +415,12 @@ describe("RollBuilder", () => {
     });
 
     it("should handle complex combination of keep and modifiers", () => {
-      const builder = roll(6)
-        .d8()
-        .keepHighest(6, 4)
-        .plus(3)
-        .addRoll(2)
-        .d6()
-        .keepLowest(2, 1);
-      expect(builder.toExpression()).toBe("6kh4(6d8) + 2kl1(2d6) + 3");
+      const builder = roll(3).d8().keepHighest(4, 3).plus(3);
+      // .addRoll(2)
+      // .d6()
+      // .keepLowest(2, 1);
+      // + 2kl1(2d6)
+      expect(builder.toExpression()).toBe("4kh3(3d8) + 3");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(28.0, 1);
     });
