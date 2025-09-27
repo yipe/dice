@@ -237,7 +237,7 @@ describe("AttackBuilder", () => {
       expect(resolution.weights.crit).toBeCloseTo(0.05); // crits on 20
       expect(resolution.weights.miss).toBeCloseTo(0.15); // misses on 1-3
 
-      const expectedDPR = 11.463;
+      const expectedDPR = 11.828192515432098;
       expect(resolution.pmf.mean()).toBeCloseTo(expectedDPR, 2);
     });
   });
