@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { d4, d6, d8, roll } from ".";
+import { d20, d4, d6, d8, roll } from "../builder";
+import { parse } from "../parser/parser";
+import { builderPMFCache } from "./factory";
 import { HalfRollBuilder, RollBuilder } from "./roll";
 import type { RollConfig } from "./types";
-
 export const testCases: {
   label: string;
   config: Partial<RollConfig>;
@@ -1020,6 +1021,47 @@ describe("RollBuilder", () => {
 
       expect(halvedDamage.toExpression()).toBe("(8) // 2");
       expect(halvedDamage.toPMF().pAt(4)).toBeCloseTo(1); // 8 // 2 = 4
+    });
+  });
+
+  describe("Parser vs Builder - crit with keep-highest", () => {
+    it("should match for (d20 + 11 AC 15) * (2kh1(1d12) + 5) crit (2kh1(2d12) + 5)", () => {
+      // Clear builder PMF cache to avoid stale AST semantics
+      builderPMFCache.clear();
+      const expr = "(d20 + 11 AC 15) * (2kh1(1d12) + 5) crit (2kh1(2d12) + 5)";
+
+      const pmfParsed = parse(expr);
+
+      const hit = roll(1, 12).keepHighest(2, 1).plus(5);
+      const crit = roll(2, 12).keepHighest(2, 1).plus(5);
+
+      const pmfBuilt = d20.plus(11).ac(15).onHit(hit).onCrit(crit).toPMF();
+      const pmfAutoCritBuilt = d20.plus(11).ac(15).onHit(hit).toPMF();
+
+      // Sanity: auto-crit default equals explicit crit
+      expect(pmfAutoCritBuilt.mean()).toBeCloseTo(pmfBuilt.mean(), 9);
+      // Parser and builder should agree closely
+      expect(pmfBuilt.mean()).toBeCloseTo(pmfParsed.mean(), 4);
+
+      // Compare full distributions (support + probabilities)
+      const support = Array.from(
+        new Set([...pmfBuilt.support(), ...pmfParsed.support()])
+      ).sort((a, b) => a - b);
+
+      for (const v of support) {
+        expect(pmfBuilt.pAt(v)).toBeCloseTo(pmfParsed.pAt(v), 12);
+      }
+    });
+
+    it("keep-highest semantics: crit pool should exceed hit pool mean", () => {
+      builderPMFCache.clear();
+      const hitOnly = roll(1, 12).keepHighest(2, 1); // max of two d12
+      const critOnly = roll(2, 12).keepHighest(2, 1); // max of two (2d12) sums
+
+      const hitMean = hitOnly.toPMF().mean();
+      const critMean = critOnly.toPMF().mean();
+
+      expect(critMean).toBeGreaterThan(hitMean);
     });
   });
 });

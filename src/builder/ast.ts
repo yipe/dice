@@ -70,7 +70,19 @@ export function astFromRollConfigs(
       const trials = Math.max(1, Math.floor(cfg.keep.total));
       const k = Math.max(0, Math.floor(cfg.keep.count));
 
-      if (trials === baseCount) {
+      // For keep-highest of 1, always treat as trials-of-sums: max over trial sums
+      if (k === 1 && cfg.keep.mode === "highest") {
+        const perTrial: SumNode = {
+          type: "sum",
+          count: baseCount,
+          child: node,
+        };
+        if (trials === 1) {
+          node = perTrial;
+        } else {
+          node = { type: "maxOf", count: trials, child: perTrial } as any;
+        }
+      } else if (trials === baseCount) {
         // Classic pool: keep K of N faces from N iid dice
         const base: SumNode = { type: "sum", count: trials, child: node };
         node = {
@@ -80,7 +92,7 @@ export function astFromRollConfigs(
           child: base,
         } as KeepNode;
       } else {
-        // Trials-of-sums: trials of (baseCount dice sum), keep K trial sums
+        // General trials-of-sums: trials of (baseCount dice sum), keep K trial sums
         const perTrial: SumNode = {
           type: "sum",
           count: baseCount,
@@ -88,8 +100,6 @@ export function astFromRollConfigs(
         };
         if (trials === 1) {
           node = perTrial;
-        } else if (k === 1 && cfg.keep.mode === "highest") {
-          node = { type: "maxOf", count: trials, child: perTrial } as any;
         } else {
           const trialPool: SumNode = {
             type: "sum",
