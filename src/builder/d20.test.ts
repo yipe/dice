@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "../";
 import { d20PMF, d20RollPMF } from "./d20";
-import { d20 } from "./factory";
+import { d20, d4, d8} from "./factory";
 
 describe("d20SinglePMF", () => {
   it("should create a normal d20 PMF", () => {
@@ -108,6 +108,19 @@ describe("d20WithRollTypePMF", () => {
       const critChance = 1 / 20
       const hitChance = 1 - critChance
       expect(pmf.mean()).toBeCloseTo(hitChance * 1 + critChance * 1)
+    })
+    
+    // TODO - make another test to check the PMF means of basic cases
+
+    it('should handle autohit with complex damage: 2kh1(1d8) + 1d8 + 1d4 + 5', () => {
+      
+      const damage = d8.keepHighest(2, 1).plus(d8).plus(d4).plus(5);
+      const pmf = d20.alwaysHits().critOn(20).onHit(damage).pmf;
+      
+      
+      expect(pmf.min()).toBe(8)
+      expect(pmf.max()).toBe(45); 
+      expect(pmf.mean()).toBeCloseTo(18.41, 1)
     })
   })
 });
