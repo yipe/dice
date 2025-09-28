@@ -1,5 +1,4 @@
 import { d10, d12, d20, d4, d6, d8, roll } from "./";
-
 import { describe, expect, it } from "vitest";
 
 describe("AttackRollBuilder", () => {

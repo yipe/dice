@@ -7,7 +7,6 @@ export interface AttackConfig {
   ac: number;
   critThreshold: number;
 }
-
 export class ACBuilder extends RollBuilder {
   readonly attackConfig: AttackConfig;
 

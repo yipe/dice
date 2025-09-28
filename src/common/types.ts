@@ -14,6 +14,10 @@ export interface Bin {
   attr?: OutcomeLabelMap;
 }
 
+export interface CritConfig {
+    critThreshold: number;
+}
+
 /** Simple mapping from damage value to probability. */
 export type DamageDistribution = Record<number, number>;
 /** Canonical outcome labels supported by the query helpers. */
