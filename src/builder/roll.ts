@@ -350,19 +350,6 @@ export class RollBuilder {
     if (scaleInt !== scale) throw new Error("Scale must be an integer");
     if (scaleInt <= 0) throw new Error("Scale must be > 0");
 
-    // Special case for keepHighest/keepLowest when doubling (for crit hits)
-    if (scaleInt > 1) {
-      const configs = this.getSubRollConfigs();
-      if (configs.length === 1 && configs[0].keep && configs[0].count === 1) {
-        // Only apply special logic for single config with count=1 and keep operation
-        // This handles cases like roll(1).d(12).keepHighest(2,1).doubleDice()
-        const config = configs[0];
-        // For critical hits, double the count to get the "max of 2 pools" semantics
-        // This will display as 2kh1(2d12) but compute as max of 2 rolls of 2d12 sum
-        const newConfig = { ...config, count: scaleInt };
-        return new RollBuilder([newConfig]);
-      }
-    }
 
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
@@ -831,6 +818,50 @@ export class AlwaysHitBuilder extends RollBuilder {
   onHit(...args: any[]): AttackBuilder {
     const damageRoll = RollBuilder.fromArgs(...args);
     return new AttackBuilder(this, damageRoll);
+  }
+
+  get critThreshold(): number {
+    return this.attackConfig.critThreshold;
+  }
+
+  // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
+  critOn(critThreshold: number): AlwaysHitBuilder {
+    const newConfig = { critThreshold };
+    return new AlwaysHitBuilder(this, newConfig);
+  }
+
+  // Legacy expressions
+  override toExpression(): string {
+    const configs = this.getSubRollConfigs(); 
+    return new RollBuilder(configs).toExpression();
+  }
+
+  override toPMF(): PMF {
+    const rollType = this.rollType;
+    const rerollOne = this.baseReroll > 0;
+    return d20RollPMF(rollType, rerollOne);
+  }
+
+  override copy(): AlwaysHitBuilder {
+    const baseCopy = new RollBuilder(this.getSubRollConfigs());
+    const critThreshold = this.critThreshold;
+    const newConfig = { critThreshold };
+    return new AlwaysHitBuilder(baseCopy, newConfig);
+  }
+}
+
+
+export class AlwaysCritBuilder extends RollBuilder {
+  readonly attackConfig: CritConfig;
+
+  constructor(baseRoll: RollBuilder, attackConfig?: CritConfig) {
+    super(baseRoll.getSubRollConfigs());
+
+    if (attackConfig) {
+      this.attackConfig = { ...attackConfig };
+    } else {
+      this.attackConfig = { critThreshold: 20 };
+    }
   }
 
   get critThreshold(): number {

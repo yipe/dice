@@ -6,7 +6,7 @@ import type { DiceQuery } from "../pmf/query";
 import type  { ACBuilder } from "./ac";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
-import { AlwaysHitBuilder } from "./roll";
+import { AlwaysHitBuilder, AlwaysCritBuilder } from "./roll";
 import { RollBuilder } from "./roll";
 import type { AttackResolution, CheckBuilder } from "./types";
 
@@ -14,7 +14,7 @@ type ActionEffect = RollBuilder;
 
 export class AttackBuilder implements CheckBuilder {
   constructor(
-    readonly check: ACBuilder | AlwaysHitBuilder,
+    readonly check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     private readonly hitEffect?: ActionEffect,
     private readonly critEffect?: ActionEffect | null,
     private readonly missEffect?: ActionEffect
@@ -96,9 +96,14 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   resolveProbabilities(
-    check: ACBuilder | AlwaysHitBuilder,
+    check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder   ,
     eps: number = 0
   ): { pSuccess: number; pHit: number; pCrit: number; pMiss: number } {
+
+    if (check instanceof AlwaysCritBuilder) {
+      return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
+    }
+
 
     const rollType = check.rollType;
     const rerollOne = check.baseReroll > 0;
@@ -106,9 +111,9 @@ export class AttackBuilder implements CheckBuilder {
     const critThreshold = check.critThreshold;
     const d20 = d20RollPMF(rollType, rerollOne);
     
-
+    
     if (check instanceof AlwaysHitBuilder) {
-      let pCrit = critThreshold / 20;
+      let pCrit = (21 - critThreshold) / 20;
       let pHit = 1 - pCrit;
       let pMiss = 0;
 
