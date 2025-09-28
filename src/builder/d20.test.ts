@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "../";
 import { d20PMF, d20RollPMF } from "./d20";
+import { d20 } from "./factory";
 
 describe("d20SinglePMF", () => {
   it("should create a normal d20 PMF", () => {
@@ -99,4 +100,14 @@ describe("d20WithRollTypePMF", () => {
       expect(pmf.mean()).toBeCloseTo(parsedPMF.mean(), 5);
     });
   });
+
+  describe('d20 hit', () => {
+    it('should handle d20 hit', () => {
+      const pmf = d20.alwaysHits().onHit(1).onCrit(1).onMiss(1).pmf
+    
+      const critChance = 1 / 20
+      const hitChance = 1 - critChance
+      expect(pmf.mean()).toBeCloseTo(hitChance * 1 + critChance * 1)
+    })
+  })
 });
