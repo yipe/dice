@@ -5,11 +5,22 @@ import type { AttackBuilder } from "./attack";
 describe("Attack Builder", () => {
   it("should build an attack roll", () => {
     const attackRoll: AttackBuilder = d20.plus(5).ac(15).onHit(d8);
+    expect(attackRoll).toBeDefined();
     expect(attackRoll.toExpression()).toBe(
       "(d20 + 5 AC 15) * (1d8) crit (2d8)"
     );
-    expect(attackRoll).toBeDefined();
+    
   });
+
+  // it("should build an empty attack check", () => {
+  //   // 2024-Warlock-Familiars-Mebodu
+  //   const attackRoll = d20.withAdvantage().ac(20)
+  //   expect(attackRoll.toExpression()).toBe(
+  //     "(d20 > d20 AC 20)"
+  //   );
+  //   expect(attackRoll).toBeDefined();
+  //   expect(attackRoll.toPMF().mean()).toBeCloseTo(0, 2);
+  // });
 });
 
 describe("AttackBuilder", () => {
