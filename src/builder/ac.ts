@@ -1,7 +1,7 @@
 import { PMF } from "../pmf/pmf";
 import { AttackBuilder } from "./attack";
 import { d20RollPMF } from "./d20";
-import { RollBuilder } from "./roll";
+import { AlwaysCritBuilder, RollBuilder } from "./roll";
 
 export interface AttackConfig {
   ac: number;
@@ -46,6 +46,17 @@ export class ACBuilder extends RollBuilder {
       critThreshold: threshold,
     };
     return new ACBuilder(this, this.attackConfig.ac, newConfig);
+  }
+
+  alwaysCrits(): AlwaysCritBuilder {
+    return new AlwaysCritBuilder(
+      this,
+      {
+        critThreshold: this.attackConfig.critThreshold,
+        ac: this.attackConfig.ac,
+      },
+      false
+    );
   }
 
   // Legacy expressions
