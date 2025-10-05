@@ -3,6 +3,15 @@ import { parse } from "../parser/parser";
 import { d20, d4, d6, d8, roll } from "./";
 
 describe("SaveRollBuilder", () => {
+  it("should handle a basic saving throw", () => {
+    const save = roll.d20().dc(10);
+    expect(save.toExpression()).toBe("(d20 DC 10)");
+    const pmf = save.toPMF();
+    expect(pmf.mean()).toBeCloseTo(0.45, 12);
+    expect(pmf.min()).toBe(0);
+    expect(pmf.max()).toBe(1);
+  });
+
   it("should handle save roll builder", () => {
     const builder = roll.d20().plus(5).dc(10);
     expect(builder.toExpression()).toBe("(d20 + 5 DC 10)");
