@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { d20, d4, d6, d8, roll } from "../builder";
+import { d10, d20, d4, d6, d8, roll } from "../builder";
 import { parse } from "../parser/parser";
 import { builderPMFCache } from "./factory";
 import { HalfRollBuilder, RollBuilder } from "./roll";
@@ -88,6 +88,22 @@ describe("RollBuilder", () => {
   it("should create basic dice", () => {
     const greatsword = roll(2).d(6).plus(5);
     expect(greatsword.toExpression()).toEqual("2d6 + 5");
+  });
+
+  it("should handle bless", () => {
+    const bless = d20.plus(12).plus(d4).ac(15).onHit(d10.plus(6));
+    expect(bless.toExpression()).toEqual(
+      "(d20 + 12 + 1d4 AC 15) * (1d10 + 6) crit (2d10 + 6)"
+    );
+    expect(bless.toPMF()).toBeDefined();
+    expect(bless.toPMF().mean()).toBeCloseTo(11.2, 1);
+
+    const bless25 = d20.plus(12).plus(d4).ac(25).onHit(d10.plus(6));
+    expect(bless25.toExpression()).toEqual(
+      "(d20 + 12 + 1d4 AC 25) * (1d10 + 6) crit (2d10 + 6)"
+    );
+    expect(bless25.toPMF()).toBeDefined();
+    expect(bless25.toPMF().mean()).toBeCloseTo(6.3125, 1);
   });
 
   it("should create basic dice with config", () => {
