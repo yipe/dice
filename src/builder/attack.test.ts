@@ -145,6 +145,72 @@ describe("AttackBuilder", () => {
       expect(res.weights.hit).toBeCloseTo(1 - 0.0975, 5);
       expect(res.weights.miss).toBeCloseTo(0, 10);
     });
+
+    it("should convert all hits to crits with alwaysCrits on ACBuilder, but nat 1s still miss", () => {
+      const attack = d20.plus(5).ac(10).alwaysCrits().onHit(d8);
+
+      const res = attack.resolve();
+      // +5 vs AC 10 needs 5+ to hit, so 1-4 miss (20%), 5-20 crit (80%)
+      expect(res.weights.miss).toBeCloseTo(0.2, 5);
+      expect(res.weights.crit).toBeCloseTo(0.8, 5);
+      expect(res.weights.hit).toBeCloseTo(0, 5); // No regular hits
+    });
+
+    it("should make everything a crit with alwaysHits().alwaysCrits()", () => {
+      const attack = d20.alwaysHits().alwaysCrits().onHit(d8);
+
+      const res = attack.resolve();
+      expect(res.weights.miss).toBeCloseTo(0, 10);
+      expect(res.weights.crit).toBeCloseTo(1, 10);
+      expect(res.weights.hit).toBeCloseTo(0, 10);
+    });
+
+    it("should preserve advantage with alwaysCrits on ACBuilder", () => {
+      const attack = d20.withAdvantage().plus(5).ac(10).alwaysCrits().onHit(d8);
+
+      const res = attack.resolve();
+      // +5 vs AC 10 needs 5+. With advantage, chance of both rolls < 5 is (4/20)^2 = 4%
+      expect(res.weights.miss).toBeCloseTo(0.04, 4);
+      expect(res.weights.crit).toBeCloseTo(0.96, 4);
+      expect(res.weights.hit).toBeCloseTo(0, 10);
+    });
+
+    it("should work with alwaysHits().alwaysCrits() and advantage", () => {
+      const attack = d20.withAdvantage().alwaysHits().alwaysCrits().onHit(d8);
+
+      const res = attack.resolve();
+      expect(res.weights.miss).toBeCloseTo(0, 10);
+      expect(res.weights.crit).toBeCloseTo(1, 10);
+      expect(res.weights.hit).toBeCloseTo(0, 10);
+    });
+
+    it("should show damage decreases as AC increases with alwaysCrits", () => {
+      const damage = roll(1, d8).plus(3);
+      const attackAC10 = d20.plus(7).ac(10).alwaysCrits().onHit(damage);
+      const attackAC20 = d20.plus(7).ac(20).alwaysCrits().onHit(damage);
+      const attackAC25 = d20.plus(7).ac(25).alwaysCrits().onHit(damage);
+
+      const dprAC10 = attackAC10.toPMF().mean();
+      const dprAC20 = attackAC20.toPMF().mean();
+      const dprAC25 = attackAC25.toPMF().mean();
+
+      // Higher AC means more misses, so lower damage
+      expect(dprAC10).toBeGreaterThan(dprAC20);
+      expect(dprAC20).toBeGreaterThan(dprAC25);
+
+      // Verify specific values
+      // AC 10: +7 needs 3+ to hit, so 90% crit rate (1-2 miss, 3-20 crit)
+      // Expected: 0.9 * (2d8 + 3) = 0.9 * 12 = 10.8
+      expect(dprAC10).toBeCloseTo(10.8, 1);
+
+      // AC 20: +7 needs 13+ to hit, so 40% crit rate (1-12 miss, 13-20 crit)
+      // Expected: 0.4 * (2d8 + 3) = 0.4 * 12 = 4.8
+      expect(dprAC20).toBeCloseTo(4.8, 1);
+
+      // AC 25: +7 needs 18+ to hit, so 15% crit rate (1-17 miss, 18-20 crit)
+      // Expected: 0.15 * (2d8 + 3) = 0.15 * 12 = 1.8
+      expect(dprAC25).toBeCloseTo(1.8, 1);
+    });
   });
 
   describe("Edge Cases", () => {
