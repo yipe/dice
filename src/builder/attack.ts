@@ -72,7 +72,7 @@ export class AttackBuilder implements CheckBuilder {
         }
 
         const critThreshold = this.check.critThreshold;
-        if (critThreshold < 15 || critThreshold > 20) {
+        if (critThreshold < 0 || critThreshold > 20) {
           throw new Error(
             `Invalid crit threshold: ${critThreshold}. Must be between 15 and 20.`
           );
