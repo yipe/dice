@@ -9,7 +9,6 @@ describe("Attack Builder", () => {
     expect(attackRoll.toExpression()).toBe(
       "(d20 + 5 AC 15) * (1d8) crit (2d8)"
     );
-    
   });
 
   // it("should build an empty attack check", () => {
@@ -40,7 +39,7 @@ describe("AttackBuilder", () => {
 
       // The original attackBuilder should be unaffected
       expect(attackBuilder.toExpression()).toBe(originalExpression);
-      expect(attackBuilder.check.attackConfig.ac).toBe(15);
+      expect((attackBuilder.check as any).attackConfig.ac).toBe(15);
     });
   });
 
@@ -136,6 +135,15 @@ describe("AttackBuilder", () => {
 
       const expectedMean = phit * 7.5 + pcrit * 12;
       expect(resolution.pmf.mean()).toBeCloseTo(expectedMean);
+    });
+
+    it("should preserve advantage crit odds with alwaysHits", () => {
+      const attack = d20.withAdvantage().alwaysHits().onHit(d8);
+
+      const res = attack.resolve();
+      expect(res.weights.crit).toBeCloseTo(0.0975, 5);
+      expect(res.weights.hit).toBeCloseTo(1 - 0.0975, 5);
+      expect(res.weights.miss).toBeCloseTo(0, 10);
     });
   });
 
@@ -241,7 +249,7 @@ describe("AttackBuilder", () => {
       // Test the full damage roll expected value
       const damageRoll = roll(1).d(12).keepHighest(2, 1).plus(5);
       expect(damageRoll.toPMF().mean()).toBeCloseTo(13.4861, 3);
-      //
+
       // Test attack resolution
       const resolution = attack.resolve();
       expect(resolution.weights.hit).toBeCloseTo(0.8); // hits on 4-19 (d20+11 vs AC 15)
