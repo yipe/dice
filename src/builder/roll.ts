@@ -1,11 +1,11 @@
+import type { CritConfig } from "../common/types";
+import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { astFromRollConfigs, pmfFromRollBuilder } from "./ast";
-import type { ExpressionNode } from "./nodes";
-import type { RollConfig, RollType } from "./types";
-import type { PMF } from "../pmf/pmf";
-import type { CritConfig } from "../common/types";
 import { AttackBuilder } from "./attack";
 import { d20RollPMF } from "./d20";
+import type { ExpressionNode } from "./nodes";
+import type { RollConfig, RollType } from "./types";
 
 export const defaultConfig: RollConfig = {
   count: 1,
@@ -43,7 +43,6 @@ const configComplexityScore = (config: RollConfig) => {
     (config.rollType !== "flat" ? 1 : 0)
   );
 };
-
 
 // Fluent builder for dice to create PMFs with an AST
 export class RollBuilder {
@@ -350,7 +349,6 @@ export class RollBuilder {
     if (scaleInt !== scale) throw new Error("Scale must be an integer");
     if (scaleInt <= 0) throw new Error("Scale must be > 0");
 
-
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
       return { ...config, count: config.count * scaleInt };
@@ -365,7 +363,11 @@ export class RollBuilder {
   }
 
   alwaysHits() {
-    return new AlwaysHitBuilder(this)
+    return new AlwaysHitBuilder(this);
+  }
+
+  alwaysCrits() {
+    return new AlwaysCritBuilder(this);
   }
 
   copy(): RollBuilder {
@@ -775,7 +777,7 @@ export class MaxOfRollBuilder extends RollBuilder {
           child: sumChild,
         };
       }
-    } catch (e) {
+    } catch {
       // Last resort: try parsing the expression (though this shouldn't work with current RollBuilder)
     }
 
@@ -794,7 +796,6 @@ export class MaxOfRollBuilder extends RollBuilder {
   }
 }
 
-
 export class AlwaysHitBuilder extends RollBuilder {
   readonly attackConfig: CritConfig;
 
@@ -807,7 +808,6 @@ export class AlwaysHitBuilder extends RollBuilder {
       this.attackConfig = { critThreshold: 20 };
     }
   }
-
 
   onHit(val: number): AttackBuilder;
   onHit(val: RollBuilder): AttackBuilder;
@@ -830,9 +830,13 @@ export class AlwaysHitBuilder extends RollBuilder {
     return new AlwaysHitBuilder(this, newConfig);
   }
 
+  alwaysCrits(): AlwaysCritBuilder {
+    return new AlwaysCritBuilder(this, undefined, true);
+  }
+
   // Legacy expressions
   override toExpression(): string {
-    const configs = this.getSubRollConfigs(); 
+    const configs = this.getSubRollConfigs();
     return new RollBuilder(configs).toExpression();
   }
 
@@ -850,11 +854,15 @@ export class AlwaysHitBuilder extends RollBuilder {
   }
 }
 
-
 export class AlwaysCritBuilder extends RollBuilder {
-  readonly attackConfig: CritConfig;
+  readonly attackConfig: CritConfig & { ac?: number };
+  readonly fromAlwaysHit: boolean;
 
-  constructor(baseRoll: RollBuilder, attackConfig?: CritConfig) {
+  constructor(
+    baseRoll: RollBuilder,
+    attackConfig?: CritConfig & { ac?: number },
+    fromAlwaysHit: boolean = false
+  ) {
     super(baseRoll.getSubRollConfigs());
 
     if (attackConfig) {
@@ -862,21 +870,32 @@ export class AlwaysCritBuilder extends RollBuilder {
     } else {
       this.attackConfig = { critThreshold: 20 };
     }
+    this.fromAlwaysHit = fromAlwaysHit || baseRoll instanceof AlwaysHitBuilder;
+  }
+
+  onHit(val: number): AttackBuilder;
+  onHit(val: RollBuilder): AttackBuilder;
+  onHit(count: number, die: RollBuilder): AttackBuilder;
+  onHit(count: number, sides: number): AttackBuilder;
+  onHit(count: number, die: RollBuilder, modifier: number): AttackBuilder;
+  onHit(count: number, sides: number, modifier: number): AttackBuilder;
+  onHit(...args: any[]): AttackBuilder {
+    const damageRoll = RollBuilder.fromArgs(...args);
+    return new AttackBuilder(this, damageRoll);
   }
 
   get critThreshold(): number {
     return this.attackConfig.critThreshold;
   }
 
-  // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
-  critOn(critThreshold: number): AlwaysHitBuilder {
-    const newConfig = { critThreshold };
-    return new AlwaysHitBuilder(this, newConfig);
+  critOn(critThreshold: number): AlwaysCritBuilder {
+    const newConfig = { critThreshold, ac: this.attackConfig.ac };
+    return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
   }
 
   // Legacy expressions
   override toExpression(): string {
-    const configs = this.getSubRollConfigs(); 
+    const configs = this.getSubRollConfigs();
     return new RollBuilder(configs).toExpression();
   }
 
@@ -886,11 +905,10 @@ export class AlwaysCritBuilder extends RollBuilder {
     return d20RollPMF(rollType, rerollOne);
   }
 
-  override copy(): AlwaysHitBuilder {
+  override copy(): AlwaysCritBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
-    const newConfig = { critThreshold };
-    return new AlwaysHitBuilder(baseCopy, newConfig);
+    const newConfig = { critThreshold, ac: this.attackConfig.ac };
+    return new AlwaysCritBuilder(baseCopy, newConfig, this.fromAlwaysHit);
   }
 }
-

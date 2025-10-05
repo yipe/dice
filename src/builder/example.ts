@@ -245,6 +245,21 @@ export const detailedAttack: ReturnType<ACBuilder["onHit"]> = d20
 export const detailedAttackExprExpected =
   "(d20 + 9 AC 17) * (1d12 + 5) xcrit2 (2d12 + 5) miss (0)";
 
+/** Attack where all hits become crits (natural 1s still miss). */
+export const alwaysCritsAttack: ReturnType<ACBuilder["onHit"]> = d20
+  .plus(5)
+  .ac(10)
+  .alwaysCrits()
+  .onHit(d8);
+export const alwaysCritsAttackExprExpected = "d20 + 5 * (1d8) crit (2d8)";
+
+/** Attack that always hits and always crits (no misses at all). */
+export const alwaysHitsAlwaysCrits: ReturnType<ACBuilder["onHit"]> = d20
+  .alwaysHits()
+  .alwaysCrits()
+  .onHit(d8);
+export const alwaysHitsAlwaysCritsExprExpected = "d20 * (1d8) crit (2d8)";
+
 // ------------------------------
 // Saves (DC checks) and effects
 // ------------------------------

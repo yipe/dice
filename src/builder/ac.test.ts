@@ -1,5 +1,5 @@
-import { d10, d12, d20, d4, d6, d8, roll } from "./";
 import { describe, expect, it } from "vitest";
+import { d10, d12, d20, d4, d6, d8, roll } from "./";
 
 describe("AttackRollBuilder", () => {
   it("should handle attack roll builder", () => {
@@ -197,8 +197,8 @@ describe("AttackRollBuilder", () => {
     it("should handle invalid crit thresholds", () => {
       const attack = d20.ac(15);
       expect(() => {
-        attack.critOn(14).onHit(d6).toExpression();
-      }).toThrow("Invalid crit threshold: 14. Must be between 15 and 20.");
+        attack.critOn(0).onHit(d6).toExpression();
+      }).toThrow("Invalid crit threshold: 0. Must be between 1 and 20.");
 
       expect(() => {
         attack.critOn(21).onHit(d6).toExpression();
@@ -633,13 +633,13 @@ describe("AttackRollBuilder", () => {
       // crit threshold < 15 should throw error
       const attack = d20.plus(5).ac(15);
       expect(() => {
-        attack.critOn(14).onHit(roll(2).d6().plus(3)).toExpression();
-      }).toThrow("Invalid crit threshold: 14. Must be between 15 and 20.");
+        attack.critOn(0).onHit(roll(2).d6().plus(3)).toExpression();
+      }).toThrow("Invalid crit threshold: 0. Must be between 1 and 20.");
 
       // crit threshold > 20 should throw error
       expect(() => {
         attack.critOn(21).onHit(roll(2).d6().plus(3)).toExpression();
-      }).toThrow("Invalid crit threshold: 21. Must be between 15 and 20.");
+      }).toThrow("Invalid crit threshold: 21. Must be between 1 and 20.");
     });
 
     it("can add plus repeatedly", () => {

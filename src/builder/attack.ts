@@ -72,9 +72,9 @@ export class AttackBuilder implements CheckBuilder {
         }
 
         const critThreshold = this.check.critThreshold;
-        if (critThreshold < 0 || critThreshold > 20) {
+        if (critThreshold < 1 || critThreshold > 20) {
           throw new Error(
-            `Invalid crit threshold: ${critThreshold}. Must be between 15 and 20.`
+            `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
           );
         }
 
@@ -98,15 +98,51 @@ export class AttackBuilder implements CheckBuilder {
     check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     eps: number = 0
   ): { pSuccess: number; pHit: number; pCrit: number; pMiss: number } {
-    if (check instanceof AlwaysCritBuilder) {
-      return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
-    }
-
     const rollType = check.rollType;
     const rerollOne = check.baseReroll > 0;
 
     const critThreshold = check.critThreshold;
     const d20 = d20RollPMF(rollType, rerollOne);
+
+    if (check instanceof AlwaysCritBuilder) {
+      // If fromAlwaysHit is true, everything is a crit (no misses)
+      if (check.fromAlwaysHit) {
+        return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
+      }
+
+      // If fromAlwaysHit is false (came from ACBuilder), we need to check AC
+      // Natural 1s always miss, everything else that would hit becomes a crit
+      const ac = check.attackConfig.ac ?? 0;
+      const staticMod = this.check.modifier;
+      const bonusDicePMFs = this.check.getBonusDicePMFs(this.check, eps);
+      const bonusPMF = bonusDicePMFs.length
+        ? PMF.convolveMany(bonusDicePMFs, eps)
+        : PMF.delta(0, eps);
+
+      let pcrit = 0;
+      let pmiss = 0;
+
+      for (const [r, rec] of d20 as any as Iterable<[number, any]>) {
+        const pr = typeof rec === "number" ? rec : rec.p;
+        if (pr <= 0) continue;
+
+        // Natural 1 always misses
+        if (r === 1) {
+          pmiss += pr;
+          continue;
+        }
+
+        // Check if this roll would hit the AC
+        const need = ac - staticMod - r;
+        const pBonusHit = bonusPMF.tailProbGE(need);
+
+        // Everything that hits becomes a crit
+        pcrit += pr * pBonusHit;
+        pmiss += pr * (1 - pBonusHit);
+      }
+
+      return { pSuccess: pcrit, pHit: 0, pCrit: pcrit, pMiss: pmiss };
+    }
 
     if (check instanceof AlwaysHitBuilder) {
       // Preserve rollType for crit odds
@@ -138,15 +174,15 @@ export class AttackBuilder implements CheckBuilder {
       const pr = typeof rec === "number" ? rec : rec.p;
       if (pr <= 0) continue;
 
-      // Handle crit
-      if (r >= critThreshold) {
-        pcrit += pr;
-        continue;
-      }
-
       // Handle auto-miss
       if (r === 1) {
         pmiss += pr;
+        continue;
+      }
+
+      // Handle crit
+      if (r >= critThreshold) {
+        pcrit += pr;
         continue;
       }
 
