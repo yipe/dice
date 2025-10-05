@@ -186,9 +186,9 @@ export class PMF {
     if (Math.abs(totalWeight) <= eps) totalWeight = 0;
     if (Math.abs(1 - totalWeight) <= eps) totalWeight = 1;
 
-    if (totalWeight > 1 + eps) {
+    if (totalWeight > 1 + EPS) {
       throw new Error(
-        `PMF.exclusive: total weight ${totalWeight.toFixed(6)} exceeds 1.`
+        `PMF.exclusive: total weight ${totalWeight} exceeds 1. (epsilon: ${eps})`
       );
     }
 
