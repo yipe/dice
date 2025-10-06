@@ -16,6 +16,7 @@ import { PMF } from "./pmf";
 export class DiceQuery {
   public readonly singles: PMF[];
   public readonly combined: PMF;
+  private _combinedWithAttr?: PMF;
 
   constructor(singles: PMF | PMF[], combined?: PMF, eps = EPS) {
     this.singles = Array.isArray(singles) ? singles : [singles];
@@ -31,6 +32,45 @@ export class DiceQuery {
     "crit",
     "missNone",
   ] as const;
+
+  /**
+   * Returns a new PMF with damage attribution metadata populated.
+   *
+   * This method computes attribution on-demand for builder-generated PMFs,
+   * enabling them to work with damage attribution charts. The `attr` field
+   * tracks how much damage each outcome type contributes at each damage value.
+   *
+   * For each bin at damage D: sum(attr.values()) ≈ D × P(damage = D)
+   *
+   * Performance: Cached after first call. Adds minimal overhead vs `combined`.
+   *
+   * @returns PMF with attr field populated for damage attribution charts
+   *
+   * @example
+   * const attack = d20.plus(5).ac(15).onHit(d(2,6).plus(3)).onCrit(d(2,6))
+   * const query = attack.toQuery()
+   * const pmf = query.combinedWithAttribution()
+   * // Now pmf can be used with toDamageAttributionChartSeries()
+   */
+  combinedWithAttribution(): PMF {
+    if (this._combinedWithAttr) {
+      return this._combinedWithAttr;
+    }
+
+    // Add attribution to each single PMF, then convolve
+    // The existing convolution logic will preserve attribution correctly
+    const singlesWithAttr = this.singles.map((pmf) => pmf.withAttribution());
+    const combined = PMF.convolveMany(singlesWithAttr, this.combined.epsilon);
+
+    // Normalize if needed
+    const normalized =
+      Math.abs(combined.mass() - 1) <= this.combined.epsilon
+        ? combined
+        : combined.normalize();
+
+    this._combinedWithAttr = normalized;
+    return normalized;
+  }
 
   /**
    * Returns the expected damage across all possible outcomes.
