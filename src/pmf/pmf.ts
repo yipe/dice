@@ -243,6 +243,56 @@ export class PMF {
     return out;
   }
   /**
+   * Adds damage attribution metadata to this PMF based on existing count metadata.
+   * For each bin, sets attr[outcome] = damage × count[outcome].
+   *
+   * This enables damage attribution charts to work with builder-generated PMFs.
+   * The parser generates attr automatically, but builder PMFs only have count.
+   *
+   * @returns New PMF with attr field populated in each bin
+   */
+  withAttribution(): PMF {
+    // Fast path: if attr already exists, return this PMF unchanged
+    // Check if any non-zero damage bin has attr
+    for (const [damage, bin] of this.map) {
+      if (damage !== 0 && bin.attr && Object.keys(bin.attr).length > 0) {
+        return this; // Already has attribution
+      }
+      // Only check first non-zero bin for performance
+      if (damage > 0) break;
+    }
+
+    const newMap = new Map<number, Bin>();
+
+    for (const [damage, bin] of this.map) {
+      const attr: OutcomeLabelMap = {};
+
+      // For each outcome type in count, compute its damage contribution
+      for (const outcome in bin.count) {
+        const probability = bin.count[outcome] as number;
+        if (probability > 0) {
+          attr[outcome] = damage * probability;
+        }
+      }
+
+      // Create new bin with attribution
+      newMap.set(damage, {
+        p: bin.p,
+        count: { ...bin.count },
+        attr: Object.keys(attr).length > 0 ? attr : undefined,
+      });
+    }
+
+    // Use a different identifier to avoid cache collisions with non-attributed version
+    return new PMF(
+      newMap,
+      this.epsilon,
+      this.normalized,
+      `${this.identifier}~attr`
+    );
+  }
+
+  /**
    * General-purpose N-way mixture.
    * weights: Array of [weight, PMF].
    *
