@@ -862,3 +862,55 @@ describe("Combined Dice Expression Generation", () => {
     expect(multiMergeAttack.toExpression()).toBe("(d20 + 5 + 2d8 + 2d6 AC 15)");
   });
 });
+
+describe("Percentile values for attack rolls", () => {
+  it("should correctly calculate percentiles for (d20 AC 18) * (1d8 + 6) crit (2d8 + 6)", () => {
+    // Normal attack - 85% miss rate (needs 18+ on d20 to hit AC 18 with +0)
+    const normalAttack = d20.ac(18).onHit(roll(1, d8).plus(6));
+    expect(normalAttack.toExpression()).toBe(
+      "(d20 AC 18) * (1d8 + 6) crit (2d8 + 6)"
+    );
+    const normalPMF = normalAttack.toPMF();
+    const normalPercentiles = normalPMF
+      .query()
+      .percentiles([0.25, 0.5, 0.75, 0.9]);
+
+    // With 85% miss rate, p25/p50/p75 are all 0 (correct behavior)
+    expect(normalPercentiles[0]).toBe(0); // p25
+    expect(normalPercentiles[1]).toBe(0); // p50
+    expect(normalPercentiles[2]).toBe(0); // p75
+    expect(normalPercentiles[3]).toBeGreaterThan(0); // p90 should be non-zero
+
+    // With advantage - better hit rate (~27.75%)
+    const advAttack = d20.withAdvantage().ac(18).onHit(roll(1, d8).plus(6));
+    expect(advAttack.toExpression()).toBe(
+      "(d20 > d20 AC 18) * (1d8 + 6) crit (2d8 + 6)"
+    );
+    const advPMF = advAttack.toPMF();
+    const advPercentiles = advPMF.query().percentiles([0.25, 0.5, 0.75]);
+
+    // With ~28% hit rate, still mostly misses
+    expect(advPercentiles[0]).toBe(0); // p25
+    expect(advPercentiles[1]).toBe(0); // p50
+    expect(advPercentiles[2]).toBe(8); // p75 should be non-zero
+
+    // With disadvantage - very low hit rate (~2.25%)
+    const disAdvAttack = d20
+      .withDisadvantage()
+      .ac(18)
+      .onHit(roll(1, d8).plus(6));
+    expect(disAdvAttack.toExpression()).toBe(
+      "(d20 < d20 AC 18) * (1d8 + 6) crit (2d8 + 6)"
+    );
+    const disAdvPMF = disAdvAttack.toPMF();
+    const disAdvPercentiles = disAdvPMF
+      .query()
+      .percentiles([0.25, 0.5, 0.75, 0.9]);
+
+    // With ~2% hit rate, almost all percentiles are 0
+    expect(disAdvPercentiles[0]).toBe(0); // p25
+    expect(disAdvPercentiles[1]).toBe(0); // p50
+    expect(disAdvPercentiles[2]).toBe(0); // p75
+    expect(disAdvPercentiles[3]).toBe(0); // p90
+  });
+});
