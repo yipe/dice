@@ -6,7 +6,7 @@ import type { DiceQuery } from "../pmf/query";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
 import type { DCBuilder } from "./dc";
-import type { RollBuilder } from "./roll";
+import { ParsedRollBuilder, type RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
 
 export type SaveOutcome = "normal" | "half";
@@ -36,7 +36,9 @@ export class SaveBuilder implements CheckBuilder {
       this.check
     );
     const failPMF = this.failureEffect
-      ? pmfFromRollBuilder(this.failureEffect)
+      ? this.failureEffect instanceof ParsedRollBuilder
+        ? this.failureEffect.toPMF(eps)
+        : pmfFromRollBuilder(this.failureEffect)
       : PMF.delta(0);
     const onSuccess = this.saveOutcome ?? "half";
 
