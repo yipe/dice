@@ -6,7 +6,12 @@ import type { DiceQuery } from "../pmf/query";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
-import { AlwaysCritBuilder, AlwaysHitBuilder, RollBuilder } from "./roll";
+import {
+  AlwaysCritBuilder,
+  AlwaysHitBuilder,
+  ParsedRollBuilder,
+  RollBuilder,
+} from "./roll";
 import type { AttackResolution, CheckBuilder } from "./types";
 
 type ActionEffect = RollBuilder;
@@ -20,6 +25,7 @@ export class AttackBuilder implements CheckBuilder {
   ) {}
 
   onCrit(val: number): AttackBuilder;
+  onCrit(val: string): AttackBuilder;
   onCrit(val: RollBuilder): AttackBuilder;
   onCrit(count: number, die: RollBuilder): AttackBuilder;
   onCrit(count: number, sides: number): AttackBuilder;
@@ -36,6 +42,7 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   onMiss(val: number): AttackBuilder;
+  onMiss(val: string): AttackBuilder;
   onMiss(val: RollBuilder): AttackBuilder;
   onMiss(count: number, die: RollBuilder): AttackBuilder;
   onMiss(count: number, sides: number): AttackBuilder;
@@ -68,7 +75,14 @@ export class AttackBuilder implements CheckBuilder {
         if (this.critEffect) {
           crit = this.critEffect;
         } else {
-          crit = this.hitEffect?.copy().doubleDice() ?? RollBuilder.fromArgs(0);
+          // For ParsedRollBuilder, we can't double dice, so skip the crit expression
+          if (this.hitEffect instanceof ParsedRollBuilder) {
+            // Don't try to double ParsedRollBuilder - leave it out of expression
+            crit = RollBuilder.fromArgs(0);
+          } else {
+            crit =
+              this.hitEffect?.copy().doubleDice() ?? RollBuilder.fromArgs(0);
+          }
         }
 
         const critThreshold = this.check.critThreshold;
@@ -78,11 +92,15 @@ export class AttackBuilder implements CheckBuilder {
           );
         }
 
-        if (critThreshold === 20) {
-          effectPart += ` crit (${crit.toExpression()})`;
-        } else {
-          const xcritNumber = 21 - critThreshold;
-          effectPart += ` xcrit${xcritNumber} (${crit.toExpression()})`;
+        // Only include crit expression if crit is not zero
+        const critExpression = crit.toExpression();
+        if (critExpression !== "0") {
+          if (critThreshold === 20) {
+            effectPart += ` crit (${critExpression})`;
+          } else {
+            const xcritNumber = 21 - critThreshold;
+            effectPart += ` xcrit${xcritNumber} (${critExpression})`;
+          }
         }
       }
 
@@ -205,7 +223,9 @@ export class AttackBuilder implements CheckBuilder {
       pMiss: pmiss,
     } = this.resolveProbabilities(this.check, eps);
     const hitPMF = this.hitEffect
-      ? pmfFromRollBuilder(this.hitEffect, eps)
+      ? this.hitEffect instanceof ParsedRollBuilder
+        ? this.hitEffect.toPMF(eps)
+        : pmfFromRollBuilder(this.hitEffect, eps)
       : PMF.delta(0, eps);
 
     let critPMF: PMF | null = null;
@@ -217,14 +237,31 @@ export class AttackBuilder implements CheckBuilder {
       phit += pcrit;
       pcrit = 0;
     } else {
-      const critBuilder =
-        this.critEffect ?? this.hitEffect?.copy().doubleDice();
-      critPMF = critBuilder
-        ? pmfFromRollBuilder(critBuilder, eps)
-        : PMF.delta(0, eps);
+      let critBuilder: RollBuilder | undefined;
+      
+      if (this.critEffect) {
+        critBuilder = this.critEffect;
+      } else if (this.hitEffect instanceof ParsedRollBuilder) {
+        // For ParsedRollBuilder, we can't automatically double dice
+        // So treat it as noCrit() - roll crit probability into hit
+        critPMF = null;
+        phit += pcrit;
+        pcrit = 0;
+        critBuilder = undefined;
+      } else {
+        critBuilder = this.hitEffect?.copy().doubleDice();
+      }
+
+      if (critBuilder) {
+        critPMF = critBuilder instanceof ParsedRollBuilder
+          ? critBuilder.toPMF(eps)
+          : pmfFromRollBuilder(critBuilder, eps);
+      }
     }
     const missPMF = this.missEffect
-      ? pmfFromRollBuilder(this.missEffect, eps)
+      ? this.missEffect instanceof ParsedRollBuilder
+        ? this.missEffect.toPMF(eps)
+        : pmfFromRollBuilder(this.missEffect, eps)
       : PMF.delta(0, eps);
 
     // Mix them up
