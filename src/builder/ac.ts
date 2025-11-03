@@ -25,6 +25,7 @@ export class ACBuilder extends RollBuilder {
   //   }
 
   onHit(val: number): AttackBuilder;
+  onHit(val: string): AttackBuilder;
   onHit(val: RollBuilder): AttackBuilder;
   onHit(count: number, die: RollBuilder): AttackBuilder;
   onHit(count: number, sides: number): AttackBuilder;

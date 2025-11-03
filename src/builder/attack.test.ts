@@ -326,4 +326,18 @@ describe("AttackBuilder", () => {
       expect(resolution.pmf.mean()).toBeCloseTo(expectedDPR, 2);
     });
   });
+
+  describe("Bug Reports", () => {
+    describe("Bug Report Tests", () => {
+      it("Odie: for an attack like this even though its a plus 0 you should expect it to still do the crit damage, that being .9 damage", () => {
+        const attack = d20.ac(21).onHit(2, d6, 4);
+        const resolution = attack.resolve();
+
+        expect(resolution.weights.miss).toBeCloseTo(0.95);
+        expect(resolution.weights.hit).toBeCloseTo(0);
+        expect(resolution.weights.crit).toBeCloseTo(0.05);
+        expect(resolution.pmf.mean()).toBeCloseTo(0.9);
+      });
+    });
+  });
 });
