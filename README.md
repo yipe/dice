@@ -36,7 +36,9 @@ console.log("DPR:", attack.mean());
 - **Composable API**: Build dice expressions, run queries, and analyze results in just a few lines.
 - **TypeScript First**: Full type safety and developer experience.
 
-## 🚀 Installation
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
 # Install with npm or yarn
@@ -45,18 +47,7 @@ npm install @yipe/dice
 yarn add @yipe/dice
 ```
 
-## 📦 Core Concepts
-
-| Concept    | Description                                                                  |
-| ---------- | ---------------------------------------------------------------------------- |
-| **PMF**    | Probability Mass Function. The core mathematical representation of outcomes. |
-| **Query**  | Runs calculations and scenarios over one or more PMFs.                       |
-| **Parser** | Parses text-based dice expressions like `(d20 + 8 AC 16) * (1d4 + 4)`.       |
-| **Dice**   | Represents the outcome of a single dice expression                           |
-
-## 🧙 Basic Usage
-
-Here's a simple example of calculating damage for a basic attack:
+### Basic Usage
 
 ```ts
 import { parse, DiceQuery } from "@yipe/dice";
@@ -76,12 +67,257 @@ Crit chance: 0.05
 DPR: 4.35
 ```
 
-## ⚔️ Sneak Attack Example
+## 🛠 Development Setup
+
+### Prerequisites
+
+- **Node.js**: >= 18.17
+- **Yarn**: 4.9.4 (specified in `packageManager`)
+
+### Initial Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/yipe/dice.git
+cd dice
+
+# Install dependencies
+yarn install
+
+# Build the project
+yarn build
+
+# Run tests
+yarn test
+
+# Run examples
+yarn example
+```
+
+### Available Scripts
+
+| Command | Purpose |
+|---------|---------|
+| `yarn build` | Compile TypeScript to JavaScript (outputs to `dist/`) |
+| `yarn test` | Run test suite once |
+| `yarn test:watch` | Run tests in watch mode |
+| `yarn typecheck` | Type-check without emitting files |
+| `yarn lint` | Run ESLint |
+| `yarn example` | Run example scripts |
+
+### Project Structure
+
+```
+src/
+├── builder/          # Fluent API for building dice expressions
+│   ├── factory.ts    # Factory functions (d20, d6, roll, etc.)
+│   ├── roll.ts       # RollBuilder - core builder class
+│   ├── ac.ts         # ACBuilder - attack roll builder
+│   ├── attack.ts     # AttackBuilder - attack with damage
+│   ├── save.ts       # SaveBuilder - saving throw builder
+│   ├── dc.ts         # DCBuilder - difficulty check builder
+│   ├── ast.ts        # AST generation and PMF conversion
+│   └── nodes.ts      # AST node type definitions
+├── parser/           # String-based dice expression parser
+│   ├── parser.ts     # Main parser implementation
+│   └── dice.ts       # Dice class (legacy parser representation)
+├── pmf/              # Probability Mass Function core
+│   ├── pmf.ts        # PMF class - core data structure
+│   ├── query.ts      # DiceQuery - analysis interface
+│   └── mixture.ts   # Mixture operations
+└── common/           # Shared utilities
+    ├── types.ts      # Type definitions
+    └── lru-cache.ts  # LRU cache implementation
+```
+
+## 🏗 Architecture Overview
+
+The library provides two parallel entry points for creating dice expressions:
+
+### Entry Point 1: String Parser
+
+Parses text expressions like `"(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"`:
+
+```
+String Expression
+    │
+    ├─ parse() ──────────────┐
+    │                        │
+    │                        ▼
+    │             parseExpression()
+    │                        │
+    │                        ├─ parseArgument() ──► Dice objects
+    │                        │
+    │                        └─ parseOperation() ──► Dice operations
+    │                        │
+    │                        ▼
+    │             Dice.toPMF() ──► PMF
+    │                        │
+    └────────────────────────┘
+```
+
+### Entry Point 2: Fluent Builder API
+
+Type-safe builder pattern:
+
+```
+RollBuilder (d20, d6, roll(), etc.)
+    │
+    ├─ .plus() ──► RollBuilder
+    ├─ .ac() ────► ACBuilder
+    │                 │
+    │                 └─ .onHit() ──► AttackBuilder
+    │                                    │
+    │                                    ├─ .toQuery() ──► DiceQuery
+    │                                    └─ .pmf ─────────► PMF
+    │
+    └─ .toPMF() ──► PMF
+```
+
+### Core Class Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    User Input Layer                         │
+├─────────────────────────────────────────────────────────────┤
+│  String Parser          │  Fluent Builder                   │
+│  parse("...")           │  d20.plus(8).ac(16)               │
+└────────────┬────────────┴────────────┬──────────────────────┘
+             │                         │
+             ▼                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Builder Layer                            │
+├─────────────────────────────────────────────────────────────┤
+│  RollBuilder ──► ACBuilder ──► AttackBuilder                │
+│       │              │              │                       │
+│       │              │              │                       │
+│       └──────────────┼──────────────┘                       │
+│                      │                                      │
+│                      ▼                                      │
+│              astFromRollConfigs()                           │
+│                      │                                      │
+│                      ▼                                      │
+│              ExpressionNode (AST)                           │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    PMF Generation                           │
+├─────────────────────────────────────────────────────────────┤
+│  pmfFromRollBuilder()                                       │
+│       │                                                     │
+│       ├─ d20RollPMF() ──► PMF (for d20 rolls)               │
+│       ├─ diePMF() ──────► PMF (for regular dice)            │
+│       └─ combinePMFs() ─► PMF (convolve multiple PMFs)      │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Query & Analysis                         │
+├─────────────────────────────────────────────────────────────┤
+│  DiceQuery                                                  │
+│       │                                                     │
+│       ├─ .mean() ────────────► Expected damage              │
+│       ├─ .variance() ────────► Damage variance              │
+│       ├─ .probAtLeastOne() ──► Hit/crit probabilities       │
+│       ├─ .toChartSeries() ────► Chart data                  │
+│       └─ .combined ───────────► Final PMF                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### PMF Data Structure
+
+The `PMF` class is the core mathematical representation:
+
+```
+PMF
+├── map: Map<number, Bin>
+│   └── Bin
+│       ├── p: number          (probability)
+│       ├── count: {...}       (outcome counts: hit, crit, miss)
+│       └── attr: {...}        (damage attribution)
+├── epsilon: number            (probability threshold)
+├── normalized: boolean        (whether PMF sums to 1.0)
+└── identifier: string         (cache key / debug name)
+```
+
+### Main Flow Example
+
+Here's how a simple attack flows through the system:
+
+```
+1. User creates: d20.plus(5).ac(15).onHit(d6.plus(2))
+
+2. Builder chain:
+   RollBuilder(d20) 
+     → plus(5) → RollBuilder(d20 + 5)
+     → ac(15) → ACBuilder(d20 + 5 AC 15)
+     → onHit(...) → AttackBuilder
+
+3. AST generation:
+   RollConfig[] → ExpressionNode
+     - DieNode (d20)
+     - ConstantNode (+5)
+     - D20RollNode (AC check)
+     - ConditionalNode (on hit)
+
+4. PMF generation:
+   AST → PMF operations
+     - d20RollPMF(rollType, rerollOne) → PMF
+     - Conditional application → PMF.branch()
+     - Damage PMF → PMF
+     - Combine → PMF (final result)
+
+5. Query creation:
+   AttackBuilder.toQuery() → DiceQuery
+     - singles: [PMF]
+     - combined: PMF (convolved)
+
+6. Analysis:
+   DiceQuery.mean() → 3.20 DPR
+```
+
+## 📦 Core Concepts
+
+| Concept    | Description                                                                  |
+| ---------- | ---------------------------------------------------------------------------- |
+| **PMF**    | Probability Mass Function. The core mathematical representation of outcomes. |
+| **Query**  | Runs calculations and scenarios over one or more PMFs.                       |
+| **Parser** | Parses text-based dice expressions like `(d20 + 8 AC 16) * (1d4 + 4)`.       |
+| **Builder**| Fluent TypeScript API for building dice expressions.                         |
+| **AST**    | Abstract Syntax Tree representing dice operations.                           |
+
+## 🧙 Usage Examples
+
+### Basic Attack
+
+```ts
+import { parse, DiceQuery } from "@yipe/dice";
+
+const query = d20.plus(8).ac(16).onHit(d4.plus(4)).toQuery();
+
+console.log("Hit chance:", query.probAtLeastOne(["hit", "crit"]));
+console.log("Crit chance:", query.probAtLeastOne(["crit"]));
+console.log("DPR:", query.mean());
+```
+
+### String Parser
+
+```ts
+import { parse } from "@yipe/dice";
+
+const pmf = parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)");
+const query = new DiceQuery(pmf);
+
+console.log("DPR:", query.mean());
+```
+
+### Sneak Attack (Conditional Damage)
 
 Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:
 
 ```ts
-import { DiceQuery } from "@yipe/dice";
+import { DiceQuery, PMF, roll } from "@yipe/dice";
 
 function sneakAttack() {
   const attackPMF = d20.plus(8).ac(16).onHit(d4.plus(4)).pmf;
@@ -99,15 +335,13 @@ function sneakAttack() {
 console.log("DPR with once-per-turn sneak attack: ", sneakAttack().mean());
 ```
 
-## 📊 Statistics and Charts
-
-You can generate full statistical distributions for visualization or reporting.
+### Statistics and Charts
 
 ```ts
 import { parse, DiceQuery } from "@yipe/dice";
 
-const query2 = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
-console.table(query2.toChartSeries());
+const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
+console.table(query.toChartSeries());
 ```
 
 **Output:**
@@ -128,17 +362,9 @@ console.table(query2.toChartSeries());
 └─────────┴────┴──────────┘
 ```
 
-## 🗂 Project Structure
-
-| File        | Purpose                               |
-| ----------- | ------------------------------------- |
-| `src/`      | Core Dice class and logic             |
-| `examples/` | Example scripts showing library usage |
-| `tests/`    | Comprehensive library tests           |
-
 ## 🧪 Running Examples
 
-This repository includes example scripts.
+This repository includes example scripts:
 
 ```bash
 yarn example basic
@@ -147,7 +373,7 @@ yarn example sneakattack
 yarn example misc
 ```
 
-Here is the basic example:
+Here is the basic example output:
 
 ```
 % yarn example basic
@@ -217,10 +443,9 @@ Here is the basic example:
 │ 13     │  0.278% │ 0.278% │ 0.000% │  0.000% │
 │ 14     │  0.139% │ 0.139% │ 0.000% │  0.000% │
 └────────┴─────────┴────────┴────────┴─────────┘
-
 ```
 
-## 🎲 Sample Dice Expression Grammar
+This enables rich statistics like "how much damage comes from crits vs hits".
 
 ## 🧱 Roadmap
 
@@ -247,13 +472,13 @@ cd dice
 yarn install
 ```
 
-Run tests
+Run tests:
 
 ```bash
 yarn test
 ```
 
-Run examples
+Run examples:
 
 ```bash
 yarn example
@@ -274,7 +499,3 @@ Wizards of the Coast, Dungeons & Dragons, and their logos are trademarks of Wiza
 Portions of this code are inspired by [dice.clockworkmod.com](https://github.com/koush/dice.clockworkmod.com) by Koushik Dutta (2013), licensed under the [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
 Initial [TypeScript port](https://github.com/loginName1/dice-calculator-ts) expertly created by [loginName1](https://github.com/loginName1).
-
-```
-
-```
