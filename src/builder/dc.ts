@@ -40,6 +40,7 @@ export class DCBuilder extends RollBuilder {
   }
 
   onSaveFailure(val: number): SaveBuilder;
+  onSaveFailure(val: string): SaveBuilder;
   onSaveFailure(val: RollBuilder): SaveBuilder;
   onSaveFailure(count: number, die: RollBuilder): SaveBuilder;
   onSaveFailure(count: number, sides: number): SaveBuilder;
