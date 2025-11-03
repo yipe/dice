@@ -1,6 +1,7 @@
 import type { CritConfig } from "../common/types";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { parse } from "../parser/parser";
 import { astFromRollConfigs, pmfFromRollBuilder } from "./ast";
 import { AttackBuilder } from "./attack";
 import { d20RollPMF } from "./d20";
@@ -85,6 +86,9 @@ export class RollBuilder {
       if (typeof arg === "number") {
         if (isNaN(arg)) throw new Error("Invalid NaN value for argument");
         return new RollBuilder(0).plus(arg);
+      }
+      if (typeof arg === "string") {
+        return new ParsedRollBuilder(arg);
       }
       if (arg instanceof RollBuilder) {
         return arg;
@@ -810,6 +814,7 @@ export class AlwaysHitBuilder extends RollBuilder {
   }
 
   onHit(val: number): AttackBuilder;
+  onHit(val: string): AttackBuilder;
   onHit(val: RollBuilder): AttackBuilder;
   onHit(count: number, die: RollBuilder): AttackBuilder;
   onHit(count: number, sides: number): AttackBuilder;
@@ -874,6 +879,7 @@ export class AlwaysCritBuilder extends RollBuilder {
   }
 
   onHit(val: number): AttackBuilder;
+  onHit(val: string): AttackBuilder;
   onHit(val: RollBuilder): AttackBuilder;
   onHit(count: number, die: RollBuilder): AttackBuilder;
   onHit(count: number, sides: number): AttackBuilder;
@@ -910,5 +916,55 @@ export class AlwaysCritBuilder extends RollBuilder {
     const critThreshold = this.critThreshold;
     const newConfig = { critThreshold, ac: this.attackConfig.ac };
     return new AlwaysCritBuilder(baseCopy, newConfig, this.fromAlwaysHit);
+  }
+}
+
+/**
+ * A RollBuilder that wraps a pre-computed PMF from a parsed string expression.
+ * This is used to support string-based damage expressions in onHit/onCrit/onMiss.
+ * The builder is not fully composable (e.g., you can't call .plus() on it),
+ * but it can be used anywhere a RollBuilder is expected for terminal damage.
+ */
+export class ParsedRollBuilder extends RollBuilder {
+  private readonly cachedPMF: PMF;
+  private readonly originalExpression: string;
+
+  constructor(expression: string) {
+    super([]); // Empty configs since we're bypassing the normal builder flow
+    this.originalExpression = expression;
+    this.cachedPMF = parse(expression, 0);
+  }
+
+  override toPMF(eps: number = 0): PMF {
+    // Return the pre-computed PMF, ignoring epsilon for now
+    // The parse() function was already called with eps=0
+    return this.cachedPMF;
+  }
+
+  override toExpression(): string {
+    return this.originalExpression;
+  }
+
+  override toAST(): ExpressionNode {
+    // Since we don't have the actual AST structure, return a constant node
+    // This is a limitation but shouldn't matter for terminal damage expressions
+    throw new Error(
+      "ParsedRollBuilder does not support AST conversion. Use the builder API instead."
+    );
+  }
+
+  override copy(): ParsedRollBuilder {
+    return new ParsedRollBuilder(this.originalExpression);
+  }
+
+  override doubleDice(): ParsedRollBuilder {
+    // For crit damage doubling, we can't properly double dice from a parsed expression
+    // We'd need to either:
+    // 1. Parse the expression and reconstruct it with doubled dice counts
+    // 2. Store the AST from parsing
+    // For now, throw an error to catch this edge case
+    throw new Error(
+      "ParsedRollBuilder does not support doubleDice(). Use explicit onCrit() with the crit damage expression instead."
+    );
   }
 }
