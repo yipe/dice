@@ -2,6 +2,37 @@ import { describe, expect, it } from "vitest";
 import { parse } from "../parser/parser";
 import { d20, d4, d6, d8, roll } from "./";
 
+describe("String Damage with Saving Throws", () => {
+  it("should accept string damage for onSaveFailure", () => {
+    const save = d20.plus(5).dc(16).onSaveFailure("8d6").saveHalf();
+    const res = save.resolve();
+
+    expect(res.weights.success).toBeCloseTo(0.5, 5);
+    expect(res.weights.fail).toBeCloseTo(0.5, 5);
+    expect(res.saveFail.mean()).toBeCloseTo(28, 0);
+    expect(res.saveSuccess.mean()).toBeCloseTo(14, 0);
+  });
+
+  it("should match builder syntax for saving throw damage", () => {
+    const stringVersion = d20.plus(3).dc(14).onSaveFailure("6d6").saveHalf();
+    const builderVersion = d20
+      .plus(3)
+      .dc(14)
+      .onSaveFailure(roll(6).d(6))
+      .saveHalf();
+
+    const stringRes = stringVersion.resolve();
+    const builderRes = builderVersion.resolve();
+
+    expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 10);
+    expect(stringRes.saveFail.mean()).toBeCloseTo(builderRes.saveFail.mean(), 10);
+    expect(stringRes.saveSuccess.mean()).toBeCloseTo(
+      builderRes.saveSuccess.mean(),
+      10
+    );
+  });
+});
+
 describe("SaveRollBuilder", () => {
   it("should handle a basic saving throw", () => {
     const save = roll.d20().dc(10);
