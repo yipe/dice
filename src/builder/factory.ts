@@ -9,6 +9,11 @@ const rollFn = (
   modifier?: number
 ): RollBuilder => {
   if (sidesOrDie instanceof RollBuilder) {
+    if (sidesOrDie.hasHiddenState()) {
+      throw new Error(
+        "Cannot use a roll with hidden state (like a pooled roll) as a die type."
+      );
+    }
     // roll(2, d6, 5)
     // Create a new config, using the base die's config but overriding the count
     const subRollConfigs = sidesOrDie.getSubRollConfigs();

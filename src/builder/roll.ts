@@ -1,11 +1,11 @@
 import type { CritConfig } from "../common/types";
+import { parse } from "../parser/parser";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { parse } from "../parser/parser";
 import { astFromRollConfigs, pmfFromRollBuilder } from "./ast";
 import { AttackBuilder } from "./attack";
 import { d20RollPMF } from "./d20";
-import type { ExpressionNode } from "./nodes";
+import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
 
 export const defaultConfig: RollConfig = {
@@ -61,8 +61,16 @@ export class RollBuilder {
     }
   }
 
+  protected create(configs: readonly RollConfig[]): RollBuilder {
+    return new RollBuilder(configs);
+  }
+
   protected get lastConfig() {
     return this.subRollConfigs[this.subRollConfigs.length - 1];
+  }
+
+  hasHiddenState(): boolean {
+    return false;
   }
 
   getSubRollConfigs(): readonly RollConfig[] {
@@ -104,6 +112,11 @@ export class RollBuilder {
       if (isNaN(count)) throw new Error("Invalid NaN value for count argument");
 
       if (sidesOrDie instanceof RollBuilder) {
+        if (sidesOrDie.hasHiddenState()) {
+          throw new Error(
+            "Cannot use a roll with hidden state (like a pooled roll) as a die type."
+          );
+        }
         const subRollConfigs = sidesOrDie.getSubRollConfigs();
         if (subRollConfigs.length === 0) {
           const result = new RollBuilder(0);
@@ -155,9 +168,7 @@ export class RollBuilder {
     if (sides === 0) return this;
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].sides = sides;
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   plus(modOrRoll: number | RollBuilder | undefined): RollBuilder;
@@ -169,6 +180,11 @@ export class RollBuilder {
     if (typeof modOrRoll === "number" && isNaN(modOrRoll))
       throw new Error("Invalid NaN value for modOrRoll");
     if (die instanceof RollBuilder && typeof modOrRoll === "number") {
+      if (die.hasHiddenState()) {
+        throw new Error(
+          "Cannot use a roll with hidden state (like a pooled roll) as a die type."
+        );
+      }
       const count = modOrRoll;
       const subRollConfigs = die.getSubRollConfigs();
       if (subRollConfigs.length === 0) return this;
@@ -201,9 +217,7 @@ export class RollBuilder {
       if (modOrRoll === 0) return this;
       const newConfigs = this.getSubRollConfigs();
       newConfigs[newConfigs.length - 1].modifier += modOrRoll;
-      return new (this.constructor as new (
-        configs: readonly RollConfig[]
-      ) => RollBuilder)(newConfigs);
+      return this.create(newConfigs);
     }
     return this.add(modOrRoll as RollBuilder);
   }
@@ -234,9 +248,7 @@ export class RollBuilder {
     const newConfigs = this.getSubRollConfigs();
 
     newConfigs[newConfigs.length - 1].reroll = value;
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   /** Set finite explode count for max-face explosions (Infinity allowed). */
@@ -249,9 +261,7 @@ export class RollBuilder {
 
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].explode = count;
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   /** Apply per-die minimum value (min > 0). */
@@ -264,9 +274,7 @@ export class RollBuilder {
 
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].minimum = val + 1;
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   bestOf(count: number | undefined): RollBuilder {
@@ -277,9 +285,7 @@ export class RollBuilder {
 
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].bestOf = count;
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   keepHighest(total: number, count: number): RollBuilder {
@@ -287,9 +293,7 @@ export class RollBuilder {
       throw new Error("Invalid NaN value for keepHighest");
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].keep = { total, count, mode: "highest" };
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   keepLowest(total: number, count: number): RollBuilder {
@@ -297,40 +301,76 @@ export class RollBuilder {
       throw new Error("Invalid NaN value for keepLowest");
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].keep = { total, count, mode: "lowest" };
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
+  }
+
+  keepHighestAll(total: number, count: number): PooledRollBuilder {
+    if (isNaN(total) || isNaN(count))
+      throw new Error("Invalid NaN value for keepHighestAll");
+    const currentAST = this.toAST();
+    // Wrap in SumNode to represent trials, then KeepNode
+    const trialPool: SumNode = {
+      type: "sum",
+      count: total,
+      child: currentAST,
+    };
+    const keepNode: KeepNode = {
+      type: "keep",
+      mode: "highest",
+      count,
+      child: trialPool,
+    };
+    const currentExpr = this.toExpression();
+    const expression = `${total}kh${count}(${currentExpr})`;
+    return new PooledRollBuilder(keepNode, expression);
+  }
+
+  keepLowestAll(total: number, count: number): PooledRollBuilder {
+    if (isNaN(total) || isNaN(count))
+      throw new Error("Invalid NaN value for keepLowestAll");
+    const currentAST = this.toAST();
+    const trialPool: SumNode = {
+      type: "sum",
+      count: total,
+      child: currentAST,
+    };
+    const keepNode: KeepNode = {
+      type: "keep",
+      mode: "lowest",
+      count,
+      child: trialPool,
+    };
+    const currentExpr = this.toExpression();
+    const expression = `${total}kl${count}(${currentExpr})`;
+    return new PooledRollBuilder(keepNode, expression);
   }
 
   withAdvantage(): RollBuilder {
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].rollType = "advantage";
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   withDisadvantage(): RollBuilder {
     const configs = this.getSubRollConfigs();
     configs[configs.length - 1].rollType = "disadvantage";
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(configs);
+    return this.create(configs);
   }
 
   add(anotherRoll: RollBuilder | undefined): RollBuilder {
     if (anotherRoll === undefined) return this;
+    if (anotherRoll.hasHiddenState()) {
+      throw new Error(
+        "Cannot add a roll with hidden state (like a pooled roll) to a standard roll. Try adding the standard roll to the pooled roll instead: pool.plus(roll)."
+      );
+    }
     const configs = [...this.subRollConfigs, ...anotherRoll.subRollConfigs];
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(configs);
+    return this.create(configs);
   }
 
   withBonus(anotherRoll: RollBuilder): RollBuilder {
     const configs = [...this.subRollConfigs, ...anotherRoll.subRollConfigs];
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(configs);
+    return this.create(configs);
   }
 
   addRoll(count: number = 1): RollBuilder {
@@ -343,9 +383,7 @@ export class RollBuilder {
         isSubtraction: count < 0,
       },
     ];
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(configs);
+    return this.create(configs);
   }
 
   scaleDice(scale: number): RollBuilder {
@@ -357,9 +395,7 @@ export class RollBuilder {
       if (!config.sides || config.sides <= 0) return config;
       return { ...config, count: config.count * scaleInt };
     });
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   doubleDice(): RollBuilder {
@@ -375,9 +411,7 @@ export class RollBuilder {
   }
 
   copy(): RollBuilder {
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(this.getSubRollConfigs());
+    return this.create(this.getSubRollConfigs());
   }
 
   // --- Dice Shortcut Methods ---
@@ -392,9 +426,7 @@ export class RollBuilder {
   withElvenAccuracy() {
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].rollType = "elven accuracy";
-    return new (this.constructor as new (
-      configs: readonly RollConfig[]
-    ) => RollBuilder)(newConfigs);
+    return this.create(newConfigs);
   }
 
   toExpression(): string {
@@ -693,6 +725,21 @@ export class HalfRollBuilder extends RollBuilder {
     super(0); // dummy, we override methods
   }
 
+  override hasHiddenState(): boolean {
+    return this.innerRoll.hasHiddenState();
+  }
+
+  // No need to override create if we don't expose RollBuilder methods that use it,
+  // but HalfRollBuilder extends RollBuilder so it does.
+  // However, HalfRollBuilder seems to just wrap another roll.
+  // If we call .plus() on HalfRollBuilder, it returns a HalfRollBuilder?
+  // No, RollBuilder.plus returns RollBuilder.
+  // The inheritance here is a bit tricky.
+  // Existing code for HalfRollBuilder doesn't seem to implement plus/etc.
+  // So .plus() on a HalfRollBuilder would return a RollBuilder (base class).
+  // Which is fine.
+  // The only issue is if we want it to return HalfRollBuilder, but it doesn't seem designed for that.
+
   get lastConfig() {
     return (this.innerRoll as any).lastConfig;
   }
@@ -730,6 +777,10 @@ export class MaxOfRollBuilder extends RollBuilder {
     private readonly diceSides?: number
   ) {
     super(0); // dummy, we override methods
+  }
+
+  override hasHiddenState(): boolean {
+    return this.innerRoll.hasHiddenState();
   }
 
   get lastConfig() {
@@ -804,6 +855,11 @@ export class AlwaysHitBuilder extends RollBuilder {
   readonly attackConfig: CritConfig;
 
   constructor(baseRoll: RollBuilder, attackConfig?: CritConfig) {
+    if (baseRoll.hasHiddenState()) {
+      throw new Error(
+        "Cannot create AlwaysHitBuilder from a roll with hidden state."
+      );
+    }
     super(baseRoll.getSubRollConfigs());
 
     if (attackConfig) {
@@ -811,6 +867,10 @@ export class AlwaysHitBuilder extends RollBuilder {
     } else {
       this.attackConfig = { critThreshold: 20 };
     }
+  }
+
+  protected create(configs: readonly RollConfig[]): RollBuilder {
+    return new RollBuilder(configs);
   }
 
   onHit(val: number): AttackBuilder;
@@ -868,6 +928,11 @@ export class AlwaysCritBuilder extends RollBuilder {
     attackConfig?: CritConfig & { ac?: number },
     fromAlwaysHit: boolean = false
   ) {
+    if (baseRoll.hasHiddenState()) {
+      throw new Error(
+        "Cannot create AlwaysCritBuilder from a roll with hidden state."
+      );
+    }
     super(baseRoll.getSubRollConfigs());
 
     if (attackConfig) {
@@ -876,6 +941,10 @@ export class AlwaysCritBuilder extends RollBuilder {
       this.attackConfig = { critThreshold: 20 };
     }
     this.fromAlwaysHit = fromAlwaysHit || baseRoll instanceof AlwaysHitBuilder;
+  }
+
+  protected create(configs: readonly RollConfig[]): RollBuilder {
+    return new RollBuilder(configs);
   }
 
   onHit(val: number): AttackBuilder;
@@ -919,12 +988,6 @@ export class AlwaysCritBuilder extends RollBuilder {
   }
 }
 
-/**
- * A RollBuilder that wraps a pre-computed PMF from a parsed string expression.
- * This is used to support string-based damage expressions in onHit/onCrit/onMiss.
- * The builder is not fully composable (e.g., you can't call .plus() on it),
- * but it can be used anywhere a RollBuilder is expected for terminal damage.
- */
 export class ParsedRollBuilder extends RollBuilder {
   private readonly cachedPMF: PMF;
   private readonly originalExpression: string;
@@ -935,7 +998,15 @@ export class ParsedRollBuilder extends RollBuilder {
     this.cachedPMF = parse(expression, 0);
   }
 
-  override toPMF(eps: number = 0): PMF {
+  override hasHiddenState(): boolean {
+    return true;
+  }
+
+  protected create(configs: readonly RollConfig[]): RollBuilder {
+    return new RollBuilder(configs);
+  }
+
+  override toPMF(_eps: number = 0): PMF {
     // Return the pre-computed PMF, ignoring epsilon for now
     // The parse() function was already called with eps=0
     return this.cachedPMF;
@@ -958,13 +1029,164 @@ export class ParsedRollBuilder extends RollBuilder {
   }
 
   override doubleDice(): ParsedRollBuilder {
-    // For crit damage doubling, we can't properly double dice from a parsed expression
-    // We'd need to either:
-    // 1. Parse the expression and reconstruct it with doubled dice counts
-    // 2. Store the AST from parsing
-    // For now, throw an error to catch this edge case
     throw new Error(
       "ParsedRollBuilder does not support doubleDice(). Use explicit onCrit() with the crit damage expression instead."
     );
+  }
+}
+
+export class PooledRollBuilder extends RollBuilder {
+  constructor(
+    private readonly baseAST: ExpressionNode,
+    private readonly baseExpression: string,
+    configs: readonly RollConfig[] = []
+  ) {
+    // Initialize with empty config if none provided
+    super(configs.length > 0 ? configs : 0);
+  }
+
+  protected create(configs: readonly RollConfig[]): PooledRollBuilder {
+    // This is the key fix: we preserve the baseAST and baseExpression
+    // and only update the configs
+    return new PooledRollBuilder(this.baseAST, this.baseExpression, configs);
+  }
+
+  override hasHiddenState(): boolean {
+    return true;
+  }
+
+  override d(_sides: number | undefined): RollBuilder {
+    throw new Error("Cannot add dice to a pooled roll. The pool is finalized.");
+  }
+
+  override reroll(_value: number): RollBuilder {
+    throw new Error("Cannot set reroll on a pooled roll.");
+  }
+
+  override explode(_count: number | undefined = Infinity): RollBuilder {
+    throw new Error("Cannot set explode on a pooled roll.");
+  }
+
+  override minimum(_val: number | undefined): RollBuilder {
+    throw new Error("Cannot set minimum on a pooled roll.");
+  }
+
+  override bestOf(_count: number | undefined): RollBuilder {
+    throw new Error("Cannot set bestOf on a pooled roll.");
+  }
+
+  override keepHighest(_total: number, _count: number): RollBuilder {
+    throw new Error(
+      "Cannot use keepHighest on a pooled roll. Use keepHighestAll again if you want nested pooling."
+    );
+  }
+
+  override keepLowest(_total: number, _count: number): RollBuilder {
+    throw new Error(
+      "Cannot use keepLowest on a pooled roll. Use keepLowestAll again if you want nested pooling."
+    );
+  }
+
+  override withAdvantage(): RollBuilder {
+    throw new Error("Cannot set advantage on a pooled roll.");
+  }
+
+  override withDisadvantage(): RollBuilder {
+    throw new Error("Cannot set disadvantage on a pooled roll.");
+  }
+
+  override withElvenAccuracy(): RollBuilder {
+    throw new Error("Cannot set elven accuracy on a pooled roll.");
+  }
+
+  override toAST(): ExpressionNode {
+    const configsAST = super.toAST();
+
+    // Check if configsAST is effectively zero/empty
+    const isZero = configsAST.type === "constant" && configsAST.value === 0;
+
+    if (isZero) {
+      return this.baseAST;
+    }
+
+    const children: { node: ExpressionNode; sign: 1 | -1 }[] = [
+      { node: this.baseAST, sign: 1 },
+      { node: configsAST, sign: 1 },
+    ];
+
+    return { type: "add", children };
+  }
+
+  override toExpression(): string {
+    const configsExpression = super.toExpression();
+
+    // If no configs added, just return base expression
+    if (configsExpression === "0") {
+      return this.baseExpression;
+    }
+
+    // Clean up the join
+    if (configsExpression.startsWith("-")) {
+      // If it's a negative number/expression, format as " - value"
+      // configsExpression is like "-2" or "-1d6"
+      return `${this.baseExpression} - ${configsExpression.substring(1)}`;
+    }
+    return `${this.baseExpression} + ${configsExpression}`;
+  }
+
+  override copy(): PooledRollBuilder {
+    return new PooledRollBuilder(
+      this.baseAST,
+      this.baseExpression,
+      this.getSubRollConfigs()
+    );
+  }
+
+  override scaleDice(scale: number): RollBuilder {
+    const scaleInt = Math.floor(scale);
+    if (scaleInt !== scale) throw new Error("Scale must be an integer");
+    if (scaleInt <= 0) throw new Error("Scale must be > 0");
+
+    // Scale the base pool (treat it as a die/unit)
+    // We wrap the base AST in a SumNode
+    const newBaseAST: SumNode = {
+      type: "sum",
+      count: scaleInt,
+      child: this.baseAST,
+    };
+    const newBaseExpr =
+      scaleInt === 1
+        ? this.baseExpression
+        : `${scaleInt}(${this.baseExpression})`;
+
+    // We preserve the existing modifiers (subRollConfigs) without scaling them,
+    // because scaleDice() generally only scales "dice", not flat modifiers.
+    // Since we forbid adding dice to PooledRollBuilder, subRollConfigs are only modifiers.
+    return new PooledRollBuilder(
+      newBaseAST,
+      newBaseExpr,
+      this.getSubRollConfigs()
+    );
+  }
+
+  times(count: number): PooledRollBuilder {
+    if (isNaN(count)) throw new Error("Invalid NaN value for times");
+    if (Math.floor(count) !== count)
+      throw new Error("times() requires an integer");
+    if (count < 0) throw new Error("times() requires a non-negative integer");
+
+    // We wrap the current state (base + modifiers) into a new pool repeated N times
+    const currentAST = this.toAST();
+    const currentExpr = this.toExpression();
+
+    const sumNode: SumNode = {
+      type: "sum",
+      count,
+      child: currentAST,
+    };
+
+    const newExpr = count === 1 ? currentExpr : `${count}(${currentExpr})`;
+
+    return new PooledRollBuilder(sumNode, newExpr);
   }
 }
