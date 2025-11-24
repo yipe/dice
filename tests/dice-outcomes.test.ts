@@ -312,7 +312,9 @@ describe("Dice Outcome Management", () => {
       expect(dice.hasOutcomeData("hit")).toBe(true);
 
       const hitDist2 = dice.getOutcomeDistribution("hit");
-      expect(hitDist1).toBe(hitDist2);
+      // Values should be equal (cached calculation), but objects are different (immutability)
+      expect(hitDist1).toEqual(hitDist2);
+      expect(hitDist1).not.toBe(hitDist2);
     });
 
     it("should recalculate hit distribution when outcome data changes", () => {
@@ -364,8 +366,7 @@ describe("Dice Outcome Management", () => {
       expect(dice.getAverage("crit")).toBeCloseTo(-0.6, 10); // (-5*0.3) + (0*0.4) + (3*0.3)
     });
 
-    // Not yet implemented for performance reasons
-    it.skip("should maintain immutability - modifying returned distributions should not affect internal state", () => {
+    it("should maintain immutability - modifying returned distributions should not affect internal state", () => {
       const originalDistribution: DamageDistribution = { 1: 0.5, 6: 0.5 };
       dice.setOutcomeDistribution("crit", originalDistribution);
 
