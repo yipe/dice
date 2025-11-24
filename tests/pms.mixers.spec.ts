@@ -198,26 +198,6 @@ describe("PMF.exclusive", () => {
     );
   });
 
-  it.skip("Sneak/Smite pattern via nested gate() matches weighted mean", () => {
-    // const atk = parse(attackExpr);
-    // const per = new DiceQuery([atk]);
-    // // Use the helper instead of hand math
-    // const { pSubsetFirst: pFirstCrit, pNonSubsetFirst: pFirstHit } =
-    //   per.singleOutcomeWeights(["hit", "crit"], ["crit"]);
-    // const three = parse("3d6"); // mean 10.5
-    // const six = parse("6d6"); // mean 21
-    // // Crit branch first; if not crit, gate to non-crit-or-none
-    // const nonCritOrNone = three.gate(
-    //   pFirstHit / (1 - pFirstCrit), // P(non-crit | not-first-crit)
-    //   PMF.zero()
-    // );
-    // const ex = six.gate(pFirstCrit, nonCritOrNone);
-    // const q = new DiceQuery([ex]);
-    // const expected = 21 * pFirstCrit + 10.5 * pFirstHit;
-    // expect(q.mean()).toBeCloseTo(expected, 12);
-    // expect(q.totalMass()).toBeCloseTo(1, 12);
-  });
-
   it("works seamlessly in a full round with independent base attacks", () => {
     const atk = parse(attackExpr);
     const per = new DiceQuery([atk]);
