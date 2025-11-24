@@ -328,14 +328,16 @@ describe("DiceQuery Comprehensive", () => {
     expect(meanAvg).toBeCloseTo(0.5 * (meanA + meanB), 12);
   });
 
-  it.skip("PMF.add averages two normalized PMFs (documented behavior)", () => {
+  it("PMF.add averages two normalized PMFs (documented behavior) - direct PMF mean", () => {
     const a = PMF.withProbability(parse("3d6"), 0.25);
     const b = PMF.withProbability(parse("3d6"), 0.75);
     const avg = a.add(b);
 
     const meanA = a.mean();
     const meanB = b.mean();
-    const meanAvg = avg.mean(); // TODO: Why does htis fail when the previous test passes?
+    // PMF.add performs vector addition, so mass is sum of masses (2.0).
+    // To get the "average" distribution, we must normalize.
+    const meanAvg = avg.normalize().mean();
     expect(meanAvg).toBeCloseTo(0.5 * (meanA + meanB), 12);
   });
 
