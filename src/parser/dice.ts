@@ -34,7 +34,10 @@ export class Dice {
       this.ensureHitDistribution();
     }
 
-    return this.outcomeData[key];
+    const distribution = this.outcomeData[key];
+    if (distribution === undefined) return undefined;
+
+    return { ...distribution };
   }
 
   getFullOutcomeDistribution(): Record<
