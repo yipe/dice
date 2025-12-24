@@ -1,6 +1,6 @@
 {
   "name": "@yipe/dice",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "description": "A high-performance dice probability engine for D&D 5e DPR calculations. Powers dprcalc.com.",
   "keywords": [
     "dnd",
