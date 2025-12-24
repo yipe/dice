@@ -4,7 +4,7 @@ import type { RollBuilder } from "./roll";
 export type RollFactory = {
   (count: number, sides?: number, modifier?: number): RollBuilder;
   (count: number, die: RollBuilder, modifier?: number): RollBuilder;
-  d(sides: number): RollBuilder;
+  d(sides: number | string): RollBuilder;
   hd20(): RollBuilder;
   d4(): RollBuilder;
   d6(): RollBuilder;
