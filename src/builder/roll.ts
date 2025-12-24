@@ -718,6 +718,16 @@ export class RollBuilder {
   maxOf(count: number): MaxOfRollBuilder {
     return new MaxOfRollBuilder(this, count);
   }
+
+  // These methods are implemented via prototype augmentation in ac.ts and dc.ts
+  // They are declared here to provide proper TypeScript types
+  ac(targetAC: number): import("./ac").ACBuilder {
+    throw new Error("ac() should be implemented via prototype augmentation");
+  }
+
+  dc(saveDC: number): import("./dc").DCBuilder {
+    throw new Error("dc() should be implemented via prototype augmentation");
+  }
 }
 
 export class HalfRollBuilder extends RollBuilder {

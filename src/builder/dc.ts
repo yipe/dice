@@ -95,13 +95,6 @@ export class DCBuilder extends RollBuilder {
   }
 }
 
-// Augment the RollBuilder interface to include the dc method
-declare module "./roll" {
-  interface RollBuilder {
-    dc(saveDC: number): DCBuilder;
-  }
-}
-
 // Augment the RollBuilder prototype to implement the dc method
 RollBuilder.prototype.dc = function (saveDC: number): DCBuilder {
   if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");

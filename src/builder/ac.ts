@@ -107,13 +107,6 @@ export class ACBuilder extends RollBuilder {
   }
 }
 
-// Augment the RollBuilder interface to include the ac method
-declare module "./roll" {
-  interface RollBuilder {
-    ac(targetAC: number): ACBuilder;
-  }
-}
-
 // Augment the RollBuilder prototype to implement the ac method
 RollBuilder.prototype.ac = function (targetAC: number): ACBuilder {
   if (isNaN(targetAC)) throw new Error("Invalid NaN value for targetAC");
