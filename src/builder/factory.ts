@@ -47,7 +47,12 @@ const rollFn = (
   }
 };
 
-rollFn.d = (sides: number): RollBuilder => new RollBuilder(1).d(sides);
+rollFn.d = (sides: number | string): RollBuilder => {
+  if (typeof sides === "string") {
+    return RollBuilder.fromArgs(sides);
+  }
+  return new RollBuilder(1).d(sides);
+};
 rollFn.hd20 = (): RollBuilder => new RollBuilder(1).d20().reroll(1);
 rollFn.d4 = (): RollBuilder => new RollBuilder(1).d4();
 rollFn.d6 = (): RollBuilder => new RollBuilder(1).d6();
@@ -58,7 +63,10 @@ rollFn.d20 = (): RollBuilder => new RollBuilder(1).d20();
 rollFn.d100 = (): RollBuilder => new RollBuilder(1).d100();
 rollFn.flat = (n: number): RollBuilder => new RollBuilder(0).plus(n);
 
-export function d(sides: number) {
+export function d(sides: number | string): RollBuilder {
+  if (typeof sides === "string") {
+    return RollBuilder.fromArgs(sides);
+  }
   return new RollBuilder(1).d(sides);
 }
 
