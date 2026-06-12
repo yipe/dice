@@ -1,4 +1,6 @@
+import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
+import type { DCBuilder } from "./dc";
 import { parse } from "../parser/parser";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -721,11 +723,11 @@ export class RollBuilder {
 
   // These methods are implemented via prototype augmentation in ac.ts and dc.ts
   // They are declared here to provide proper TypeScript types
-  ac(targetAC: number): import("./ac").ACBuilder {
+  ac(_targetAC: number): ACBuilder {
     throw new Error("ac() should be implemented via prototype augmentation");
   }
 
-  dc(saveDC: number): import("./dc").DCBuilder {
+  dc(_saveDC: number): DCBuilder {
     throw new Error("dc() should be implemented via prototype augmentation");
   }
 }

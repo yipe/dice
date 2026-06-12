@@ -1,8 +1,6 @@
 // eslint.config.mjs
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 import tsParser from "@typescript-eslint/parser";
-import importPlugin from "eslint-plugin-import";
-
 export default [
   {
     files: ["src/**/*.{ts,tsx}"],
@@ -10,20 +8,14 @@ export default [
     languageOptions: {
       parser: tsParser,
       parserOptions: {
-        // If you want type-aware linting, point at your tsconfig:
-        project: ["./config/tsconfig.json"], // or your actual tsconfig
+        project: ["./config/tsconfig.json"],
         tsconfigRootDir: new URL(".", import.meta.url).pathname,
       },
     },
     plugins: {
       "@typescript-eslint": tsPlugin,
-      import: importPlugin,
     },
     rules: {
-      // Helps detect side-effect-only imports
-      "import/no-unassigned-import": "warn",
-
-      // Useful TS rules
       "@typescript-eslint/no-unused-vars": [
         "warn",
         { argsIgnorePattern: "^_" },

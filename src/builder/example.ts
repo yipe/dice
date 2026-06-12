@@ -1,9 +1,7 @@
 import { DiceQuery } from "../pmf/query";
 
-// eslint-disable-next-line import/no-unassigned-import
 import "./ac"; // for side effects of prototype augmentation
 import type { ACBuilder } from "./ac";
-// eslint-disable-next-line import/no-unassigned-import
 import "./dc"; // for side effects of prototype augmentation
 import type { DCBuilder } from "./dc";
 import { d10, d12, d20, d4, d6, d8, flat, hd20, roll } from "./factory";
