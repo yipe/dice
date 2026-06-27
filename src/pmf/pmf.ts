@@ -765,30 +765,45 @@ export class PMF {
     const cached = pmfCache?.get(cacheKey);
     if (cached) return cached;
 
+    // Accumulate directly into each destination bin instead of building a
+    // temporary Bin per (a,b) pair and merging it. The probability channel
+    // (`dest.p += ap*bp`) accumulates in the same order as before, so it is
+    // bit-identical; only the per-label `count`/`attr` sums re-associate, which
+    // shifts them by at most a few ULP (far below the eps pruning threshold).
     const combinedMap = new Map<number, Bin>();
     for (const [aVal, aBin] of A.map) {
+      const ap = aBin.p;
+      const aCount = aBin.count;
+      const aAttr = aBin.attr;
       for (const [bVal, bBin] of B.map) {
-        const p = aBin.p * bBin.p;
+        const bp = bBin.p;
         const dmg = aVal + bVal;
 
-        const count: OutcomeLabelMap = {};
-        for (const k in aBin.count)
-          count[k] = (count[k] || 0) + (aBin.count[k] as number) * bBin.p;
-        for (const k in bBin.count)
-          count[k] = (count[k] || 0) + (bBin.count[k] as number) * aBin.p;
-
-        let attr: OutcomeLabelMap | undefined;
-        if (aBin.attr || bBin.attr) {
-          attr = {};
-          if (aBin.attr)
-            for (const k in aBin.attr)
-              attr[k] = (attr[k] || 0) + (aBin.attr[k] as number) * bBin.p;
-          if (bBin.attr)
-            for (const k in bBin.attr)
-              attr[k] = (attr[k] || 0) + (bBin.attr[k] as number) * aBin.p;
+        let dest = combinedMap.get(dmg);
+        if (dest === undefined) {
+          dest = { p: 0, count: {} };
+          combinedMap.set(dmg, dest);
         }
 
-        PMF.mergeInto(combinedMap, dmg, { p, count, attr });
+        dest.p += ap * bp;
+
+        const dc = dest.count;
+        for (const k in aCount) dc[k] = (dc[k] || 0) + (aCount[k] as number) * bp;
+        for (const k in bBin.count)
+          dc[k] = (dc[k] || 0) + (bBin.count[k] as number) * ap;
+
+        if (aAttr || bBin.attr) {
+          let da = dest.attr;
+          if (da === undefined) {
+            da = {};
+            dest.attr = da;
+          }
+          if (aAttr)
+            for (const k in aAttr) da[k] = (da[k] || 0) + (aAttr[k] as number) * bp;
+          if (bBin.attr)
+            for (const k in bBin.attr)
+              da[k] = (da[k] || 0) + (bBin.attr[k] as number) * ap;
+        }
       }
     }
 
