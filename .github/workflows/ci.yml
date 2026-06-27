@@ -9,8 +9,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        # The published package supports Node >= 18.17, so we type-check, build
+        # and pack on Node 18. The test runner (Vitest 4) requires Node >= 20
+        # (it imports `styleText` from node:util), so the Test step below is
+        # skipped on Node 18 and runs on 20/22/24.
+        node: [18, 20, 22, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,6 +55,8 @@ jobs:
         run: yarn build
 
       - name: Test
+        # Vitest 4 requires Node >= 20; Node 18 verifies build + pack only.
+        if: matrix.node != '18'
         run: yarn test
 
       - name: Pack (sanity)
