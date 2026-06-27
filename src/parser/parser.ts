@@ -107,6 +107,15 @@ function parseExpression(arr: string[], n: number): Dice {
     const arg = !op.unary ? parseArgument(arr, n) : finalResult;
 
     // Handle crit (e.g. xcrit, crit)
+    //
+    // KNOWN LIMITATION: this peels the maximum FACE of the (already convolved)
+    // to-hit distribution to represent the natural 20. That is correct only when
+    // the to-hit has no bonus dice. With bonus dice in the to-hit (e.g. Bless,
+    // "d20 + 5 + 1d4"), a natural 20 is "d20 == 20 with any bonus", whose mass is
+    // smeared across several total values that also contain non-crit mass, so the
+    // d20 identity is lost and the crit slice collapses to 1/(20·∏bonusSides).
+    // Use the builder API (d20.plus(...).plus(bonusDie).ac(...).onCrit(...)) for
+    // a correct crit probability with bonus to-hit dice. See CHANGELOG.
     let crit: Dice | undefined;
     let critNorm = 1;
     if (arr[0] === "x" || arr[0] === "c") {

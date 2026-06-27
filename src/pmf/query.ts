@@ -554,6 +554,12 @@ export class DiceQuery {
    * This includes mixed scenarios (2 hits + 1 crit, 3 hits + 1 miss, etc.) which
    * occur far more frequently than pure scenarios. For pure scenarios, use combinedDamageStats.
    *
+   * KNOWN LIMITATION (multi-attack, single label): the returned `count` is an
+   * EXPECTED COUNT (E[#label], so > 1 for N≥2 attacks, not a probability), and
+   * `avg` is the size-biased conditional mean E[dmg·#label]/E[#label] rather than
+   * E[dmg | the label occurs]. For a single attack both are the plain
+   * conditional figures. Use {@link probAtLeastOne} for the scenario probability.
+   *
    * @example
    * // High-level tactical planning
    * const successStats = query.damageStatsFrom('hit')
@@ -1385,6 +1391,13 @@ export class DiceQuery {
    * Snapshot of the distribution in the exact shape the UI consumes.
    * - outcome probabilities are "at least one" (and equal to "all" for a single PMF)
    * - damageRange is conditional on the outcome occurring
+   *
+   * KNOWN LIMITATION (multi-attack): the per-outcome figures are aggregated from
+   * the combined PMF's `count`, which the convolution accumulates as an EXPECTED
+   * COUNT (E[#attacks with the label]). For a single attack these equal the
+   * probabilities, but for N≥2 attacks `atLeastOneProbability` can exceed 1 and
+   * `damageRange.avg` is size-biased (E[dmg·#label]/E[#label]). For correct
+   * per-attack marginals use {@link probAtLeastOne} / {@link probExactlyK}.
    */
   snapshot(order?: readonly OutcomeType[]): Snapshot {
     // 1) Discover which outcomes actually appear in this PMF
