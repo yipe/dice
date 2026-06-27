@@ -1392,12 +1392,15 @@ export class DiceQuery {
    * - outcome probabilities are "at least one" (and equal to "all" for a single PMF)
    * - damageRange is conditional on the outcome occurring
    *
-   * KNOWN LIMITATION (multi-attack): the per-outcome figures are aggregated from
+   * The outcome probabilities use the correct Poisson-binomial marginals
+   * (`atLeastOneProbability` = P(≥1 attack has it), `allProbability` = P(all do)),
+   * so they are always valid probabilities in [0,1].
+   *
+   * KNOWN LIMITATION (multi-attack): `damageRange.avg` is still aggregated from
    * the combined PMF's `count`, which the convolution accumulates as an EXPECTED
-   * COUNT (E[#attacks with the label]). For a single attack these equal the
-   * probabilities, but for N≥2 attacks `atLeastOneProbability` can exceed 1 and
-   * `damageRange.avg` is size-biased (E[dmg·#label]/E[#label]). For correct
-   * per-attack marginals use {@link probAtLeastOne} / {@link probExactlyK}.
+   * COUNT, so for N≥2 attacks it is the size-biased mean E[dmg·#label]/E[#label]
+   * rather than a clean conditional expectation. It is correct for a single
+   * attack.
    */
   snapshot(order?: readonly OutcomeType[]): Snapshot {
     // 1) Discover which outcomes actually appear in this PMF
@@ -1428,13 +1431,11 @@ export class DiceQuery {
     // 2) Aggregate per-outcome mass and conditional damage ranges via labeled table
     const rows = this.toLabeledTable(outcomes as OutcomeType[]);
 
-    const totals = new Map<OutcomeType, number>();
     const rangeAcc = new Map<
       OutcomeType,
       { min?: number; max?: number; sum: number; mass: number }
     >();
     for (const ot of outcomes) {
-      totals.set(ot as OutcomeType, 0);
       rangeAcc.set(ot as OutcomeType, { sum: 0, mass: 0 });
     }
 
@@ -1443,7 +1444,6 @@ export class DiceQuery {
       for (const ot of outcomes) {
         const p = (row[ot] as number) || 0;
         if (p <= 0) continue;
-        totals.set(ot as OutcomeType, (totals.get(ot as OutcomeType) || 0) + p);
 
         const r = rangeAcc.get(ot as OutcomeType)!;
         r.sum += dmg * p;
@@ -1453,14 +1453,17 @@ export class DiceQuery {
       }
     }
 
+    const n = this.singles.length;
     const outcomeMap = new Map<OutcomeType, OutcomeSnapshot>();
     for (const ot of outcomes) {
-      const total = totals.get(ot as OutcomeType) || 0;
       const r = rangeAcc.get(ot as OutcomeType)!;
       const avg = r.mass > 0 ? r.sum / r.mass : 0;
+      // Use the correct per-attack marginals (Poisson-binomial) so these are
+      // always valid probabilities in [0,1]. For a single attack both reduce to
+      // P(outcome); the previous `total` was an expected count and could exceed 1.
       outcomeMap.set(ot as OutcomeType, {
-        atLeastOneProbability: total,
-        allProbability: total, // single aggregate PMF: same value
+        atLeastOneProbability: this.probAtLeastOne(ot as OutcomeType),
+        allProbability: this.probAtLeastK(ot as OutcomeType, n),
         damageRange: { min: r.min ?? 0, avg, max: r.max ?? 0 },
       });
     }

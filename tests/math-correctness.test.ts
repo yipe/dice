@@ -305,6 +305,26 @@ describe("Parser D&D mechanics vs brute force", () => {
     expect(q.probAtLeastOne("saveFail")).toBeCloseTo(pFail, 6);
     expect(q.probAtLeastOne("saveHalf")).toBeCloseTo(pSucc, 6);
   });
+
+  it("save-for-half labels are correct for constant / odd damage", () => {
+    // (d20 DC 15) * (D) save half: fail (roll<15, 0.7) -> full D; success (0.3) ->
+    // floor(D/2). The success mass is saveHalf, the failure mass is saveFail, and
+    // there is no "hit" mass. This previously mislabeled on odd/constant damage.
+    for (const [expr, D] of [
+      ["(d20 + 0 DC 15) * (3) save half", 3],
+      ["(d20 + 0 DC 15) * (1d6 + 3) save half", null],
+      ["(d20 + 0 DC 15) * (1d4 + 1) save half", null],
+    ] as const) {
+      const q = parse(expr).query();
+      expect(q.probAtLeastOne("saveFail")).toBeCloseTo(0.7, 6);
+      expect(q.probAtLeastOne("saveHalf")).toBeCloseTo(0.3, 6);
+      expect(q.probAtLeastOne("hit")).toBeCloseTo(0, 6);
+      if (D !== null) {
+        // mean = 0.7*D + 0.3*floor(D/2)
+        expect(q.mean()).toBeCloseTo(0.7 * D + 0.3 * Math.floor(D / 2), 9);
+      }
+    }
+  });
 });
 
 describe("Mixtures & guards", () => {
@@ -416,14 +436,21 @@ describe("Conditional statistics: single-attack correctness + multi-attack cavea
     );
   });
 
-  it("KNOWN LIMITATION: multi-attack snapshot reports expected counts (pinned)", () => {
-    // For N attacks these per-outcome figures are E[#label], not probabilities,
-    // and can exceed 1. Use probAtLeastOne for the true marginal. Pinned so the
-    // documented behavior is tracked.
-    const q = new DiceQuery([single, single, single, single]); // 4 attacks
+  it("multi-attack snapshot reports valid Poisson-binomial probabilities", () => {
+    const q = new DiceQuery([single, single, single, single]); // 4 attacks, P(hit)=0.5 each
     const snap = q.snapshot(["hit"]);
-    expect(snap.outcomes.get("hit")!.atLeastOneProbability).toBeCloseTo(2.0, 6); // 4 * 0.5
-    // the correct per-attack marginal:
-    expect(q.probAtLeastOne("hit")).toBeCloseTo(1 - 0.5 ** 4, 9); // 0.9375
+    const hit = snap.outcomes.get("hit")!;
+    // P(>=1 hit) = 1 - 0.5^4 = 0.9375 ; P(all 4 hit) = 0.5^4 = 0.0625
+    expect(hit.atLeastOneProbability).toBeCloseTo(1 - 0.5 ** 4, 9);
+    expect(hit.atLeastOneProbability).toBeLessThanOrEqual(1);
+    expect(hit.allProbability).toBeCloseTo(0.5 ** 4, 9);
+  });
+
+  it("KNOWN LIMITATION: multi-attack damageRange.avg is size-biased (pinned)", () => {
+    // damageRange.avg still weights by expected count (E[dmg·#label]/E[#label]),
+    // so it is not a clean conditional mean for N>=2. Pinned for tracking.
+    const q = new DiceQuery([single, single, single, single]);
+    const avg = q.snapshot(["hit"]).outcomes.get("hit")!.damageRange.avg;
+    expect(avg).toBeGreaterThan(0); // documented size-biased quantity, not E[dmg|>=1 hit]
   });
 });

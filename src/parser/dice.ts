@@ -468,14 +468,12 @@ export class Dice {
     const saveDistro = this.getOutcomeDistribution("saveHalf") || {};
     const pcDistro = this.getOutcomeDistribution("pc") || {};
 
-    let isSaveHalf = false;
-    for (const halfDamageStr in saveDistro) {
-      const fullDamage = Number(halfDamageStr) * 2;
-      if (fullDamage > 0 && hitDistro[fullDamage]) {
-        isSaveHalf = true;
-        break;
-      }
-    }
+    // A non-empty save distribution means the "save" mechanic was used (e.g.
+    // "save half"): its success mass is a saveHalf outcome and the remaining
+    // (full-damage) mass is a saveFail. The previous heuristic — "isSaveHalf iff
+    // 2×(a half value) appears in the hit distribution" — false-negatived on odd
+    // or constant damage, mislabeling saveHalf as saveFail and saveFail as hit.
+    const isSaveHalf = Object.keys(saveDistro).length > 0;
 
     const isDCCheck = this.privateData.isDCCheck === true;
 
