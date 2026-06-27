@@ -428,7 +428,11 @@ function parseDice(s: string[], n: number): Dice | undefined {
   let result = new Dice(sides);
 
   if (rerollOne) {
-    result = result.deleteFace(1).combine(result);
+    // Reroll a rolled 1 exactly once, keeping the second roll (e.g. halfling
+    // luck). This is the same semantics as the `reroll 1` operator; the previous
+    // deleteFace(1).combine(result) computed a weighted union (P(1)=1/(2s−1)),
+    // not a reroll (correct P(1)=1/s²).
+    result = result.reroll(1);
   }
 
   return result;
