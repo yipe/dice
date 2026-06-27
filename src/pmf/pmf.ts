@@ -249,16 +249,26 @@ export class PMF {
    *
    * @returns New PMF with attr field populated in each bin
    */
-  withAttribution(): PMF {
-    // Fast path: if attr already exists, return this PMF unchanged
-    // Check if any non-zero damage bin has attr
+  /**
+   * Returns true if this PMF already carries damage attribution metadata.
+   *
+   * Only the first positive-damage bin is inspected (parser-generated PMFs
+   * populate `attr` uniformly), so this is O(1) in practice.
+   */
+  hasAttribution(): boolean {
     for (const [damage, bin] of this.map) {
       if (damage !== 0 && bin.attr && Object.keys(bin.attr).length > 0) {
-        return this; // Already has attribution
+        return true;
       }
-      // Only check first non-zero bin for performance
+      // Only check the first non-zero bin for performance
       if (damage > 0) break;
     }
+    return false;
+  }
+
+  withAttribution(): PMF {
+    // Fast path: if attr already exists, return this PMF unchanged
+    if (this.hasAttribution()) return this;
 
     const newMap = new Map<number, Bin>();
 

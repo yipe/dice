@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`PMF.toJSONString()`** — returns the JSON string form (the previous
   `toJSON()` behavior).
 - **`DiceQuery.stdev()`** — alias of `stddev()`, matching `PMF.stdev()`.
+- **`PMF.hasAttribution()`** — O(1) check for whether a PMF already carries
+  damage-attribution metadata.
+
+### Performance
+
+- **`DiceQuery.mean()` / `variance()` / `stddev()` use moment additivity**
+  (`E[ΣX]=ΣE[X]`, `Var[ΣX]=ΣVar[X]`) computed directly from the single PMFs.
+- **`DiceQuery.combined` is now built lazily** (on first access) instead of in
+  the constructor. Combined with the above, a query used only for DPR / mean /
+  variance never performs the N-way convolution — multi-attack stats-only
+  queries are ~10000× faster (e.g. ~17 ms → ~0.001 ms for a heavy 4-attack
+  expression). The materialized `combined` distribution is unchanged; mean and
+  variance may differ from the previous convolution-based values by at most a
+  few ULP (well within the library's tolerances).
+- **`DiceQuery.combinedWithAttribution()` reuses `combined`** when every single
+  already carries attribution (as parser-generated PMFs do), avoiding a
+  redundant convolution pass. Result is bit-for-bit identical.
 
 ### Changed
 
