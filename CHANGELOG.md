@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`DiceQuery.combinedWithAttribution()` reuses `combined`** when every single
   already carries attribution (as parser-generated PMFs do), avoiding a
   redundant convolution pass. Result is bit-for-bit identical.
+- **`PMF.convolve()` inner loop accumulates directly into destination bins**
+  instead of allocating a temporary bin per term and merging — ~1.6× faster
+  convolution (the cost of building the combined distribution for charts). The
+  probability channel is bit-identical; per-label `count`/`attr` provenance may
+  re-associate by at most a few ULP (≤1e-14 even at 16 attacks, ~100× below the
+  eps pruning threshold).
 
 ### Changed
 
