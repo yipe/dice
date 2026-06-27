@@ -9,12 +9,22 @@ import type {
 import { EPS } from "../common/types";
 import { PMF } from "../pmf/pmf";
 
+/** Internal bookkeeping attached to a {@link Dice} during parsing. */
+export interface DicePrivateData {
+  /** Marks a DC (saving-throw) check so outcomes are attributed correctly. */
+  isDCCheck?: boolean;
+  /** The "other" distribution recorded by {@link Dice.combine}. */
+  except?: Dice | Record<string, never>;
+  /** Keep-highest/lowest selector applied when a die is multiplied out. */
+  keep?: (values: number[]) => number;
+}
+
 /**
  * @internal
  */
 export class Dice {
   private readonly faces: DamageDistribution = {};
-  public privateData: Record<string, any> = {};
+  public privateData: DicePrivateData = {};
   private outcomeData: Record<OutcomeType, DamageDistribution> = {} as Record<
     OutcomeType,
     DamageDistribution
@@ -114,9 +124,9 @@ export class Dice {
         hitCount = 0;
       }
 
-      //WARNING: This is checking for the bug in old inclusion-exclusion logic.
+      // Defensive clamp: guards against negative hit counts from older
+      // inclusion-exclusion logic. Should never trigger in practice.
       if (hitCount < 0) {
-        console.error("hitCount is <=0?", face, totalCount, hitCount);
         hitCount = 0;
       }
       hitValues[numFace] = hitCount;
@@ -179,7 +189,7 @@ export class Dice {
     return result;
   }
 
-  // PUBLIC FUNTIONS
+  // PUBLIC FUNCTIONS
 
   getFaceEntries(): [number, number][] {
     return Object.entries(this.faces).map(([k, v]) => [Number(k), v]);
@@ -564,10 +574,9 @@ export class Dice {
       map.set(face, bin);
     }
 
+    // Fall back to a sentinel identifier if none was assigned. This indicates
+    // a Dice constructed outside the normal parse/build flow.
     const identifier = this.identifier || "ERROR";
-    if (identifier === "ERROR") {
-      console.error("Dice identifier is undefined", this);
-    }
 
     // Normalize, drop zeros again if any snuck in, then compaction and pruning
     return new PMF(map, numEpsilon, true, identifier).compact(numEpsilon, true);

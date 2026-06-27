@@ -2,8 +2,6 @@ import type { Bin } from "../common/types";
 import { EPS } from "../common/types";
 import { PMF } from "./pmf";
 
-type BinEntries = Iterable<[number, Bin]>;
-
 /** A labeled mixture builder that preserves provenance in Bin.count. */
 export class Mixture<L extends string = string> {
   private readonly totals = new Map<number, number>(); // raw mass per outcome (pre-normalization)
@@ -39,10 +37,9 @@ export class Mixture<L extends string = string> {
   add(label: L, pmf: PMF, weight = 1): this {
     if (!Number.isFinite(weight) || weight <= 0) return this;
 
-    // Stream probabilities. Works whether PMF iterates as [v, p] or [v, Bin].
-    for (const [v, binOrNumber] of pmf as any as BinEntries) {
-      const isNumber = typeof binOrNumber === "number";
-      const p = isNumber ? binOrNumber : binOrNumber?.p ?? 0;
+    // Stream probabilities from each [value, Bin] pair.
+    for (const [v, bin] of pmf) {
+      const p = bin.p;
       if (p <= 0) continue;
 
       const add = weight * p;

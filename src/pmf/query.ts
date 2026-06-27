@@ -114,6 +114,11 @@ export class DiceQuery {
     return Math.sqrt(this.variance());
   }
 
+  /** Alias of {@link DiceQuery.stddev}, matching {@link PMF.stdev}. */
+  stdev(): number {
+    return this.stddev();
+  }
+
   /**
    * Returns the Cumulative Distribution Function.
    */
@@ -323,7 +328,7 @@ export class DiceQuery {
    * Array examples:
    * - probExactlyK(['hit', 'crit'], 2) = probability exactly 2 attacks succeed
    * - probExactlyK(['hit', 'crit'], 1) = probability exactly 1 attack succeeds
-   * - probExactlyK(['miss', 'missNone'], 0) = probability no attacks miss
+   * - probExactlyK(['missDamage', 'missNone'], 0) = probability no attacks miss
    *
    * Use cases:
    * - "What's the chance exactly one of my attacks hits?"
@@ -368,7 +373,7 @@ export class DiceQuery {
    * Single label examples:
    * - probAtMostK('hit', 1) = probability 0 or 1 attacks hit (at most 1)
    * - probAtMostK('crit', 0) = probability no attacks crit
-   * - probAtMostK('miss', 2) = probability at most 2 attacks miss
+   * - probAtMostK('missDamage', 2) = probability at most 2 attacks miss
    *
    * Array examples:
    * - probAtMostK(['hit', 'crit'], 1) = probability at most 1 attack succeeds
@@ -444,7 +449,7 @@ export class DiceQuery {
    *
    * Array examples:
    * - damageStatsFrom(['hit', 'crit']) = damage range when at least one attack succeeds
-   * - damageStatsFrom(['miss', 'missNone']) = damage range when at least one attack misses
+   * - damageStatsFrom(['missDamage', 'missNone']) = damage range when at least one attack misses
    *
    * Tactical Use Cases:
    * - "Given that I don't completely whiff (99% of turns), what damage should I expect?"
@@ -1540,8 +1545,8 @@ export class DiceQuery {
    * Returns tuple: [pFirstNonSubset, pFirstSubset, pAnySuccess, pNone]
    */
   public firstSuccessSplit(
-    successOutcome: string | string[],
-    subsetOutcome: string | string[],
+    successOutcome: OutcomeType | OutcomeType[],
+    subsetOutcome: OutcomeType | OutcomeType[],
     eps = EPS
   ): readonly [pSuccess: number, pSubset: number, pAny: number, pNone: number] {
     const pmfs = this.singles;
@@ -1549,15 +1554,16 @@ export class DiceQuery {
       throw new Error("firstSuccessSplitFromPMFs: pmfs must be non-empty");
     }
 
-    const toArr = (x: string | string[]) => (Array.isArray(x) ? x : [x]);
+    const toArr = (x: OutcomeType | OutcomeType[]): OutcomeType[] =>
+      Array.isArray(x) ? x : [x];
     const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
     const tol = Math.max(eps, 8 * Number.EPSILON);
 
     // Per-event probabilities from each PMF via DiceQuery([pmf])
     const per = pmfs.map((pmf) => {
       const dq = new DiceQuery([pmf]);
-      const pS = dq.probAtLeastOne(toArr(successOutcome) as any);
-      const pB = dq.probAtLeastOne(toArr(subsetOutcome) as any);
+      const pS = dq.probAtLeastOne(toArr(successOutcome));
+      const pB = dq.probAtLeastOne(toArr(subsetOutcome));
       if (pB - pS > eps) {
         throw new Error(
           "firstSuccessSplitFromPMFs: P(subset) > P(success) for an event. Ensure subset ⊆ success."

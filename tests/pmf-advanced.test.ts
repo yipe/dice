@@ -118,13 +118,13 @@ describe("PMF Advanced Operations", () => {
 
     it("should throw for non-positive integers", () => {
       expect(() => d6.replicate(0)).toThrow(
-        "combineN(n): n must be a positive integer"
+        "replicate(n): n must be a positive integer"
       );
       expect(() => d6.replicate(-1)).toThrow(
-        "combineN(n): n must be a positive integer"
+        "replicate(n): n must be a positive integer"
       );
       expect(() => d6.replicate(2.5)).toThrow(
-        "combineN(n): n must be a positive integer"
+        "replicate(n): n must be a positive integer"
       );
     });
 

@@ -90,8 +90,8 @@ function resolveProbabilities(check: DCBuilder): {
 
   const die = d20RollPMF(d20Type, baseReroll > 0);
   const faceP = new Map<number, number>();
-  for (const [r, rec] of die as any as Iterable<[number, any]>) {
-    const pr = typeof rec === "number" ? rec : rec.p;
+  for (const [r, bin] of die) {
+    const pr = bin.p;
     if (pr > 0) faceP.set(r, pr);
   }
 

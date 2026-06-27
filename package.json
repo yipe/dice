@@ -1,6 +1,6 @@
 {
   "name": "@yipe/dice",
-  "version": "0.2.23",
+  "version": "0.3.0",
   "description": "A high-performance dice probability engine for D&D 5e DPR calculations. Powers dprcalc.com.",
   "keywords": [
     "dnd",
@@ -84,8 +84,6 @@
     "@typescript-eslint/parser": "^8.61.0",
     "@vitest/coverage-v8": "^4.1.8",
     "eslint": "^9.0.0",
-    "ts-node": "^10.9.2",
-    "tsconfig-paths": "^4.2.0",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
