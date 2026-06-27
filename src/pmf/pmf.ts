@@ -22,6 +22,7 @@ export class PMF {
   private _mean?: number;
   private _variance?: number;
   private _stdev?: number;
+  private _fingerprint?: string;
 
   constructor(
     public readonly map: Map<number, Bin> = new Map(),
@@ -738,17 +739,22 @@ export class PMF {
   ): string {
     const [id1, id2] = [p1.identifier, p2.identifier].sort();
 
-    // tiny fingerprints so keys change if the underlying numbers changed
-    const fp = (x: PMF) => {
-      // robust + cheap: mass + size + face sum
-      const m = x.mass().toFixed(12);
-      const n = x.map.size;
-      let faceSum = 0;
-      for (const k of x.map.keys()) faceSum += k;
-      return `${m}|${n}|${faceSum}`;
-    };
+    return `v4:${raw ? "RAW" : "N"}:${id1}+${id2}@${eps}|${p1.fingerprint()}|${p2.fingerprint()}`;
+  }
 
-    return `v4:${raw ? "RAW" : "N"}:${id1}+${id2}@${eps}|${fp(p1)}|${fp(p2)}`;
+  /**
+   * A small content fingerprint (mass + bin count + face sum) so convolution
+   * cache keys change if the underlying numbers do. Memoized because a PMF is
+   * immutable once constructed — this avoids re-summing every key on each
+   * convolve() call (including cache hits).
+   */
+  fingerprint(): string {
+    if (this._fingerprint === undefined) {
+      let faceSum = 0;
+      for (const k of this.map.keys()) faceSum += k;
+      this._fingerprint = `${this.mass().toFixed(12)}|${this.map.size}|${faceSum}`;
+    }
+    return this._fingerprint;
   }
 
   convolve(other: PMF, eps?: number, raw = false): PMF {

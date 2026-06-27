@@ -754,12 +754,6 @@ export class DiceQuery {
   ): { labels: number[]; datasets: Array<{ label: string; data: number[] }> } {
     const damageValues = this.combined.support();
 
-    // Precompute totalCount per bin for the labels you intend to stack for efficiency.
-    damageValues.map((dmg) => {
-      const bin = this.combined.map.get(dmg)!;
-      return labels.reduce((sum, lab) => sum + (bin.count[lab] || 0), 0);
-    });
-
     const datasets = labels.map((outcomeLabel) => ({
       label: outcomeLabel,
       data: damageValues.map((dmg) => {
