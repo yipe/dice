@@ -78,15 +78,14 @@ describe("String Damage Expressions", () => {
       expect(stringRes.weights.crit).toBeCloseTo(builderRes.weights.crit, 10);
       expect(stringRes.weights.miss).toBeCloseTo(builderRes.weights.miss, 10);
 
-      // Check damage distributions match
-      // Note: parser's hd syntax uses different algorithm than builder's reroll(1),
-      // so we expect slight differences in the distributions
-      expect(stringRes.hit.mean()).toBeCloseTo(builderRes.hit.mean(), 0);
+      // The parser's hd syntax now uses the same reroll(1) semantics as the
+      // builder, so the distributions match exactly.
+      expect(stringRes.hit.mean()).toBeCloseTo(builderRes.hit.mean(), 10);
       expect(stringRes.hit.min()).toBe(builderRes.hit.min());
       expect(stringRes.hit.max()).toBe(builderRes.hit.max());
 
       // Check overall PMF mean
-      expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 0);
+      expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 10);
     });
 
     it("should parse '1hd12+3' with explicit crit and match roll(1).d(12).reroll(1).plus(3)", () => {
@@ -103,9 +102,9 @@ describe("String Damage Expressions", () => {
       const stringRes = stringAttack.resolve();
       const builderRes = builderAttack.resolve();
 
-      // Note: parser's hd syntax uses different algorithm than builder's reroll(1)
-      expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 0);
-      expect(stringRes.hit.mean()).toBeCloseTo(builderRes.hit.mean(), 0);
+      // Parser hd now matches builder reroll(1) exactly.
+      expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 10);
+      expect(stringRes.hit.mean()).toBeCloseTo(builderRes.hit.mean(), 10);
     });
   });
 

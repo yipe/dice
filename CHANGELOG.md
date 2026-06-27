@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0]
 
+### Fixed (mathematical correctness)
+
+Found via a multi-agent correctness audit; every fix is verified against an
+independent brute-force enumeration (see `tests/math-correctness.test.ts`).
+
+- **`DiceQuery.probabilityOf(label)` over-counted.** It summed the full `bin.p`
+  of every combined bin that merely *contained* a label, but bins hold multiple
+  mutually-exclusive outcomes — so `probabilityOf('crit')` returned 0.49 where
+  the true P(crit)=0.05. It now returns the correct Poisson-binomial marginal
+  (= `probAtLeastOne`). `missChance()` is fixed by the same change.
+- **`DiceQuery.probExactlyK([labels], k)` array-path** delegated to the buggy
+  `probabilityOf`, disagreeing with the (correct) single-label string path; both
+  now match the true binomial.
+- **`DiceQuery.variance()/stddev()`** used the unstable `E[X²]−E[X]²` form and
+  lost all precision under a large constant damage offset (`1d6 + 1e8` gave
+  variance 2 instead of 35/12). Now uses the centered, additive-per-single form.
+- **`DiceQuery.mean()/variance()`** now stay consistent with an explicitly
+  supplied `combined` that diverges from `convolve(singles)`.
+- **`PMF.convolve()` produced `NaN`** for a zero-mass operand (divide-by-zero in
+  the mass rescale), silently poisoning `DiceQuery.combined`. A zero-mass
+  convolution now correctly yields mass 0.
+- **`probAtLeastOne` is now mass-invariant** (per-attack probability divided by
+  the single's mass) and clamped to `[0,1]` (was returning `1.0000000002`).
+- **`PMF.firstSuccessWeights`** throws on `pSpecial > pSuccess` instead of
+  returning out-of-range probabilities.
+- **Parser `hd6`/`hd20` (reroll-one)** used a weighted union giving
+  `P(1)=1/(2s−1)`; now uses `reroll(1)` for the correct `P(1)=1/s²`. The parser
+  `hd` distribution now matches the builder's `reroll(1)` exactly (the
+  previously loosened tests are tightened).
+
+### Known limitations (documented; recommend maintainer review)
+
+These are real but require API/architecture decisions, so they are documented
+and pinned by tests rather than changed blindly:
+
+- **Parser crit probability with bonus to-hit dice is wrong.** With bonus dice in
+  the to-hit (e.g. Bless, `d20 + 5 + 1d4`), the string parser collapses crit to
+  `1/(20·∏bonusSides)` (and the DPR is off by a few %), because the natural-20
+  slice can't be separated after the bonus dice are convolved. **The builder API
+  computes it correctly** — use `d20.plus(..).plus(bonusDie).ac(..).onCrit(..)`.
+- **Multi-attack conditional statistics are size-biased.** `snapshot()`,
+  `damageStatsFrom()` (single label), `outcomeTotals()` and
+  `outcomeDamageRanges()` aggregate the combined PMF's `count`, which is an
+  *expected count* for N≥2 attacks — so probabilities can exceed 1 and the
+  conditional `avg` is size-biased. They are correct for a single attack /
+  aggregate PMF. Use `probAtLeastOne` / `probExactlyK` for per-attack marginals.
+- **Parser save-for-half mislabels outcomes** for some odd/low constant-damage
+  expressions (the `2·half ∈ hit` auto-detection heuristic false-negatives).
+  Damage values and the overall mean are unaffected; only the `saveHalf` /
+  `saveFail` / `hit` labels are mixed up.
+- **`PMF.mixN`/`gate`/`branch` build O(2ⁿ) identifier strings**, which can blow up
+  (multi-MB, eventual `RangeError`) for very deep (≈20+) gate chains. Prefer
+  `PMF.exclusive`/`PMF.mix` for large mixtures.
+
 ### Breaking
 
 - **`PMF.toJSON()` now returns a plain object** (`{ bins, normalized, identifier }`)
