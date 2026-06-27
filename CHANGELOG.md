@@ -36,6 +36,16 @@ independent brute-force enumeration (see `tests/math-correctness.test.ts`).
   `P(1)=1/(2s−1)`; now uses `reroll(1)` for the correct `P(1)=1/s²`. The parser
   `hd` distribution now matches the builder's `reroll(1)` exactly (the
   previously loosened tests are tightened).
+- **`DiceQuery.snapshot()` outcome probabilities** (`atLeastOneProbability`,
+  `allProbability`) were aggregated as expected counts and could exceed 1 for
+  multi-attack queries. They now use the correct Poisson-binomial marginals
+  (P(≥1) and P(all)) and are always in [0,1]. (`damageRange.avg` remains a
+  size-biased mean for N≥2 — see Known limitations.)
+- **Parser save-for-half mislabeled outcomes** on odd/constant damage (e.g.
+  `(d20 DC 15) * (3) save half`): the brittle "2×half ∈ hit" detection
+  false-negatived, tagging the success mass as `saveFail` and the failure mass
+  as `hit`. Detection is now deterministic (the presence of a save distribution),
+  so `saveHalf`/`saveFail` are always labeled correctly.
 
 ### Known limitations (documented; recommend maintainer review)
 
@@ -47,16 +57,12 @@ and pinned by tests rather than changed blindly:
   `1/(20·∏bonusSides)` (and the DPR is off by a few %), because the natural-20
   slice can't be separated after the bonus dice are convolved. **The builder API
   computes it correctly** — use `d20.plus(..).plus(bonusDie).ac(..).onCrit(..)`.
-- **Multi-attack conditional statistics are size-biased.** `snapshot()`,
-  `damageStatsFrom()` (single label), `outcomeTotals()` and
-  `outcomeDamageRanges()` aggregate the combined PMF's `count`, which is an
-  *expected count* for N≥2 attacks — so probabilities can exceed 1 and the
-  conditional `avg` is size-biased. They are correct for a single attack /
-  aggregate PMF. Use `probAtLeastOne` / `probExactlyK` for per-attack marginals.
-- **Parser save-for-half mislabels outcomes** for some odd/low constant-damage
-  expressions (the `2·half ∈ hit` auto-detection heuristic false-negatives).
-  Damage values and the overall mean are unaffected; only the `saveHalf` /
-  `saveFail` / `hit` labels are mixed up.
+- **Multi-attack conditional damage `avg` is size-biased.** The `avg` returned by
+  `damageStatsFrom()` (single label), `outcomeDamageRanges()` and
+  `snapshot().damageRange` aggregates the combined PMF's `count` (an *expected
+  count* for N≥2 attacks), so it is the size-biased mean E[dmg·#label]/E[#label]
+  rather than a clean conditional expectation. It is correct for a single attack.
+  (The associated *probabilities* are now correct — see Fixed.)
 - **`PMF.mixN`/`gate`/`branch` build O(2ⁿ) identifier strings**, which can blow up
   (multi-MB, eventual `RangeError`) for very deep (≈20+) gate chains. Prefer
   `PMF.exclusive`/`PMF.mix` for large mixtures.
