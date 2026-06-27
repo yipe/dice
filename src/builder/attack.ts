@@ -140,8 +140,8 @@ export class AttackBuilder implements CheckBuilder {
       let pcrit = 0;
       let pmiss = 0;
 
-      for (const [r, rec] of d20 as any as Iterable<[number, any]>) {
-        const pr = typeof rec === "number" ? rec : rec.p;
+      for (const [r, bin] of d20) {
+        const pr = bin.p;
         if (pr <= 0) continue;
 
         // Natural 1 always misses
@@ -165,8 +165,8 @@ export class AttackBuilder implements CheckBuilder {
     if (check instanceof AlwaysHitBuilder) {
       // Preserve rollType for crit odds
       let pCrit = 0;
-      for (const [r, rec] of d20 as any as Iterable<[number, any]>) {
-        const pr = typeof rec === "number" ? rec : rec.p;
+      for (const [r, bin] of d20) {
+        const pr = bin.p;
         if (pr <= 0) continue;
         if (r >= critThreshold) pCrit += pr;
       }
@@ -188,8 +188,8 @@ export class AttackBuilder implements CheckBuilder {
     let phit = 0;
     let pmiss = 0;
 
-    for (const [r, rec] of d20 as any as Iterable<[number, any]>) {
-      const pr = typeof rec === "number" ? rec : rec.p;
+    for (const [r, bin] of d20) {
+      const pr = bin.p;
       if (pr <= 0) continue;
 
       // Handle auto-miss

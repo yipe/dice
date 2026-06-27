@@ -256,34 +256,17 @@ describe("Mixture Helpers", () => {
     expect(pmfs).toEqual({});
   });
 
-  it("getProb (via add) should correctly extract probability from Bin or number", () => {
+  it("add should correctly extract probability from each [value, Bin] pair", () => {
     const mix = new Mixture();
 
-    // Create a mock PMF-like object that iterates with Bin objects
-    const pmfWithBins = {
-      [Symbol.iterator]: function* () {
-        yield [1, { p: 0.25, count: {} }];
-        yield [2, { p: 0.75, count: {} }];
-      },
-    };
-
-    // @ts-expect-error - using a mock PMF
-    mix.add("a", pmfWithBins, 1);
+    mix.add("a", PMF.fromMap(new Map([[1, 0.25], [2, 0.75]])), 1);
     const pmf1 = mix.buildPMF();
     expect(pmf1.pAt(1)).toBeCloseTo(0.25, 12);
     expect(pmf1.pAt(2)).toBeCloseTo(0.75, 12);
 
     mix.clear();
 
-    // Create a mock PMF-like object that iterates with raw numbers (less common)
-    const pmfWithNumbers = {
-      [Symbol.iterator]: function* () {
-        yield [5, 0.4];
-        yield [6, 0.6];
-      },
-    };
-    // @ts-expect-error - using a mock PMF
-    mix.add("b", pmfWithNumbers, 1);
+    mix.add("b", PMF.fromMap(new Map([[5, 0.4], [6, 0.6]])), 1);
     const pmf2 = mix.buildPMF();
     expect(pmf2.pAt(5)).toBeCloseTo(0.4, 12);
     expect(pmf2.pAt(6)).toBeCloseTo(0.6, 12);

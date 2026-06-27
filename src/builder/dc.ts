@@ -79,8 +79,8 @@ export class DCBuilder extends RollBuilder {
       : PMF.delta(0, eps);
 
     let psuccess = 0;
-    for (const [r, rec] of d20 as any as Iterable<[number, any]>) {
-      const pr = typeof rec === "number" ? rec : rec.p;
+    for (const [r, bin] of d20) {
+      const pr = bin.p;
       if (pr <= 0) continue;
       const need = saveDC - staticMod - r;
       psuccess += pr * bonusPMF.tailProbGE(need);

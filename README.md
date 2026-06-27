@@ -312,6 +312,23 @@ const query = new DiceQuery(pmf);
 console.log("DPR:", query.mean());
 ```
 
+### Error Handling
+
+`parse()` throws a `DiceParseError` (a subclass of `Error`) for invalid input.
+Narrow with `instanceof` and inspect the offending `expression`:
+
+```ts
+import { parse, DiceParseError } from "@yipe/dice";
+
+try {
+  parse("d6@3");
+} catch (err) {
+  if (err instanceof DiceParseError) {
+    console.warn(`Bad dice expression: ${err.expression}`);
+  }
+}
+```
+
 ### Sneak Attack (Conditional Damage)
 
 Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:

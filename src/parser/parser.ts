@@ -1,3 +1,4 @@
+import { DiceParseError } from "../common/errors";
 import { LRUCache } from "../common/lru-cache";
 import type { OutcomeType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
@@ -48,21 +49,23 @@ export function parse(expression: string, n: number = 0): PMF {
 
   const chars = [...cleaned];
 
-  let result: Dice | undefined = undefined;
+  let result: Dice;
   try {
     result = parseExpression(chars, n);
   } catch (error) {
-    throw new Error(`Cannot parse dice expression [${expression}]: ${error}`);
+    throw new DiceParseError(
+      `Cannot parse dice expression [${expression}]: ${error}`,
+      { expression, cause: error }
+    );
   }
 
-  try {
-    (result as any).privateData = (result as any).privateData || {};
-    result.identifier = cleaned;
-  } catch {}
+  result.privateData = result.privateData || {};
+  result.identifier = cleaned;
 
   if (chars.length > 0) {
-    throw new Error(
-      `Unexpected token: '${chars[0]}' from expression: '${expression}'`
+    throw new DiceParseError(
+      `Unexpected token: '${chars[0]}' from expression: '${expression}'`,
+      { expression }
     );
   }
 

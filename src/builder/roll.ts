@@ -752,8 +752,10 @@ export class HalfRollBuilder extends RollBuilder {
   // Which is fine.
   // The only issue is if we want it to return HalfRollBuilder, but it doesn't seem designed for that.
 
-  get lastConfig() {
-    return (this.innerRoll as any).lastConfig;
+  override get lastConfig(): RollConfig {
+    // `lastConfig` is protected on the base class; reach it on the wrapped
+    // instance via a typed view rather than `any`.
+    return (this.innerRoll as unknown as { lastConfig: RollConfig }).lastConfig;
   }
 
   getSubRollConfigs(): readonly RollConfig[] {
@@ -795,8 +797,10 @@ export class MaxOfRollBuilder extends RollBuilder {
     return this.innerRoll.hasHiddenState();
   }
 
-  get lastConfig() {
-    return (this.innerRoll as any).lastConfig;
+  override get lastConfig(): RollConfig {
+    // `lastConfig` is protected on the base class; reach it on the wrapped
+    // instance via a typed view rather than `any`.
+    return (this.innerRoll as unknown as { lastConfig: RollConfig }).lastConfig;
   }
 
   getSubRollConfigs(): readonly RollConfig[] {
