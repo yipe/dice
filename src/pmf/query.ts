@@ -16,6 +16,7 @@ import { PMF } from "./pmf";
 export class DiceQuery {
   public readonly singles: PMF[];
   private readonly _eps: number;
+  private readonly _combinedProvided: boolean;
   private _combined?: PMF;
   private _combinedWithAttr?: PMF;
 
@@ -25,6 +26,11 @@ export class DiceQuery {
       throw new Error("DiceQuery contains undefined singles");
     }
     this._eps = eps;
+    // When the caller supplies an explicit combined distribution that may not
+    // equal convolve(singles), the additive closed-form moments would describe
+    // a different distribution than cdf/percentiles. Track this so mean()/
+    // variance() can fall back to the provided combined and stay consistent.
+    this._combinedProvided = combined !== undefined;
     if (combined !== undefined) {
       this._combined =
         Math.abs(combined.mass() - 1) <= eps ? combined : combined.normalize();
@@ -108,6 +114,14 @@ export class DiceQuery {
    * Use case: "What's my average damage per round?"
    */
   mean(): number {
+    // If the caller supplied a combined distribution that may diverge from
+    // convolve(singles), report its mean so mean() stays consistent with
+    // cdf/percentiles/min/max (which all read `combined`).
+    if (this._combinedProvided) {
+      let m = 0;
+      for (const [damageValue, bin] of this.combined) m += damageValue * bin.p;
+      return m;
+    }
     // Expectation is additive over independent attacks: E[Σ Xᵢ] = Σ E[Xᵢ].
     // Computing it directly from the singles avoids building `combined`.
     let totalMean = 0;
@@ -130,22 +144,38 @@ export class DiceQuery {
    * High variance means higher risk/reward. Lower variance means more consistent damage.
    */
   variance(): number {
+    // Consistent with mean(): if a (possibly divergent) combined was provided,
+    // compute the variance of that distribution directly.
+    if (this._combinedProvided) {
+      const mu = this.mean();
+      let v = 0;
+      for (const [damageValue, bin] of this.combined) {
+        const dev = damageValue - mu;
+        v += dev * dev * bin.p;
+      }
+      return v;
+    }
     // Variance is additive over independent attacks: Var[Σ Xᵢ] = Σ Var[Xᵢ].
-    // Each single's variance is E[X²] − E[X]², computed from its own bins,
-    // so this avoids building `combined`.
+    // Use the centered form per single (E[(X−μ)²]) rather than E[X²]−μ², which
+    // suffers catastrophic cancellation when damage has a large constant offset.
     let totalVariance = 0;
     for (const single of this.singles) {
       const mass = single.mass();
       if (mass <= 0) continue;
-      // As in mean(), avoid dividing by an effectively-unit mass.
-      const normalized = Math.abs(mass - 1) <= this._eps;
-      const mu = normalized ? single.mean() : single.mean() / mass;
-      let secondMoment = 0;
-      for (const [damageValue, probabilityBin] of single) {
-        const p = normalized ? probabilityBin.p : probabilityBin.p / mass;
-        secondMoment += damageValue * damageValue * p;
+      if (Math.abs(mass - 1) <= this._eps) {
+        // PMF.variance() is the centered, cached, mass-1 variance.
+        totalVariance += single.variance();
+      } else {
+        // Normalized centered variance of a non-unit-mass single.
+        let mu = 0;
+        for (const [d, b] of single) mu += d * (b.p / mass);
+        let v = 0;
+        for (const [d, b] of single) {
+          const dev = d - mu;
+          v += dev * dev * (b.p / mass);
+        }
+        totalVariance += v;
       }
-      totalVariance += secondMoment - mu * mu;
     }
     return totalVariance;
   }
@@ -270,11 +300,16 @@ export class DiceQuery {
   }
 
   private singleProb(diceIndex: number, label: OutcomeType): number {
+    const single = this.singles[diceIndex];
     let probabilitySum = 0;
-    for (const [, probabilityBin] of this.singles[diceIndex]) {
+    for (const [, probabilityBin] of single) {
       probabilitySum += probabilityBin.count[label] || 0;
     }
-    return probabilitySum;
+    // Return the conditional per-event probability. Dividing by the single's
+    // mass keeps the result in [0,1] for a non-normalized single (e.g. one that
+    // has been scaled), so probAtLeastOne / the binomial DP stay mass-invariant.
+    const mass = single.mass();
+    return mass > 0 ? probabilitySum / mass : 0;
   }
 
   probAtLeastK(labels: OutcomeType | OutcomeType[], k: number): number {
@@ -318,14 +353,19 @@ export class DiceQuery {
 
     let productOfNonOccurrence = 1;
     for (let diceIndex = 0; diceIndex < this.singles.length; diceIndex++) {
-      // Calculate total probability of any of the specified labels occurring
+      // Calculate total probability of any of the specified labels occurring.
+      // Clamp to [0,1] so floating-point drift in the per-attack sum cannot push
+      // the complement out of range.
       let combinedProbability = 0;
       for (const label of labels) {
         combinedProbability += this.singleProb(diceIndex, label);
       }
+      if (combinedProbability < 0) combinedProbability = 0;
+      else if (combinedProbability > 1) combinedProbability = 1;
       productOfNonOccurrence *= 1 - combinedProbability;
     }
-    return 1 - productOfNonOccurrence;
+    const result = 1 - productOfNonOccurrence;
+    return result < 0 ? 0 : result > 1 ? 1 : result;
   }
 
   /**
@@ -646,7 +686,8 @@ export class DiceQuery {
   }
 
   /**
-   * Returns the probability that a result includes ANY of the specified labels.
+   * Returns the probability that at least one attack carries ANY of the
+   * specified labels (the marginal P(≥1) across the independent attacks).
    *
    * Examples:
    * - `query.probabilityOf('hit')` → 0.88 (probability at least one hit occurs)
@@ -655,32 +696,15 @@ export class DiceQuery {
    * Use cases:
    * - "What's the chance my resolution includes a success label?"
    * - "How likely am I to get any hits or crits across all attacks?"
+   *
+   * Note: this must NOT be computed by summing `combined` bin probabilities. A
+   * single combined damage total is reachable by many outcome combinations and
+   * a bin can hold several labels at once, so summing `bin.p` over bins that
+   * contain a label over-counts. The correct marginal is the Poisson-binomial
+   * complement over the per-attack probabilities, i.e. {@link probAtLeastOne}.
    */
   probabilityOf(labels: OutcomeType | OutcomeType[]): number {
-    // Handle single label case (backward compatibility)
-    if (typeof labels === "string") {
-      labels = [labels];
-    }
-
-    let totalProbability = 0;
-    for (const [, probabilityBin] of this.combined) {
-      // Calculate probability that this bin contains ANY of the specified labels
-      // Use inclusion-exclusion principle to avoid double-counting overlaps
-      let binHasAnyLabel = false;
-      for (const label of labels) {
-        if (
-          probabilityBin.count[label] &&
-          (probabilityBin.count[label] as number) > 0
-        ) {
-          binHasAnyLabel = true;
-          break;
-        }
-      }
-      if (binHasAnyLabel) {
-        totalProbability += probabilityBin.p;
-      }
-    }
-    return totalProbability;
+    return this.probAtLeastOne(labels);
   }
 
   /**
