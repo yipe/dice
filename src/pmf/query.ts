@@ -15,7 +15,8 @@ import { PMF } from "./pmf";
 
 export class DiceQuery {
   public readonly singles: PMF[];
-  public readonly combined: PMF;
+  private readonly _eps: number;
+  private _combined?: PMF;
   private _combinedWithAttr?: PMF;
 
   constructor(singles: PMF | PMF[], combined?: PMF, eps = EPS) {
@@ -23,8 +24,28 @@ export class DiceQuery {
     if (this.singles.some((s) => s === undefined)) {
       throw new Error("DiceQuery contains undefined singles");
     }
-    const c = combined ?? PMF.convolveMany(this.singles);
-    this.combined = Math.abs(c.mass() - 1) <= eps ? c : c.normalize();
+    this._eps = eps;
+    if (combined !== undefined) {
+      this._combined =
+        Math.abs(combined.mass() - 1) <= eps ? combined : combined.normalize();
+    }
+  }
+
+  /**
+   * The combined damage distribution of all single PMFs (their convolution),
+   * normalized to total probability 1.
+   *
+   * Computed lazily on first access and cached. Queries that only need
+   * additive statistics — {@link DiceQuery.mean}, {@link DiceQuery.variance},
+   * {@link DiceQuery.stddev} — never trigger this convolution.
+   */
+  get combined(): PMF {
+    if (this._combined === undefined) {
+      const c = PMF.convolveMany(this.singles);
+      this._combined =
+        Math.abs(c.mass() - 1) <= this._eps ? c : c.normalize();
+    }
+    return this._combined;
   }
 
   private static readonly DEFAULT_OUTCOMES: readonly OutcomeType[] = [
@@ -57,8 +78,16 @@ export class DiceQuery {
       return this._combinedWithAttr;
     }
 
-    // Add attribution to each single PMF, then convolve
-    // The existing convolution logic will preserve attribution correctly
+    // Fast path: if every single already carries attribution (as parser-
+    // generated PMFs do), the attributed convolution is bit-for-bit identical
+    // to `combined` — reuse it instead of convolving a second time.
+    if (this.singles.every((pmf) => pmf.hasAttribution())) {
+      this._combinedWithAttr = this.combined;
+      return this._combinedWithAttr;
+    }
+
+    // Otherwise (e.g. builder-generated PMFs that only carry `count`), add
+    // attribution to each single PMF, then convolve.
     const singlesWithAttr = this.singles.map((pmf) => pmf.withAttribution());
     const combined = PMF.convolveMany(singlesWithAttr, this.combined.epsilon);
 
@@ -79,11 +108,18 @@ export class DiceQuery {
    * Use case: "What's my average damage per round?"
    */
   mean(): number {
-    let totalSum = 0;
-    for (const [damageValue, probabilityBin] of this.combined) {
-      totalSum += damageValue * probabilityBin.p;
+    // Expectation is additive over independent attacks: E[Σ Xᵢ] = Σ E[Xᵢ].
+    // Computing it directly from the singles avoids building `combined`.
+    let totalMean = 0;
+    for (const single of this.singles) {
+      const mass = single.mass();
+      if (mass <= 0) continue;
+      // Match `combined`'s semantics: only divide by mass when it is not
+      // already 1 (within eps), so an already-normalized single is bit-exact.
+      totalMean +=
+        Math.abs(mass - 1) <= this._eps ? single.mean() : single.mean() / mass;
     }
-    return totalSum;
+    return totalMean;
   }
 
   /**
@@ -94,13 +130,24 @@ export class DiceQuery {
    * High variance means higher risk/reward. Lower variance means more consistent damage.
    */
   variance(): number {
-    const meanValue = this.mean();
-    let varianceSum = 0;
-    for (const [damageValue, probabilityBin] of this.combined) {
-      const deviationFromMean = damageValue - meanValue;
-      varianceSum += deviationFromMean * deviationFromMean * probabilityBin.p;
+    // Variance is additive over independent attacks: Var[Σ Xᵢ] = Σ Var[Xᵢ].
+    // Each single's variance is E[X²] − E[X]², computed from its own bins,
+    // so this avoids building `combined`.
+    let totalVariance = 0;
+    for (const single of this.singles) {
+      const mass = single.mass();
+      if (mass <= 0) continue;
+      // As in mean(), avoid dividing by an effectively-unit mass.
+      const normalized = Math.abs(mass - 1) <= this._eps;
+      const mu = normalized ? single.mean() : single.mean() / mass;
+      let secondMoment = 0;
+      for (const [damageValue, probabilityBin] of single) {
+        const p = normalized ? probabilityBin.p : probabilityBin.p / mass;
+        secondMoment += damageValue * damageValue * p;
+      }
+      totalVariance += secondMoment - mu * mu;
     }
-    return varianceSum;
+    return totalVariance;
   }
 
   /**
