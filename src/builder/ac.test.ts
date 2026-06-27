@@ -102,8 +102,8 @@ describe("AttackRollBuilder", () => {
       const copy = original.copy();
 
       expect(copy.toExpression()).toBe(original.toExpression());
-      const a = JSON.parse(copy.toPMF().toJSON());
-      const b = JSON.parse(original.toPMF().toJSON());
+      const a = JSON.parse(copy.toPMF().toJSONString());
+      const b = JSON.parse(original.toPMF().toJSONString());
       delete a.identifier;
       delete b.identifier;
       expect(a).toEqual(b);

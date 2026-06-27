@@ -92,8 +92,6 @@ export class PMF {
       .addScaled(failurePMF, q)
       .addScaled(successPMF, p);
 
-    // Optional hygiene: drop exact zeros
-    // return out.compact();
     return out;
   }
 
@@ -144,8 +142,8 @@ export class PMF {
    * @param fallback PMF to apply when this PMF is *not* selected.
    * @returns A new PMF representing the weighted mixture of this PMF and the fallback.
    */
-  gate(p: number, zero: PMF) {
-    return PMF.branch(this, zero, p);
+  gate(p: number, fallback: PMF) {
+    return PMF.branch(this, fallback, p);
   }
 
   /**
@@ -404,7 +402,7 @@ export class PMF {
    */
   replicate(n: number): PMF[] {
     if (!Number.isInteger(n) || n <= 0) {
-      throw new Error("combineN(n): n must be a positive integer");
+      throw new Error("replicate(n): n must be a positive integer");
     }
     if (n === 1) return [this];
     return Array.from({ length: n }, () => this);
@@ -439,11 +437,11 @@ export class PMF {
     const normalizationFactor = this.mass();
     if (normalizationFactor === 0) return this;
 
+    // Note: this divides by normalizationFactor rather than multiplying by its
+    // reciprocal, to keep results bit-identical to direct division.
     const normalizedMap = new Map<number, Bin>();
     for (const [damageValue, probabilityBin] of this.map) {
-      const normalizedProbability = probabilityBin.p / normalizationFactor;
       const normalizedCount: OutcomeLabelMap = {};
-
       for (const labelKey in probabilityBin.count) {
         normalizedCount[labelKey] =
           (probabilityBin.count[labelKey] as number) / normalizationFactor;
@@ -459,7 +457,7 @@ export class PMF {
       }
 
       normalizedMap.set(damageValue, {
-        p: normalizedProbability,
+        p: probabilityBin.p / normalizationFactor,
         count: normalizedCount,
         attr: normalizedAttributes,
       });
@@ -582,6 +580,33 @@ export class PMF {
     return this._stdev;
   }
 
+  /** Deep-copies a Bin, cloning its count and (optional) attr maps. */
+  private static cloneBin(bin: Bin): Bin {
+    return {
+      p: bin.p,
+      count: { ...bin.count },
+      attr: bin.attr ? { ...bin.attr } : undefined,
+    };
+  }
+
+  /** Returns a new Bin with p, count, and attr all multiplied by `factor`. */
+  private static scaleBin(bin: Bin, factor: number): Bin {
+    const count: OutcomeLabelMap = {};
+    for (const k in bin.count) {
+      count[k] = (bin.count[k] as number) * factor;
+    }
+
+    let attr: OutcomeLabelMap | undefined;
+    if (bin.attr) {
+      attr = {};
+      for (const k in bin.attr) {
+        attr[k] = (bin.attr[k] as number) * factor;
+      }
+    }
+
+    return { p: bin.p * factor, count, attr };
+  }
+
   private static mergeInto(
     destinationMap: Map<number, Bin>,
     damageValue: number,
@@ -589,11 +614,7 @@ export class PMF {
   ) {
     const existingBin = destinationMap.get(damageValue);
     if (!existingBin) {
-      destinationMap.set(damageValue, {
-        p: binToAdd.p,
-        count: { ...binToAdd.count },
-        attr: binToAdd.attr ? { ...binToAdd.attr } : undefined,
-      });
+      destinationMap.set(damageValue, PMF.cloneBin(binToAdd));
       return;
     }
 
@@ -634,33 +655,15 @@ export class PMF {
 
     const resultMap = new Map<number, Bin>();
     for (const [dmg, bin] of this.map) {
-      resultMap.set(dmg, {
-        p: bin.p,
-        count: { ...bin.count },
-        attr: bin.attr ? { ...bin.attr } : undefined,
-      });
+      resultMap.set(dmg, PMF.cloneBin(bin));
     }
 
     for (const [damageValue, probabilityBin] of branch.map) {
-      const scaledCount: OutcomeLabelMap = {};
-      for (const k in probabilityBin.count) {
-        scaledCount[k] = probability * (probabilityBin.count[k] as number);
-      }
-
-      let scaledAttributes: OutcomeLabelMap | undefined;
-      if (probabilityBin.attr) {
-        scaledAttributes = {};
-        for (const k in probabilityBin.attr) {
-          scaledAttributes[k] =
-            probability * (probabilityBin.attr[k] as number);
-        }
-      }
-
-      PMF.mergeInto(resultMap, damageValue, {
-        p: probability * probabilityBin.p,
-        count: scaledCount,
-        attr: scaledAttributes,
-      });
+      PMF.mergeInto(
+        resultMap,
+        damageValue,
+        PMF.scaleBin(probabilityBin, probability)
+      );
     }
 
     return new PMF(
@@ -676,26 +679,7 @@ export class PMF {
 
     const scaledMap = new Map<number, Bin>();
     for (const [damageValue, probabilityBin] of this.map) {
-      const scaledCount: OutcomeLabelMap = {};
-      for (const labelKey in probabilityBin.count) {
-        scaledCount[labelKey] =
-          (probabilityBin.count[labelKey] as number) * factor;
-      }
-
-      let scaledAttributes: OutcomeLabelMap | undefined;
-      if (probabilityBin.attr) {
-        scaledAttributes = {};
-        for (const labelKey in probabilityBin.attr) {
-          scaledAttributes[labelKey] =
-            (probabilityBin.attr[labelKey] as number) * factor;
-        }
-      }
-
-      scaledMap.set(damageValue, {
-        p: probabilityBin.p * factor,
-        count: scaledCount,
-        attr: scaledAttributes,
-      });
+      scaledMap.set(damageValue, PMF.scaleBin(probabilityBin, factor));
     }
     return new PMF(
       scaledMap,
@@ -709,11 +693,11 @@ export class PMF {
     const transformedMap = new Map<number, Bin>();
     for (const [originalDamage, probabilityBin] of this.map) {
       const transformedDamage = damageTransformFunction(originalDamage);
-      PMF.mergeInto(transformedMap, transformedDamage, {
-        p: probabilityBin.p,
-        count: { ...probabilityBin.count },
-        attr: probabilityBin.attr ? { ...probabilityBin.attr } : undefined,
-      });
+      PMF.mergeInto(
+        transformedMap,
+        transformedDamage,
+        PMF.cloneBin(probabilityBin)
+      );
     }
     return new PMF(
       transformedMap,
@@ -823,31 +807,6 @@ export class PMF {
     return this.convolve(other, eps, true);
   }
 
-  // Collapse repeated identical PMFs using power() and return a sorted list
-  // Temporarily disabled for now. This was used for a performance optimization, but can lose data provenance.
-  //   private static collapseIdentical(pmfList: PMF[], eps: number): PMF[] {
-  //     const grouped = new Map<string, { pmf: PMF; count: number }>();
-  //     for (const pmf of pmfList) {
-  //       const id = pmf.identifier;
-  //       const g = grouped.get(id);
-  //       if (g) g.count++;
-  //       else grouped.set(id, { pmf, count: 1 });
-  //     }
-
-  //     if (grouped.size >= pmfList.length) return pmfList;
-
-  //     const collapsed: PMF[] = [];
-  //     for (const { pmf, count } of grouped.values()) {
-  //       collapsed.push(count > 1 ? pmf.power(count, eps) : pmf);
-  //     }
-
-  //     // Stable order for better cache locality
-  //     collapsed.sort((a, b) =>
-  //       a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0
-  //     );
-  //     return collapsed;
-  //   }
-
   // Reduce a list of PMFs by left-folding convolve() with the given eps
   private static reduceConvolveLeft(pmfList: PMF[], eps: number): PMF {
     let result = pmfList[0];
@@ -871,21 +830,33 @@ export class PMF {
     if (pmfList.length === 0) return PMF.empty(eps);
     if (pmfList.length === 1) return pmfList[0];
 
-    // Optimization: Group identical PMFs and use power() to collapse repeats
-    // If nothing collapses, this returns the same array reference.
-    // const collapsed = PMF.collapseIdentical(pmfList, eps);
-
-    // Optimization: Linear combination with automatic intermediate caching
-    // Whether collapsed or not, reduce via left-folded convolved()
+    // Linear combination with automatic intermediate caching: each prefix
+    // (A+B, (A+B)+C, ...) is a stable cache key, maximizing reuse.
     return PMF.reduceConvolveLeft(pmfList, eps);
   }
 
-  toJSON() {
-    return JSON.stringify({
+  /**
+   * Returns a plain, JSON-serializable representation of this PMF.
+   *
+   * Follows the standard `toJSON` contract, so `JSON.stringify(pmf)` produces
+   * the expected output (no double-encoding). Use {@link PMF.fromJSON} to
+   * reconstruct, or {@link PMF.toJSONString} if you need the string directly.
+   */
+  toJSON(): {
+    bins: Array<[number, Bin]>;
+    normalized: boolean;
+    identifier: string;
+  } {
+    return {
       bins: [...this.map.entries()],
       normalized: this.normalized,
       identifier: this.identifier,
-    });
+    };
+  }
+
+  /** Serializes this PMF to a JSON string (equivalent to `JSON.stringify(pmf)`). */
+  toJSONString(): string {
+    return JSON.stringify(this);
   }
 
   static fromJSON(jsonData: {
@@ -977,7 +948,6 @@ export class PMF {
     return new PMF(prunedMap, epsRel, false, `prune(${this.identifier})`);
   }
 
-  /** NEW - REVIEW IF THESE ARE USEFUL OR DUPLCIATIVE?  */
   /** Probability mass at exactly x. */
   pAt(x: number): number {
     return this.map.get(x)?.p ?? 0;
@@ -1075,9 +1045,8 @@ export class PMF {
 
   tailProbGE(t: number): number {
     let s = 0;
-    for (const [x, rec] of this) {
-      const p = typeof rec === "number" ? rec : rec.p;
-      if (p > 0 && x >= t) s += p;
+    for (const [x, bin] of this) {
+      if (bin.p > 0 && x >= t) s += bin.p;
     }
     return s;
   }
@@ -1195,15 +1164,14 @@ export class PMF {
     const probs = new Map<number, number>();
     const counts = new Map<number, Record<string, number>>();
 
-    for (const [v, rec] of this) {
-      if (Math.abs(rec.p) < eps) continue;
+    for (const [v, bin] of this) {
+      if (Math.abs(bin.p) < eps) continue;
       const u = round(f(v));
-      probs.set(u, (probs.get(u) ?? 0) + rec.p);
+      probs.set(u, (probs.get(u) ?? 0) + bin.p);
 
       if (preserveCounts) {
         // Merge counts if present
-        const rec = this.map.get(v);
-        const src = typeof rec === "number" ? undefined : rec?.count;
+        const src = bin.count;
         if (src) {
           const dest = counts.get(u) ?? {};
           for (const k in src) {

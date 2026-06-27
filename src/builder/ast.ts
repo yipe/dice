@@ -8,6 +8,7 @@ import type {
   DieNode,
   ExpressionNode,
   KeepNode,
+  MaxOfNode,
   SumNode,
 } from "./nodes";
 import type { RollBuilder } from "./roll";
@@ -80,7 +81,11 @@ export function astFromRollConfigs(
         if (trials === 1) {
           node = perTrial;
         } else {
-          node = { type: "maxOf", count: trials, child: perTrial } as any;
+          node = {
+            type: "maxOf",
+            count: trials,
+            child: perTrial,
+          } as MaxOfNode;
         }
       } else if (trials === baseCount) {
         // Classic pool: keep K of N faces from N iid dice
