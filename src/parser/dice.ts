@@ -101,21 +101,28 @@ export class Dice {
   calculateHitDistribution(): DamageDistribution {
     const hitValues: DamageDistribution = {};
 
+    // Hoist the per-outcome distributions out of the face loop: they are
+    // constant across faces, so fetching (and previously cloning) them once is
+    // O(faces + outcomes) instead of O(faces × outcomes). The stored maps are
+    // only read here, never mutated, so reading them directly is safe and
+    // produces identical counts.
+    const subtractedOutcomes: (DamageDistribution | undefined)[] = [
+      this.outcomeData.crit,
+      this.outcomeData.missNone,
+      this.outcomeData.missDamage,
+      this.outcomeData.saveHalf,
+      this.outcomeData.saveFail,
+      this.outcomeData.pc,
+    ];
+
     for (const [face, totalCount] of Object.entries(this.faces)) {
       const numFace = Number(face);
       let hitCount = totalCount;
 
-      for (const outcomeType of [
-        "crit",
-        "missNone",
-        "missDamage",
-        "saveHalf",
-        "saveFail",
-        "pc",
-      ] as Partial<OutcomeType>[]) {
-        const distribution = this.getOutcomeDistribution(outcomeType);
-        if (distribution && distribution[numFace]) {
-          hitCount -= distribution[numFace];
+      for (const distribution of subtractedOutcomes) {
+        const outcomeCount = distribution?.[numFace];
+        if (outcomeCount) {
+          hitCount -= outcomeCount;
         }
       }
 
@@ -462,8 +469,8 @@ export class Dice {
     const pcDistro = this.getOutcomeDistribution("pc") || {};
 
     let isSaveHalf = false;
-    for (const halfDamage of Object.keys(saveDistro).map(Number)) {
-      const fullDamage = halfDamage * 2;
+    for (const halfDamageStr in saveDistro) {
+      const fullDamage = Number(halfDamageStr) * 2;
       if (fullDamage > 0 && hitDistro[fullDamage]) {
         isSaveHalf = true;
         break;
@@ -474,8 +481,9 @@ export class Dice {
 
     const clampNonNeg = (x: number) => (x < 0 && x > -1e-15 ? 0 : x);
 
-    // Process each face value
-    for (const [faceStr, faceCountRaw] of Object.entries(this.getFaceMap())) {
+    // Process each face value (iterate the internal map directly; this loop
+    // only reads it, so the defensive clone from getFaceMap() is unnecessary)
+    for (const [faceStr, faceCountRaw] of Object.entries(this.faces)) {
       const face = Number(faceStr);
       const faceCount = Number(faceCountRaw);
 

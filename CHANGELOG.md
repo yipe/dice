@@ -49,6 +49,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   probability channel is bit-identical; per-label `count`/`attr` provenance may
   re-associate by at most a few ULP (≤1e-14 even at 16 attacks, ~100× below the
   eps pruning threshold).
+- **Convolution cache-key fingerprint is memoized** on each (immutable) PMF
+  instead of re-summing every bin key on every `convolve()` call — ~36% faster
+  on warm cache hits. Bit-identical (`PMF.fingerprint()` returns the same string).
+- **`Dice.calculateHitDistribution()` no longer clones outcome distributions per
+  face** — it reads the stored maps once instead of `O(faces × outcomes)` clones,
+  ~10% faster cold parsing of wide-support expressions. Bit-identical.
+- **`DiceQuery.toStackedChartData()` drops a dead `O(N×L)` precomputation pass**
+  whose result was discarded — ~2× faster. Bit-identical.
+- Minor bit-identical cleanups on the parse path (`Dice.toPMF` iterates the
+  internal face map directly; `multiplyDiceByDice` uses a `Map`).
+
+  All of the above were verified bit-for-bit identical (probabilities, counts,
+  means, variance) across the full expression corpus.
 
 ### Changed
 

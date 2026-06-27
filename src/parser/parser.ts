@@ -271,7 +271,10 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
   if (typeof d2 === "number") d2 = Dice.scalar(d2);
 
   const result = new Dice();
-  const faces: Record<number, Dice> = {};
+  // Keyed by face value. A Map avoids the number→string→parseFloat round-trip of
+  // an object and preserves insertion order, which matches d1.keys() ascending
+  // order — so the combine order below is identical to the previous version.
+  const faces = new Map<number, Dice>();
   let normalizationFactor = 1;
 
   for (const key of d1.keys()) {
@@ -290,12 +293,10 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
     }
 
     normalizationFactor *= face.total();
-    faces[key] = face;
+    faces.set(key, face);
   }
 
-  for (const key of Object.keys(faces)) {
-    const k = parseFloat(key); // keys from object are strings
-    const face = faces[k];
+  for (const [k, face] of faces) {
     const count = d1.get(k);
     result.combineInPlace(
       face.normalize((count * normalizationFactor) / face.total())
