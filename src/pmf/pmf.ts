@@ -823,10 +823,13 @@ export class PMF {
     // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
     const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
     const mGot = result.mass();
-    if (mExp !== 0 && Math.abs(mGot - mExp) > epsilon) {
+    // Guard mGot !== 0: a zero-mass operand convolves to the zero measure
+    // (mass 0). Without this guard the non-raw path would scaleMass(mExp/0) =
+    // scaleMass(Infinity), poisoning every bin to 0*Infinity = NaN.
+    if (mExp !== 0 && mGot !== 0 && Math.abs(mGot - mExp) > epsilon) {
       result = result.scaleMass(mExp / mGot);
     }
-    if (!raw && Math.abs(result.mass() - 1) > epsilon)
+    if (!raw && mGot !== 0 && Math.abs(result.mass() - 1) > epsilon)
       result = result.normalize();
 
     pmfCache?.set(cacheKey, result);
@@ -1156,6 +1159,22 @@ export class PMF {
     pSpecial: number,
     n: number
   ) {
+    // Preconditions: the "special" successes are a subset of all successes, so
+    // 0 <= pSpecial <= pSuccess <= 1. Without this guard, violating inputs
+    // silently produce probabilities outside [0,1].
+    if (
+      !Number.isFinite(pSuccess) ||
+      !Number.isFinite(pSpecial) ||
+      pSuccess < 0 ||
+      pSuccess > 1 ||
+      pSpecial < 0 ||
+      pSpecial - pSuccess > EPS
+    ) {
+      throw new Error(
+        `firstSuccessWeights: require 0 <= pSpecial <= pSuccess <= 1 (got pSuccess=${pSuccess}, pSpecial=${pSpecial})`
+      );
+    }
+
     const pFail = 1 - pSuccess;
     const pFailAll = Math.pow(pFail, n);
 
