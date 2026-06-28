@@ -371,16 +371,19 @@ function computeMaxOfPMF(
 
     dfs(count, -Infinity, 1);
   } else {
-    // For larger cases, use the CDF method
+    // For larger cases, use the CDF method. Walk the sorted support once while
+    // accumulating a running CDF, so each P(max = v) costs O(1) instead of a
+    // full-map cdfAt() scan (previously O(N) per value → O(N²) overall).
+    // Between two consecutive support points there is no probability mass, so
+    // the running CDF up to (but not including) v equals cdfAt(v - 1).
     const sortedSupport = [...support].sort((a, b) => a - b);
+    let runningCdf = 0;
     for (const value of sortedSupport) {
-      // P(max = value) = P(all rolls <= value) - P(all rolls <= value-1)
-      const cdfAtValue = pmf.cdfAt(value);
-      const cdfAtValueMinus1 =
-        value > sortedSupport[0] ? pmf.cdfAt(value - 1) : 0;
+      const prevCdf = runningCdf;
+      runningCdf += pmf.pAt(value);
 
-      const probMax =
-        Math.pow(cdfAtValue, count) - Math.pow(cdfAtValueMinus1, count);
+      // P(max = value) = P(all rolls <= value) - P(all rolls <= value-1)
+      const probMax = Math.pow(runningCdf, count) - Math.pow(prevCdf, count);
       if (probMax > eps) {
         out.set(value, probMax);
       }
@@ -430,8 +433,13 @@ function keepSumPMF(
   // Select t = min(X, keep - used) into the sum (highest picks first), then continue with r - X.
 
   type SumMap = Map<number, number>;
-  let state: Map<string, SumMap> = new Map();
-  const keyOf = (used: number, r: number) => `${used}|${r}`;
+  let state: Map<number, SumMap> = new Map();
+  // Pack the (used, remainingTrials) state into a single integer key instead of
+  // a "used|r" string. r ∈ [0, total], so a stride of (total + 1) is collision
+  // free, and decoding is plain integer math — no split()/parseInt() per
+  // transition in the hot loop. Behavior is identical (same states, same order).
+  const stride = total + 1;
+  const keyOf = (used: number, r: number) => used * stride + r;
 
   state.set(keyOf(0, total), new Map([[0, 1]]));
 
@@ -475,9 +483,9 @@ function keepSumPMF(
     return out.size === m.size ? m : out;
   };
 
-  const pruneState = (st: Map<string, SumMap>, threshold: number) => {
+  const pruneState = (st: Map<number, SumMap>, threshold: number) => {
     if (threshold <= 0) return st;
-    const out = new Map<string, SumMap>();
+    const out = new Map<number, SumMap>();
     for (const [k, m] of st) {
       const mm = pruneMap(m, threshold);
       if (mm.size > 0) out.set(k, mm);
@@ -491,12 +499,11 @@ function keepSumPMF(
     if (p <= 0) continue;
     const q = Math.max(eps, 1 - processedMass);
     const pCond = Math.min(1, p / q);
-    const next: Map<string, SumMap> = new Map();
+    const next: Map<number, SumMap> = new Map();
 
     for (const [k, m] of state) {
-      const [usedStr, rStr] = k.split("|");
-      const used = parseInt(usedStr, 10);
-      const r = parseInt(rStr, 10);
+      const used = Math.floor(k / stride);
+      const r = k - used * stride;
       if (r === 0) {
         // No trials left; carry state forward unchanged
         const destKey = keyOf(used, 0);

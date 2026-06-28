@@ -1,5 +1,6 @@
 // dice.ts (internal)
 
+import { DiceParseError } from "../common/errors";
 import type {
   Bin,
   DamageDistribution,
@@ -8,6 +9,16 @@ import type {
 } from "../common/types";
 import { EPS } from "../common/types";
 import { PMF } from "../pmf/pmf";
+
+/**
+ * Work budget for a single dice×dice operation. binaryOp is O(faces₁ × faces₂),
+ * so two individually-legal large dice (e.g. `d100000 + d100000`) would otherwise
+ * enumerate ~10^10 face pairs and hang. The parser's per-die / per-count caps
+ * bound each operand but not their product, so this bounds the operation itself.
+ * Generous enough for any realistic expression; only pathological blow-ups trip
+ * it. (Chosen so expressions well beyond normal use still parse; tune if needed.)
+ */
+const MAX_BINARY_OUTCOMES = 100_000_000;
 
 /** Internal bookkeeping attached to a {@link Dice} during parsing. */
 export interface DicePrivateData {
@@ -25,10 +36,10 @@ export interface DicePrivateData {
 export class Dice {
   private readonly faces: DamageDistribution = {};
   public privateData: DicePrivateData = {};
-  private outcomeData: Record<OutcomeType, DamageDistribution> = {} as Record<
-    OutcomeType,
-    DamageDistribution
-  >;
+  // Partial: the object starts empty and gains keys as outcomes are recorded,
+  // so the type must not claim every OutcomeType is present. (Previously typed
+  // as a full Record via an `as` cast, which lied about missing keys.)
+  private outcomeData: Partial<Record<OutcomeType, DamageDistribution>> = {};
   private hasHitDistributionCalculated = false;
   public identifier?: string;
 
@@ -50,9 +61,8 @@ export class Dice {
     return { ...distribution };
   }
 
-  getFullOutcomeDistribution(): Record<
-    OutcomeType,
-    DamageDistribution | undefined
+  getFullOutcomeDistribution(): Partial<
+    Record<OutcomeType, DamageDistribution>
   > {
     return { ...this.outcomeData };
   }
@@ -161,6 +171,18 @@ export class Dice {
 
     const isScalar = typeof other === "number";
     const keys1 = this.keys();
+    // Hoist the inner die's faces out of the outer loop: they are constant
+    // across key1, so computing them once avoids re-allocating the array on
+    // every outer iteration.
+    const keys2 = isScalar ? [] : (other as Dice).keys();
+
+    // Guard the O(faces₁ × faces₂) work before running it: a binary op between
+    // two large (but individually legal) dice would otherwise blow up.
+    if (!isScalar && keys1.length * keys2.length > MAX_BINARY_OUTCOMES) {
+      throw new DiceParseError(
+        `Dice operation over ${keys1.length}×${keys2.length} face pairs exceeds the maximum of ${MAX_BINARY_OUTCOMES}`
+      );
+    }
 
     for (const key1 of keys1) {
       const value1 = this.faces[key1]!;
@@ -169,7 +191,6 @@ export class Dice {
         const resultKey = op(key1, other as number);
         result.increment(resultKey, value1);
       } else {
-        const keys2 = other.keys();
         for (const key2 of keys2) {
           const value2 = other.faces[key2]!;
           const resultKey = op(key1, key2);
@@ -373,11 +394,13 @@ export class Dice {
     const rerollDice =
       typeof toReroll === "number" ? Dice.scalar(toReroll) : toReroll;
 
-    const removed = this.removeFaces(rerollDice.keys());
+    const rerollKeys = rerollDice.keys();
+    const rerollSet = new Set(rerollKeys);
+    const removed = this.removeFaces(rerollKeys);
     let result = new Dice();
 
     for (const face of this.keys()) {
-      const wasRerolled = rerollDice.keys().includes(face);
+      const wasRerolled = rerollSet.has(face);
       result = result.combine(removed);
       if (wasRerolled) {
         result = result.combine(this);

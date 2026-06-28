@@ -9,6 +9,18 @@ type DiceOperation = ((this: Dice, other: Dice | number) => Dice) & {
 };
 
 /**
+ * Resource-exhaustion guards. Adversarial expressions (a huge die, a huge dice
+ * count, or a keep over a large enumerated pool) can otherwise blow up memory
+ * and CPU. These caps are deliberately generous so every legitimate expression
+ * the suite exercises (e.g. d100000) still parses.
+ */
+// Must stay >= 100000: the suite asserts d100000 (100k faces) parses.
+const MAX_DIE_SIDES = 1_000_000;
+const MAX_DICE_COUNT = 10_000;
+// multiplyDiceByDice enumerates faces^count outcomes when a keep is applied.
+const MAX_KEEP_OUTCOMES = 1_000_000;
+
+/**
  * Internal parse cache for PMFs produced from string expressions.
  * Keyed by cleaned expression (spaces stripped, lowercased) and optional `n` value.
  */
@@ -294,7 +306,14 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
     }
 
     if (d2.privateData.keep) {
-      // Repeat dice2 "key" times and apply keep
+      // Repeat dice2 "key" times and apply keep. opDice enumerates the full
+      // faces^count outcome space, so guard against a combinatorial blow-up.
+      const faceCount = d2.keys().length;
+      if (Math.pow(faceCount, key) > MAX_KEEP_OUTCOMES) {
+        throw new DiceParseError(
+          `Keep enumeration of ${faceCount}^${key} outcomes exceeds the maximum of ${MAX_KEEP_OUTCOMES}`
+        );
+      }
       const repeat: Dice[] = Array(key).fill(d2);
       face = opDice(repeat, d2.privateData.keep);
     } else {
@@ -317,6 +336,11 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
 }
 
 function multiplyDice(n: number, d: Dice): Dice {
+  if (n > MAX_DICE_COUNT) {
+    throw new DiceParseError(
+      `Dice count ${n} exceeds the maximum of ${MAX_DICE_COUNT}`
+    );
+  }
   if (n === 0) return new Dice(0);
   if (n === 1) return d;
 
@@ -434,6 +458,11 @@ function parseDice(s: string[], n: number): Dice | undefined {
   }
 
   const sides = parseNumber(s, n);
+  if (sides > MAX_DIE_SIDES) {
+    throw new DiceParseError(
+      `Die size ${sides} exceeds the maximum of ${MAX_DIE_SIDES}`
+    );
+  }
   let result = new Dice(sides);
 
   if (rerollOne) {
