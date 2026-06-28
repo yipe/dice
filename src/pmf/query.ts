@@ -312,6 +312,36 @@ export class DiceQuery {
     return mass > 0 ? probabilitySum / mass : 0;
   }
 
+  /**
+   * Full count distribution [P(0), P(1), …, P(n)] for "an attack succeeds if it
+   * carries ANY of `labels`", over the n independent singles.
+   *
+   * Each single's per-event success probability is the Poisson-binomial
+   * marginal P(≥1 of labels) from {@link probabilityOf} (i.e. probAtLeastOne),
+   * computed exactly once. The binomial DP then runs once to produce the whole
+   * distribution, so the array-label paths of probExactlyK / probAtLeastK /
+   * probAtMostK can slice or sum from it instead of rebuilding a DiceQuery and
+   * re-running the DP per requested k.
+   */
+  private countDistribution(labels: OutcomeType[]): number[] {
+    const n = this.singles.length;
+    const successProbabilities = this.singles.map((single) =>
+      new DiceQuery([single]).probabilityOf(labels)
+    );
+
+    const dist = new Array(n + 1).fill(0);
+    dist[0] = 1;
+    for (const successProb of successProbabilities) {
+      for (let outcomeCount = n; outcomeCount >= 1; outcomeCount--) {
+        dist[outcomeCount] =
+          dist[outcomeCount] * (1 - successProb) +
+          dist[outcomeCount - 1] * successProb;
+      }
+      dist[0] *= 1 - successProb;
+    }
+    return dist;
+  }
+
   probAtLeastK(labels: OutcomeType | OutcomeType[], k: number): number {
     const L = Array.isArray(labels) ? [...new Set(labels)] : [labels];
     const n = this.singles.length;
@@ -319,9 +349,12 @@ export class DiceQuery {
     if (k <= 0) return 1;
     if (k > n) return 0;
 
+    // Sum the upper tail of the single, shared count distribution rather than
+    // calling probExactlyK (which rebuilt the distribution) once per i.
+    const dist = this.countDistribution(L);
     let tail = 0;
     for (let i = k; i <= n; i++) {
-      tail += this.probExactlyK(L, i);
+      tail += dist[i];
     }
 
     if (tail < 0) return 0;
@@ -432,26 +465,10 @@ export class DiceQuery {
       return probabilityArray[k];
     }
 
-    // For multiple labels, we need to compute success probability for each single attack
-    const successProbabilities = this.singles.map((single) => {
-      const singleQuery = new DiceQuery([single]);
-      return singleQuery.probabilityOf(labels);
-    });
-
-    // Use binomial distribution with combined success probability
-    const binomialProbs = new Array(k + 1).fill(0);
-    binomialProbs[0] = 1;
-
-    for (const successProb of successProbabilities) {
-      for (let outcomeCount = k; outcomeCount >= 1; outcomeCount--) {
-        binomialProbs[outcomeCount] =
-          binomialProbs[outcomeCount] * (1 - successProb) +
-          binomialProbs[outcomeCount - 1] * successProb;
-      }
-      binomialProbs[0] *= 1 - successProb;
-    }
-
-    return binomialProbs[k];
+    // For multiple labels, derive P(exactly k) from the single shared count
+    // distribution. (k > n is impossible, so index out of range reads as 0.)
+    const dist = this.countDistribution(labels);
+    return k >= 0 && k < dist.length ? dist[k] : 0;
   }
 
   /**
@@ -483,10 +500,13 @@ export class DiceQuery {
       return cumulativeSum;
     }
 
-    // For multiple labels, compute probabilities for 0 to k
+    // For multiple labels, sum the lower tail of the single shared count
+    // distribution rather than recomputing it per outcomeCount.
+    const dist = this.countDistribution(labels);
+    const upper = Math.min(k, dist.length - 1);
     let cumulativeSum = 0;
-    for (let outcomeCount = 0; outcomeCount <= k; outcomeCount++) {
-      cumulativeSum += this.probExactlyK(labels, outcomeCount);
+    for (let outcomeCount = 0; outcomeCount <= upper; outcomeCount++) {
+      cumulativeSum += dist[outcomeCount];
     }
     return cumulativeSum;
   }

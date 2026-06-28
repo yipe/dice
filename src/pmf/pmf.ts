@@ -78,9 +78,11 @@ export class PMF {
 
     const q = 1 - p;
 
-    // Fast paths
-    if (p === 0) return failurePMF.scaleMass(1); // clone
-    if (p === 1) return successPMF.scaleMass(1); // clone
+    // Fast paths. scaleMass(1) returns the same instance, so these hand back the
+    // branch PMF unchanged. That is safe because PMFs are treated as immutable
+    // (compact() and the other transforms now clone bins rather than mutate).
+    if (p === 0) return failurePMF.scaleMass(1);
+    if (p === 1) return successPMF.scaleMass(1);
 
     // Choose epsilon. You can also pick Math.min for a tighter threshold.
     const eps = successPMF.epsilon ?? failurePMF.epsilon;
@@ -88,12 +90,21 @@ export class PMF {
       successPMF.identifier
     }*${p.toFixed(6)})`;
 
-    // Proper Bernoulli mixture: q·failure ⊕ p·success
-    const out = PMF.empty(eps, id)
-      .addScaled(failurePMF, q)
-      .addScaled(successPMF, p);
+    // Proper Bernoulli mixture: q·failure ⊕ p·success, assembled in a single
+    // pass. The previous `empty().addScaled(failure,q).addScaled(success,p)`
+    // chain copied failurePMF's bins twice (into the intermediate, then again
+    // when the intermediate was copied by the second addScaled). Merging both
+    // scaled branches directly into one fresh map keeps the same accumulation
+    // order — q·failure first, then p·success — so the result is bit-identical.
+    const resultMap = new Map<number, Bin>();
+    for (const [damageValue, bin] of failurePMF.map) {
+      PMF.mergeInto(resultMap, damageValue, PMF.scaleBin(bin, q));
+    }
+    for (const [damageValue, bin] of successPMF.map) {
+      PMF.mergeInto(resultMap, damageValue, PMF.scaleBin(bin, p));
+    }
 
-    return out;
+    return new PMF(resultMap, eps, false, id);
   }
 
   /**
@@ -497,26 +508,30 @@ export class PMF {
 
       if (!shouldKeep) continue;
 
-      // Clean up count entries below epsilon (mutates the bin like your original)
-      for (const labelKey in probabilityBin.count) {
-        if (Math.abs(probabilityBin.count[labelKey] || 0) < eps) {
-          delete probabilityBin.count[labelKey];
+      // Build a fresh Bin rather than mutating the source. Bins are shared by
+      // reference across PMFs (e.g. branch()/addScaled()/scaleMass() fast paths
+      // can carry another PMF's bin objects), so deleting sub-eps entries in
+      // place would silently corrupt the source PMF's count/attr.
+      const cleanedBin = PMF.cloneBin(probabilityBin);
+
+      for (const labelKey in cleanedBin.count) {
+        if (Math.abs(cleanedBin.count[labelKey] || 0) < eps) {
+          delete cleanedBin.count[labelKey];
         }
       }
 
-      // Clean up attr entries below epsilon
-      if (probabilityBin.attr) {
-        for (const labelKey in probabilityBin.attr) {
-          if (Math.abs(probabilityBin.attr[labelKey] || 0) < eps) {
-            delete probabilityBin.attr[labelKey];
+      if (cleanedBin.attr) {
+        for (const labelKey in cleanedBin.attr) {
+          if (Math.abs(cleanedBin.attr[labelKey] || 0) < eps) {
+            delete cleanedBin.attr[labelKey];
           }
         }
-        if (Object.keys(probabilityBin.attr).length === 0) {
-          probabilityBin.attr = undefined;
+        if (Object.keys(cleanedBin.attr).length === 0) {
+          cleanedBin.attr = undefined;
         }
       }
 
-      compactedMap.set(damageValue, probabilityBin);
+      compactedMap.set(damageValue, cleanedBin);
     }
 
     return new PMF(compactedMap, eps, this.normalized, this.identifier);

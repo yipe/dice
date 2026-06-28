@@ -62,6 +62,7 @@
     "./dist/builder/dc.js"
   ],
   "scripts": {
+    "format": "eslint . --fix",
     "lint": "eslint .",
     "typecheck": "tsc -p config/tsconfig.build.json --noEmit",
     "build": "tsup --config config/tsup.config.ts",

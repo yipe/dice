@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (mathematical correctness)
 
-Found via a multi-agent correctness audit; every fix is verified against an
-independent brute-force enumeration (see `tests/math-correctness.test.ts`).
+Every fix is verified against an independent brute-force enumeration (see
+`tests/math-correctness.test.ts`).
 
 - **`DiceQuery.probabilityOf(label)` over-counted.** It summed the full `bin.p`
   of every combined bin that merely *contained* a label, but bins hold multiple
@@ -46,6 +46,24 @@ independent brute-force enumeration (see `tests/math-correctness.test.ts`).
   false-negatived, tagging the success mass as `saveFail` and the failure mass
   as `hit`. Detection is now deterministic (the presence of a save distribution),
   so `saveHalf`/`saveFail` are always labeled correctly.
+- **`PMF.compact()` corrupted PMFs that shared bin objects.** It deleted
+  sub-epsilon `count`/`attr` entries *in place* and reused that same bin
+  reference in the compacted map. Because bins are shared by reference across
+  PMFs (the `branch()` / `addScaled()` / `scaleMass()` fast paths can carry
+  another PMF's bin objects), this silently mutated the source PMF — and the
+  receiver's own bins. `compact()` now clones each surviving bin before pruning;
+  the compacted result is unchanged.
+
+### Security / hardening
+
+- **Parser resource-exhaustion guards.** Adversarial expressions are rejected
+  with a `DiceParseError` instead of exhausting CPU/memory: a die over 1,000,000
+  faces, a dice count over 10,000, a keep whose `faces^count` enumeration would
+  exceed 1,000,000 outcomes, and a binary operation whose `faces₁ × faces₂` work
+  would exceed 100,000,000 face pairs. The last closes a gap the per-operand
+  caps missed — two individually-legal large dice (e.g. `d100000 + d100000`,
+  ~10¹⁰ operations) previously hung for tens of seconds. All legitimate
+  expressions, including `d100000`, still parse.
 
 ### Known limitations (documented; recommend maintainer review)
 
@@ -119,6 +137,18 @@ and pinned by tests rather than changed blindly:
   whose result was discarded — ~2× faster. Bit-identical.
 - Minor bit-identical cleanups on the parse path (`Dice.toPMF` iterates the
   internal face map directly; `multiplyDiceByDice` uses a `Map`).
+- **`DiceQuery` count queries (`probExactlyK` / `probAtLeastK` / `probAtMostK`,
+  array-label paths)** compute each attack's success probability and the binomial
+  DP once instead of rebuilding a query per requested count (~3× on the looped
+  variants).
+- **`PMF.branch()` assembles its Bernoulli mixture in a single pass** rather than
+  chaining two `addScaled` calls (which copied the failure branch's bins twice).
+- **`keepSumPMF` packs its DP state into a single integer key** instead of a
+  `"used|r"` string parsed on every transition.
+- **`computeMaxOfPMF` walks the support once with a running CDF** for large pools,
+  reducing the max-of computation from O(N²) to O(N).
+- **`Dice.reroll()` uses a `Set` for membership** and **`Dice.binaryOp()` hoists
+  the inner die's face list** out of its loop.
 
   All of the above were verified bit-for-bit identical (probabilities, counts,
   means, variance) across the full expression corpus.
@@ -132,3 +162,7 @@ and pinned by tests rather than changed blindly:
 - Internal refactors with no behavioral change: deduplicated `Bin` clone/scale
   logic in `PMF`, removed dead code and impossible iterator branches, and tightened
   internal `any` usage.
+- `Dice.outcomeData` is typed `Partial<Record<OutcomeType, …>>` (dropping an
+  unsound `as Record<…>` cast); `getFullOutcomeDistribution()`'s return type
+  matches. Type-only change; runtime output is unchanged.
+- Added a `yarn format` script (ESLint autofix).
