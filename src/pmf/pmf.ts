@@ -1,6 +1,6 @@
 import { LRUCache } from "../common/lru-cache";
 import type { Bin, OutcomeLabelMap, Rounding } from "../common/types";
-import { EPS } from "../common/types";
+import { EPS, MISS_NONE_OUTCOME } from "../common/types";
 import { DiceQuery } from "./query";
 
 const cacheEnabled = true;
@@ -45,6 +45,21 @@ export class PMF {
 
   static delta(value: number, epsilon = EPS): PMF {
     return PMF.fromMap(new Map([[value, 1]]), epsilon);
+  }
+
+  /**
+   * Point mass at damage 0 tagged with the canonical `missNone` outcome.
+   *
+   * Differs from {@link PMF.zero}, which labels its zero bin `miss` — the
+   * builder's attack-resolution vocabulary. This uses the `missNone`
+   * {@link OutcomeType} that the attribution charts and outcome stats key on,
+   * so it is the correct "clean miss / no damage" delta for provenance-aware
+   * mixtures feeding those consumers.
+   */
+  static missNone(epsilon = EPS): PMF {
+    const m = new Map<number, Bin>();
+    m.set(0, { p: 1, count: { [MISS_NONE_OUTCOME]: 1 }, attr: {} });
+    return new PMF(m, epsilon, false, "missNone");
   }
 
   // This creates a single bin at value 0, but with weight 0.
@@ -697,6 +712,54 @@ export class PMF {
       this.epsilon,
       false,
       `${this.identifier}+scaled(${branch.identifier},${probability})`
+    );
+  }
+
+  /**
+   * Redistributes probability mass to model an effect that only occurs with
+   * probability `frequency` — a conditional attack, an on-hit rider, or a
+   * sub-one AoE target fraction.
+   *
+   * Every hit outcome (damage > 0) is scaled by `frequency` — probability mass,
+   * per-label `count`, AND per-label `attr` — and the freed mass is moved into
+   * the miss bin at damage 0, tagged with the canonical `missNone` outcome.
+   * Total probability mass is preserved.
+   *
+   * Unlike a bare {@link scaleMass} or {@link mapDamage}, this keeps damage
+   * attribution (`attr`) intact, so a frequency-scaled PMF still renders
+   * correctly in the damage-attribution charts.
+   *
+   * `frequency >= 1` (or non-finite) returns this PMF unchanged; `frequency <= 0`
+   * collapses all mass into the miss bin. The miss outcome is assumed to be
+   * encoded at damage value 0.
+   *
+   * @param frequency Probability in [0, 1] that the effect occurs.
+   */
+  applyHitFrequency(frequency: number): PMF {
+    if (!Number.isFinite(frequency) || frequency >= 1) return this;
+    const freq = Math.max(0, frequency);
+
+    const pMiss = this.pAt(0);
+    const pHit = 1 - pMiss;
+    const newMissMass = pMiss + (1 - freq) * pHit;
+
+    const newMap = new Map<number, Bin>();
+    newMap.set(0, {
+      p: newMissMass,
+      count: { [MISS_NONE_OUTCOME]: newMissMass },
+      attr: {},
+    });
+
+    for (const [damage, bin] of this.map) {
+      if (damage <= 0) continue;
+      newMap.set(damage, PMF.scaleBin(bin, freq));
+    }
+
+    return new PMF(
+      newMap,
+      this.epsilon,
+      false,
+      `freq(${this.identifier},${freq})`
     );
   }
 

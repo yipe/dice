@@ -106,6 +106,18 @@ and pinned by tests rather than changed blindly:
 - **`DiceQuery.stdev()`** — alias of `stddev()`, matching `PMF.stdev()`.
 - **`PMF.hasAttribution()`** — O(1) check for whether a PMF already carries
   damage-attribution metadata.
+- **`PMF.applyHitFrequency(frequency)`** — provenance-preserving mass
+  redistribution for effects that only occur with some probability (conditional
+  attacks, on-hit riders, sub-one AoE fractions): scales every hit bin (damage
+  &gt; 0) by `frequency` and moves the freed mass into a `missNone` bin. Unlike a
+  bare `scaleMass`/`mapDamage`, it scales per-label `count` **and** `attr`, so a
+  frequency-scaled PMF still renders correctly in the damage-attribution charts.
+  Consolidates the hand-rolled `applyFrequencyToPMF` in the app, which dropped
+  `attr`.
+- **`PMF.missNone(epsilon?)`** — canonical "clean miss" delta: a point mass at 0
+  tagged with the `missNone` `OutcomeType` (distinct from `PMF.zero`, which uses
+  the builder's `miss` label). **`MISS_NONE_OUTCOME`** exports the label as a
+  single source of truth.
 
 ### Performance
 

@@ -32,6 +32,13 @@ export type OutcomeType =
 
 export type Rounding = "none" | "floor" | "round" | "ceil";
 
+/**
+ * The canonical "clean miss" outcome — a point of zero damage with no rider.
+ * This is the {@link OutcomeType} that attribution charts and outcome stats key
+ * on, and is distinct from the builder's attack-resolution `miss` weight label.
+ */
+export const MISS_NONE_OUTCOME: OutcomeType = "missNone";
+
 export const onAnyHit: OutcomeType[] = ["hit", "crit"];
 export const onCritOnly: OutcomeType[] = ["crit"];
 export const onHitOnly: OutcomeType[] = ["hit"];
