@@ -1065,6 +1065,42 @@ export class PMF {
     return this.map.get(x)?.p ?? 0;
   }
 
+  /**
+   * P(any damage) — the mass on all non-zero outcomes, i.e. `1 - P(0)`.
+   * Assumes a miss is encoded as the damage-0 bin (the convention used across
+   * attack/save PMFs). The dual of {@link missProbability}.
+   */
+  hitProbability(): number {
+    return 1 - this.pAt(0);
+  }
+
+  /** P(no damage) — the mass at damage 0. The dual of {@link hitProbability}. */
+  missProbability(): number {
+    return this.pAt(0);
+  }
+
+  /**
+   * Coarsen the distribution into at most `maxBuckets` contiguous, equal-width
+   * damage buckets, aggregating probability mass (and `count`/`attr`
+   * provenance) into each bucket's start value. Returns this PMF unchanged when
+   * its integer support already fits within `maxBuckets`.
+   *
+   * This is a lossy display/downsampling transform (bucket start replaces the
+   * exact damage value) — use it for charting wide distributions, not for DPR
+   * math.
+   */
+  rebin(maxBuckets: number): PMF {
+    if (!(maxBuckets > 0)) return this;
+    const support = this.support();
+    if (support.length === 0) return this;
+    const min = support[0];
+    const max = support[support.length - 1];
+    const range = max - min;
+    if (range + 1 <= maxBuckets) return this;
+    const binSize = Math.ceil((range + 1) / maxBuckets);
+    return this.mapDamage((d) => min + Math.floor((d - min) / binSize) * binSize);
+  }
+
   /** Dense integer support from min..max (inclusive).
    * Useful for showing empty bars in charts.
    */
@@ -1153,6 +1189,64 @@ export class PMF {
       }
     }
     return false;
+  }
+
+  /**
+   * Split each damage value's probability mass across outcome labels, returning
+   * per-label maps of `damage value → probability mass attributable to that
+   * label`. Summing over labels at a given value recovers that value's `p`.
+   *
+   * Damage-bearing bins are split by `attr` weight (the share of damage each
+   * outcome contributed); the clean-miss bin at 0 is split by `count` weight
+   * (there is no damage to attribute). Attribution is computed on demand via
+   * {@link withAttribution} when absent, so builder-generated PMFs work too.
+   *
+   * This is the provenance core of the stacked damage-attribution chart — the
+   * caller only maps these series into its rendering format (colors, binning,
+   * axis labels).
+   */
+  attributionByValue(): Map<string, Map<number, number>> {
+    const src = this.hasAttribution() ? this : this.withAttribution();
+    const result = new Map<string, Map<number, number>>();
+
+    const add = (label: string, damage: number, mass: number): void => {
+      if (!(mass > 0)) return;
+      let series = result.get(label);
+      if (!series) {
+        series = new Map<number, number>();
+        result.set(label, series);
+      }
+      series.set(damage, (series.get(damage) ?? 0) + mass);
+    };
+
+    for (const [damage, bin] of src.map) {
+      const p = bin.p || 0;
+      if (p <= 0) continue;
+      const isMissBin = damage === 0;
+
+      // Damage-0 (clean miss): split by count, crediting the missNone label.
+      if (isMissBin) {
+        let totalCount = 0;
+        for (const k in bin.count) totalCount += (bin.count[k] as number) || 0;
+        if (totalCount > 0) {
+          const c = (bin.count[MISS_NONE_OUTCOME] as number) || 0;
+          add(MISS_NONE_OUTCOME, damage, (c / totalCount) * p);
+        }
+        continue;
+      }
+
+      // Damage-bearing bin: split by attribution weight.
+      let totalAttr = 0;
+      if (bin.attr) for (const k in bin.attr) totalAttr += (bin.attr[k] as number) || 0;
+      if (bin.attr && totalAttr > 0) {
+        for (const k in bin.attr) {
+          if (k === MISS_NONE_OUTCOME) continue;
+          add(k, damage, (((bin.attr[k] as number) || 0) / totalAttr) * p);
+        }
+      }
+    }
+
+    return result;
   }
 
   tailProbGE(t: number): number {
