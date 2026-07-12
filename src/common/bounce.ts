@@ -107,8 +107,10 @@ export function calculateBounceOdds(
   const keptDice = diceCount - rerollCount;
   const effectiveFaces = minimumDieRoll >= 2 ? dieFaces - (minimumDieRoll - 1) : dieFaces;
 
+  // With no kept dice, a rerolled die vacuously "misses" all of them (prob 1), so
+  // the only way to match is among the rerolled dice themselves (pRerolledMatch below).
   const pRerollDieMissesAll =
-    keptDice > 0 ? Math.pow((effectiveFaces - keptDice) / effectiveFaces, rerollCount) : 0;
+    keptDice > 0 ? Math.pow((effectiveFaces - keptDice) / effectiveFaces, rerollCount) : 1;
   const pAtLeastOneRerollMatches = 1 - pRerollDieMissesAll;
   const pRerolledMatch = rerollCount >= 2 ? pMatch(rerollCount, dieFaces, minimumDieRoll) : 0;
   const pMatchAfterReroll = Math.min(
