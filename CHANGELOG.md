@@ -55,6 +55,11 @@ except the Elemental-Adept bounce fix noted below.
   (e.g. 3×d8, min-roll 3: 0.4965 → 0.5313). The Elemental-Adept branch now uses
   an exact elementary-symmetric-polynomial computation. Consumers relying on the
   old numbers for bouncing spells with Elemental Adept will see small DPR shifts.
+- **`calculateBounceOdds` Empowered Spell returned certainty when rerolling all
+  dice.** When `rerollDamageDice >= diceCount` (no dice kept), the model claimed
+  a guaranteed match (1.0) instead of treating the reroll as a second
+  independent roll. It now correctly yields `1 - (1 - pMatch)^2` in that case
+  (e.g. 3×d8 reroll-all: 1.0 → 0.5693).
 
 ## [0.3.0]
 
