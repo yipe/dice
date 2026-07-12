@@ -102,3 +102,70 @@ describe("calculateBounceOdds — edges and monotonicity", () => {
     }
   });
 });
+
+describe("calculateBounceOdds — Empowered Spell (reroll)", () => {
+  it("rerolling ALL dice equals two independent identical rolls: 1 - (1 - pMatch)^2", () => {
+    // keptDice === 0: the only way to match is among the rerolled dice, which is a
+    // second independent roll of the same pool. (Regression guard: a former bug
+    // returned certainty of a match here.)
+    const cases: Array<[number, number, number]> = [
+      [3, 8, 0],
+      [4, 8, 0],
+      [2, 6, 0],
+      [4, 10, 0],
+      [3, 8, 2],
+      [3, 10, 3],
+    ];
+    for (const [k, faces, min] of cases) {
+      const opts = min > 0 ? { minimumDieRoll: min } : {};
+      const base = calculateBounceOdds(k, faces, opts);
+      const rerollAll = calculateBounceOdds(k, faces, { ...opts, rerollDamageDice: k });
+      expect(rerollAll).toBeCloseTo(1 - (1 - base) ** 2, 12);
+    }
+  });
+
+  it("is monotonically non-decreasing in the number of rerolled dice", () => {
+    for (const [k, faces] of [
+      [3, 8],
+      [4, 10],
+      [2, 6],
+      [4, 8],
+    ] as Array<[number, number]>) {
+      let prev = -1;
+      for (let rr = 0; rr <= k + 2; rr++) {
+        const p = calculateBounceOdds(k, faces, { rerollDamageDice: rr });
+        expect(p).toBeGreaterThanOrEqual(prev - 1e-12);
+        prev = p;
+      }
+    }
+  });
+
+  it("clamps rerolled dice to the pool size (reroll >= diceCount all agree)", () => {
+    const rerollAll = calculateBounceOdds(3, 8, { rerollDamageDice: 3 });
+    for (const rr of [4, 5, 9, 100]) {
+      expect(calculateBounceOdds(3, 8, { rerollDamageDice: rr })).toBeCloseTo(rerollAll, 12);
+    }
+  });
+
+  it("combines with Elemental Adept without dropping below EA-only odds", () => {
+    for (const [k, faces, min] of [
+      [3, 8, 2],
+      [3, 8, 3],
+      [4, 10, 2],
+    ] as Array<[number, number, number]>) {
+      const eaOnly = calculateBounceOdds(k, faces, { minimumDieRoll: min });
+      const eaEmpowered = calculateBounceOdds(k, faces, { minimumDieRoll: min, rerollDamageDice: 2 });
+      expect(eaEmpowered).toBeGreaterThanOrEqual(eaOnly - 1e-12);
+      expect(eaEmpowered).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("matches known values for the reroll model (regression guard)", () => {
+    // The reroll model is an approximation with no closed-form oracle; pin
+    // representative outputs so refactors don't silently shift it.
+    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 1 })).toBeCloseTo(0.507813, 6);
+    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 2 })).toBeCloseTo(0.560364, 6);
+    expect(calculateBounceOdds(4, 10, { rerollDamageDice: 2 })).toBeCloseTo(0.709696, 6);
+    expect(calculateBounceOdds(3, 8, { minimumDieRoll: 2, rerollDamageDice: 2 })).toBeCloseTo(0.636779, 6);
+  });
+});
