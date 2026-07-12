@@ -716,6 +716,20 @@ export class RollBuilder {
     return new HalfRollBuilder(this);
   }
 
+  /**
+   * Scale this roll's result by `numerator / denominator`, rounding each outcome.
+   * A general, composable form of {@link half} — used to model damage-type resistance
+   * (`scaleResult(1, 2)` → `(expr) // 2`) and vulnerability (`scaleResult(2)` → `2 * (expr)`).
+   * Compose several of these (and plain rolls) into one payload with {@link sumRolls}.
+   */
+  scaleResult(
+    numerator: number,
+    denominator: number = 1,
+    rounding: "floor" | "round" | "ceil" = "floor"
+  ): ScaleRollBuilder {
+    return new ScaleRollBuilder(this, numerator, denominator, rounding);
+  }
+
   // Create a "max of N rolls" version of this roll for crit damage with keep operations
   maxOf(count: number): MaxOfRollBuilder {
     return new MaxOfRollBuilder(this, count);
@@ -780,6 +794,64 @@ export class HalfRollBuilder extends RollBuilder {
 
   copy(): HalfRollBuilder {
     return new HalfRollBuilder(this.innerRoll.copy());
+  }
+}
+
+/**
+ * A roll whose result is scaled by `numerator / denominator` and rounded — the composable
+ * generalization of {@link HalfRollBuilder}. Renders as `N * (inner)`, `(inner) // D`, or
+ * `(inner) * N // D`. Terminal (like `half`): use {@link sumRolls} to combine with other rolls.
+ */
+export class ScaleRollBuilder extends RollBuilder {
+  constructor(
+    private readonly innerRoll: RollBuilder,
+    private readonly numerator: number,
+    private readonly denominator: number = 1,
+    private readonly rounding: "floor" | "round" | "ceil" = "floor"
+  ) {
+    super(0); // dummy, we override methods
+  }
+
+  override hasHiddenState(): boolean {
+    return this.innerRoll.hasHiddenState();
+  }
+
+  override get lastConfig(): RollConfig {
+    return (this.innerRoll as unknown as { lastConfig: RollConfig }).lastConfig;
+  }
+
+  getSubRollConfigs(): readonly RollConfig[] {
+    return this.innerRoll.getSubRollConfigs();
+  }
+
+  toExpression(): string {
+    const inner = this.innerRoll.toExpression();
+    if (this.denominator === 1) return `${this.numerator} * (${inner})`;
+    if (this.numerator === 1) return `(${inner}) // ${this.denominator}`;
+    return `(${inner}) * ${this.numerator} // ${this.denominator}`;
+  }
+
+  toAST(): ExpressionNode {
+    return {
+      type: "scale",
+      numerator: this.numerator,
+      denominator: this.denominator,
+      rounding: this.rounding,
+      child: this.innerRoll.toAST(),
+    };
+  }
+
+  toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  copy(): ScaleRollBuilder {
+    return new ScaleRollBuilder(
+      this.innerRoll.copy(),
+      this.numerator,
+      this.denominator,
+      this.rounding
+    );
   }
 }
 
@@ -1205,4 +1277,70 @@ export class PooledRollBuilder extends RollBuilder {
 
     return new PooledRollBuilder(sumNode, newExpr);
   }
+}
+
+/**
+ * An additive composite of independent rolls that preserves each part's AST — the piece
+ * that lets a scaled/halved sub-roll (which the flat `.plus()` merge would otherwise drop)
+ * sit beside plain rolls in one damage payload. Its PMF convolves the parts; its expression
+ * joins them with ` + `. Built via {@link sumRolls}; terminal (used as an onHit/onCrit/
+ * onSaveFailure payload), so it reports hidden state to reject accidental flat merges.
+ */
+class CompositeSumRollBuilder extends RollBuilder {
+  constructor(private readonly parts: readonly RollBuilder[]) {
+    super(0); // dummy, we override methods
+  }
+
+  override hasHiddenState(): boolean {
+    return true;
+  }
+
+  override getSubRollConfigs(): readonly RollConfig[] {
+    return [];
+  }
+
+  override toAST(): ExpressionNode {
+    return {
+      type: "add",
+      children: this.parts.map((p) => ({
+        node: p.toAST(),
+        sign: 1 as const,
+      })),
+    };
+  }
+
+  override toExpression(): string {
+    const exprs = this.parts
+      .map((p) => p.toExpression())
+      .filter((e) => e && e !== "0");
+    if (exprs.length === 0) return "0";
+    let result = exprs[0];
+    for (let i = 1; i < exprs.length; i++) {
+      const e = exprs[i];
+      result += e.startsWith("-") ? ` - ${e.substring(1)}` : ` + ${e}`;
+    }
+    return result.replace(/\+ -/g, "-");
+  }
+
+  override toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  override copy(): CompositeSumRollBuilder {
+    return new CompositeSumRollBuilder(this.parts.map((p) => p.copy()));
+  }
+}
+
+/**
+ * Combine several rolls into one additive payload whose PMF is their convolution and whose
+ * expression is them joined with ` + `. Unlike `a.plus(b)`, this preserves parts that carry
+ * hidden state (e.g. `roll.scaleResult(1, 2)` / `roll.half()`), so per-damage-type resistance
+ * and vulnerability survive into both the distribution and the rendered expression.
+ * Empty parts collapse to `0`; a single part is returned unwrapped.
+ */
+export function sumRolls(parts: readonly RollBuilder[]): RollBuilder {
+  const meaningful = parts.filter((p): p is RollBuilder => p !== undefined);
+  if (meaningful.length === 0) return new RollBuilder(0);
+  if (meaningful.length === 1) return meaningful[0];
+  return new CompositeSumRollBuilder(meaningful);
 }
