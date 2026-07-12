@@ -1,5 +1,8 @@
 import type { PMF } from "../pmf/pmf";
+import type { RollType } from "../common/types";
 import type { RollBuilder } from "./roll";
+
+export type { RollType };
 
 export type RollFactory = {
   (count: number, sides?: number, modifier?: number): RollBuilder;
@@ -16,7 +19,6 @@ export type RollFactory = {
   flat(n: number): RollBuilder;
 };
 
-export type RollType = "flat" | "advantage" | "disadvantage" | "elven accuracy";
 export type KeepMode = "highest" | "lowest";
 
 // Intermediate Representation, gets converetd into an AST as needed

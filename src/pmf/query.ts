@@ -108,6 +108,31 @@ export class DiceQuery {
   }
 
   /**
+   * Per-label `damage value → probability mass` series for the combined,
+   * attribution-carrying distribution — the provenance core of the stacked
+   * damage-attribution chart. Convenience for
+   * `combinedWithAttribution().attributionByValue()`; see
+   * {@link PMF.attributionByValue}.
+   */
+  attributionByValue(): Map<string, Map<number, number>> {
+    return this.combinedWithAttribution().attributionByValue();
+  }
+
+  /**
+   * How many of the independent single PMFs can produce the given outcome
+   * label. Useful for "all of them succeeded" style probabilities where the
+   * exponent is the number of contributing attacks (see
+   * {@link DiceQuery.probExactlyK}).
+   */
+  countSinglesWith(label: string): number {
+    let count = 0;
+    for (const single of this.singles) {
+      if (single.hasOutcome(label)) count++;
+    }
+    return count;
+  }
+
+  /**
    * Returns the expected damage across all possible outcomes.
    *
    * Example: `query.mean()` → 12.5
