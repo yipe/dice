@@ -68,13 +68,19 @@ describe("calculateBounceOdds — edges and monotonicity", () => {
     expect(calculateBounceOdds(9, 8)).toBe(1);
   });
 
-  it("stays within [0, 1]", () => {
-    for (const min of [0, 2, 3]) {
-      for (const rr of [0, 1, 2]) {
-        for (let k = 2; k <= 6; k++) {
-          const p = calculateBounceOdds(k, 8, { minimumDieRoll: min, rerollDamageDice: rr });
-          expect(p).toBeGreaterThanOrEqual(0);
-          expect(p).toBeLessThanOrEqual(1);
+  it("stays finite and within [0, 1] across the full grid, incl. dice near/above the collapsed face count", () => {
+    // min 3–4 collapse a d8 to 6/5 distinct values, so k up to 8 pushes past the
+    // pigeonhole bound while Empowered Spell rerolls — the branch where keptDice
+    // can exceed effectiveFaces. Guard against NaN / out-of-range there.
+    for (const faces of [6, 8]) {
+      for (const min of [0, 2, 3, 4]) {
+        for (const rr of [0, 1, 2, 3]) {
+          for (let k = 2; k <= faces; k++) {
+            const p = calculateBounceOdds(k, faces, { minimumDieRoll: min, rerollDamageDice: rr });
+            expect(Number.isFinite(p)).toBe(true);
+            expect(p).toBeGreaterThanOrEqual(0);
+            expect(p).toBeLessThanOrEqual(1);
+          }
         }
       }
     }
