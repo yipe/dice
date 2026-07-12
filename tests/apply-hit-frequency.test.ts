@@ -94,4 +94,16 @@ describe("PMF.applyHitFrequency", () => {
     expect(out.mean()).toBeCloseTo(0, 12);
     expect(out.outcomeAt(0, "missNone")).toBeCloseTo(1, 12);
   });
+
+  it("does not mutate the source PMF (copy-on-write)", () => {
+    const base = hitPMF().withAttribution();
+    base.applyHitFrequency(0.5);
+    // Original bins — probability, count, and attr — must be untouched.
+    expect(base.pAt(5)).toBeCloseTo(0.6, 12);
+    expect(base.pAt(10)).toBeCloseTo(0.4, 12);
+    expect(base.pAt(0)).toBe(0);
+    expect(base.outcomeAt(5, "hit")).toBeCloseTo(0.6, 12);
+    expect(base.outcomeAttributionAt(5, "hit")).toBeCloseTo(5 * 0.6, 12);
+    expect(base.mean()).toBeCloseTo(7, 12);
+  });
 });
