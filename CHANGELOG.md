@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+Pushes damage-attribution / provenance and D&D-probability logic that the
+consuming app (dprcalc) had hand-rolled over PMF internals down into the
+library, so the provenance model and dice math stay owned here. All additive
+except the Elemental-Adept bounce fix noted below.
+
+### Added
+
+- **`PMF.applyHitFrequency(frequency)`** — provenance-preserving mass
+  redistribution for effects that only occur with some probability (conditional
+  attacks, on-hit riders, sub-one AoE fractions): scales every hit bin (damage
+  &gt; 0) by `frequency` and moves the freed mass into a `missNone` bin. Unlike a
+  bare `scaleMass`/`mapDamage`, it scales per-label `count` **and** `attr`, so a
+  frequency-scaled PMF still renders correctly in the damage-attribution charts.
+  Replaces the app's hand-rolled `applyFrequencyToPMF`, which dropped `attr`.
+- **`PMF.missNone(epsilon?)`** / **`MISS_NONE_OUTCOME`** — canonical "clean miss"
+  delta (point mass at 0 tagged with the `missNone` `OutcomeType`, distinct from
+  `PMF.zero`'s builder-side `miss` label), and the label as a single source of
+  truth.
+- **`PMF.hitProbability()` / `PMF.missProbability()`** — the `1 - P(0)` idiom
+  (miss encoded at damage 0), centralized.
+- **`PMF.rebin(maxBuckets)`** — coarsen a wide distribution into ≤ N contiguous
+  equal-width buckets, aggregating `count`/`attr` provenance. For charting wide
+  distributions, not DPR math.
+- **`PMF.attributionByValue()` / `DiceQuery.attributionByValue()`** — split each
+  damage value's probability mass across outcome labels (by `attr` for
+  damage-bearing bins, by `count` for the clean-miss bin), returning per-label
+  `value → mass` series. The provenance core of the stacked attribution chart.
+- **`DiceQuery.countSinglesWith(label)`** — how many independent single PMFs can
+  produce a given outcome label.
+- **`ALL_OUTCOME_TYPES`**, **`OUTCOME_DISPLAY_ORDER`**, **`sortOutcomes()`** —
+  canonical `OutcomeType` enumeration + stack / display orderings, replacing
+  per-consumer outcome tables.
+- **`critProbability(critRange, rollType)`** and **`RollType`** (now exported
+  from the package root as well as `@yipe/dice/builder`) — advantage-aware
+  P(crit) for a given crit window.
+- **`calculateBounceOdds(diceCount, dieFaces, options?)`** and
+  **`BounceOddsOptions`** — the "birthday problem" for bouncing damage dice
+  (Chromatic Orb), honoring Elemental Adept and Empowered Spell. Moved out of the
+  app; the base and Elemental-Adept cases are now computed **exactly** (verified
+  against brute-force enumeration in `tests/bounce.test.ts`).
+
+### Fixed
+
+- **`calculateBounceOdds` Elemental Adept was approximate.** The former
+  hand-derived adjustment factor drifted from the exact value by up to ~3.5%
+  (e.g. 3×d8, min-roll 3: 0.4965 → 0.5313). The Elemental-Adept branch now uses
+  an exact elementary-symmetric-polynomial computation. Consumers relying on the
+  old numbers for bouncing spells with Elemental Adept will see small DPR shifts.
+
 ## [0.3.0]
 
 ### Fixed (mathematical correctness)
@@ -106,18 +157,6 @@ and pinned by tests rather than changed blindly:
 - **`DiceQuery.stdev()`** — alias of `stddev()`, matching `PMF.stdev()`.
 - **`PMF.hasAttribution()`** — O(1) check for whether a PMF already carries
   damage-attribution metadata.
-- **`PMF.applyHitFrequency(frequency)`** — provenance-preserving mass
-  redistribution for effects that only occur with some probability (conditional
-  attacks, on-hit riders, sub-one AoE fractions): scales every hit bin (damage
-  &gt; 0) by `frequency` and moves the freed mass into a `missNone` bin. Unlike a
-  bare `scaleMass`/`mapDamage`, it scales per-label `count` **and** `attr`, so a
-  frequency-scaled PMF still renders correctly in the damage-attribution charts.
-  Consolidates the hand-rolled `applyFrequencyToPMF` in the app, which dropped
-  `attr`.
-- **`PMF.missNone(epsilon?)`** — canonical "clean miss" delta: a point mass at 0
-  tagged with the `missNone` `OutcomeType` (distinct from `PMF.zero`, which uses
-  the builder's `miss` label). **`MISS_NONE_OUTCOME`** exports the label as a
-  single source of truth.
 
 ### Performance
 
