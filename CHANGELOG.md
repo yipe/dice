@@ -5,15 +5,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0]
+## [0.5.0]
 
 Pushes damage-attribution / provenance and D&D-probability logic that the
 consuming app (dprcalc) had hand-rolled over PMF internals down into the
-library, so the provenance model and dice math stay owned here. All additive
-except the Elemental-Adept bounce fix noted below.
+library, so the provenance model and dice math stay owned here, and adds a
+**composable scale node** so a scaled/rounded sub-roll can nest inside a larger
+damage payload (per-damage-type resistance / immunity / vulnerability). All
+additive except the Elemental-Adept bounce fix noted below.
 
 ### Added
 
+- **`RollBuilder.scaleResult(numerator, denominator = 1, rounding = 'floor')`** —
+  wraps a builder in a composable `scale` AST node that scales its resolved PMF
+  by `numerator / denominator` with the given rounding. Unlike the old
+  `.half()` wrapper, a scaled builder composes: it survives `sumRolls(...)`
+  instead of being dropped on a flat-config merge, so a per-type resisted or
+  doubled sub-roll keeps its own scaling inside a larger hit/crit payload. The
+  rendered expression reflects it — `denominator === 1 → "N * (child)"`,
+  `numerator === 1 → "(child) // D"`, general → `"(child) * N // D"`. `.half()`
+  is now `scaleResult(1, 2, 'floor')`.
+- **`sumRolls(parts: RollBuilder[])`** — additive factory whose `toAST()` is an
+  `add` node over each part's AST, letting scaled and plain children sit side by
+  side without the flat `.plus()` merge collapsing them. `toExpression()` joins
+  the parts with ` + ` and `toPMF()` convolves them.
 - **`PMF.applyHitFrequency(frequency)`** — provenance-preserving mass
   redistribution for effects that only occur with some probability (conditional
   attacks, on-hit riders, sub-one AoE fractions): scales every hit bin (damage

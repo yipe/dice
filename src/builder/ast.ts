@@ -218,6 +218,12 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
         // Compute the maximum of count independent rolls of childPMF
         return computeMaxOfPMF(childPMF, count, eps);
       }
+
+      case "scale": {
+        const childPMF = resolve(node.child, eps);
+        const denom = node.denominator === 0 ? 1 : node.denominator;
+        return childPMF.scaleDamage(node.numerator / denom, node.rounding);
+      }
     }
   })();
 
@@ -318,6 +324,7 @@ function findDie(node: ExpressionNode): DieNode | undefined {
     case "d20Roll":
     case "half":
     case "maxOf":
+    case "scale":
       return findDie(node.child);
     case "keep":
       return findDie(node.child.child);
@@ -581,6 +588,10 @@ export function getASTSignature(node: ExpressionNode): string {
       return `half{ch:${getASTSignature(node.child)}}`;
     case "maxOf":
       return `maxOf{c:${node.count},ch:${getASTSignature(node.child)}}`;
+    case "scale":
+      return `scale{n:${node.numerator},d:${node.denominator},r:${
+        node.rounding
+      },ch:${getASTSignature(node.child)}}`;
     case "add": {
       let constantValue = 0;
       const otherChildrenSigs: string[] = [];
