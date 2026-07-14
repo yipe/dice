@@ -1372,21 +1372,19 @@ export class PMF {
 
     // Support window over values carrying positive mass (the app's allDamageValues):
     // from the split for attributed PMFs, from positive-p bins for pure ones.
-    const valuesWithMass = new Set<number>();
-    if (hasAttribution) {
-      for (const s of split.values())
-        for (const [d, m] of s) if (m > 0) valuesWithMass.add(d);
-    } else {
-      for (const [d, bin] of this.map) if ((bin.p || 0) > 0) valuesWithMass.add(d);
-    }
-    if (valuesWithMass.size === 0) return empty;
-
     let min = Infinity;
     let max = -Infinity;
-    for (const d of valuesWithMass) {
+    const widen = (d: number): void => {
       if (d < min) min = d;
       if (d > max) max = d;
+    };
+    if (hasAttribution) {
+      for (const s of split.values())
+        for (const [d, m] of s) if (m > 0) widen(d);
+    } else {
+      for (const [d, bin] of this.map) if ((bin.p || 0) > 0) widen(d);
     }
+    if (max < min) return empty; // nothing carried positive mass
     const range = max - min;
 
     // Binning geometry — dense (per-integer) unless range > maxBuckets.
