@@ -476,7 +476,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
   });
 
   describe("Integration with chart methods", () => {
-    it("should work with toDamageAttributionChartSeries", () => {
+    it("should work with damageAttributionChartModel", () => {
       const attack = d20
         .plus(5)
         .ac(15)
@@ -490,15 +490,15 @@ describe("DiceQuery.combinedWithAttribution()", () => {
         query.combinedWithAttribution()
       );
 
-      const chartData = attrQuery.toDamageAttributionChartSeries();
+      const model = attrQuery.damageAttributionChartModel();
 
-      expect(chartData.support.length).toBeGreaterThan(0);
-      expect(chartData.outcomes.length).toBeGreaterThan(0);
-      expect(chartData.data).toBeDefined();
+      expect(model.labels.length).toBeGreaterThan(0);
+      expect(model.outcomes.length).toBeGreaterThan(0);
+      expect(model.series).toBeDefined();
 
       // Should have hit and crit in outcomes
-      expect(chartData.outcomes).toContain("hit");
-      expect(chartData.outcomes).toContain("crit");
+      expect(model.outcomes).toContain("hit");
+      expect(model.outcomes).toContain("crit");
     });
   });
 

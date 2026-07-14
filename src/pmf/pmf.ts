@@ -1,11 +1,45 @@
 import { LRUCache } from "../common/lru-cache";
 import type { Bin, OutcomeLabelMap, Rounding } from "../common/types";
-import { EPS, MISS_NONE_OUTCOME } from "../common/types";
+import {
+  ALL_OUTCOME_TYPES,
+  EPS,
+  MISS_NONE_OUTCOME,
+  sortOutcomes,
+} from "../common/types";
 import { DiceQuery } from "./query";
 
 const cacheEnabled = true;
 
 export const pmfCache = new LRUCache<string, PMF>(1000);
+
+/**
+ * Complete numeric model for the stacked damage-attribution chart, produced by
+ * {@link PMF.damageAttributionChartModel}. Carries every dice-and-probability
+ * value the chart needs; a renderer only maps these numbers into its own format
+ * (colors, human labels, axis units, dataset objects).
+ */
+export interface DamageAttributionChartModel {
+  /** Bucket-start value for each column. Numeric; the caller stringifies for labels. */
+  labels: number[];
+  /** Present only when the distribution was coarsened; [start,end] inclusive, per bucket. */
+  binRanges?: { start: number; end: number }[];
+  /** Discovered outcome labels in stack order. Empty for pure (unattributed) distributions. */
+  outcomes: string[];
+  /** outcome → per-bucket probability mass (fraction 0..1). Bar heights. Σ over outcomes ≈ totals[i]. */
+  series: Map<string, number[]>;
+  /**
+   * outcome → per-bucket conditional share (fraction 0..1) of that bucket's total.
+   * Tooltip signal. 0 where the bucket total is below `epsilon`; otherwise Σ over
+   * outcomes ≈ 1.
+   */
+  shares: Map<string, number[]>;
+  /** Per-bucket total probability mass (fraction 0..1). The only signal for pure distributions. */
+  totals: number[];
+  /** Reversed-convention CCDF markers: damage at which P(X ≥ x) crosses 80/50/20%. */
+  percentiles: { p80: number; p50: number; p20: number };
+  /** Distribution mean, `this.mean()`. */
+  mean: number;
+}
 
 /**
  * Probability Mass Function for discrete damage distributions.
@@ -1247,6 +1281,181 @@ export class PMF {
     }
 
     return result;
+  }
+
+  /**
+   * Reversed-convention CCDF percentile markers used by the attribution chart:
+   * for each target probability t, the largest damage x still reached with
+   * P(X ≥ x) > t%, falling back to the smallest/largest support value at the
+   * edges. Ported verbatim from the app so `p80/p50/p20` keep their intentional
+   * reversed meaning (p80 is the low-damage end). Computed on the full, un-binned
+   * support. Assumes a non-empty map.
+   */
+  private attributionPercentiles(): { p80: number; p50: number; p20: number } {
+    const sortedKeys = [...this.map.keys()].sort((a, b) => a - b);
+    const sparseCCDF: { x: number; y: number }[] = [];
+    let cumulativeP = 0;
+    for (let i = sortedKeys.length - 1; i >= 0; i--) {
+      const key = sortedKeys[i];
+      const bin = this.map.get(key);
+      if (!bin) continue;
+      cumulativeP += bin.p;
+      sparseCCDF.unshift({ x: key, y: cumulativeP * 100 });
+    }
+    const findDamageAtProbability = (targetProb: number): number => {
+      for (let i = 0; i < sparseCCDF.length; i++) {
+        if (sparseCCDF[i].y <= targetProb) {
+          return i > 0 ? sparseCCDF[i - 1].x : sparseCCDF[i].x;
+        }
+      }
+      return sparseCCDF[sparseCCDF.length - 1].x;
+    };
+    return {
+      p80: findDamageAtProbability(80),
+      p50: findDamageAtProbability(50),
+      p20: findDamageAtProbability(20),
+    };
+  }
+
+  /**
+   * Full numeric model for the stacked damage-attribution chart — bar-height
+   * masses, tooltip shares, bucket labels/ranges, percentile markers, and the
+   * mean. The caller only maps these into a rendering format (colors, labels,
+   * axis units); all of the dice-and-probability logic lives here.
+   *
+   * Built split-first-then-bin: the attribution split ({@link attributionByValue})
+   * runs on the un-binned distribution, then the resulting series are coarsened.
+   * {@link rebin} is deliberately *not* used — rebinning first would fold any
+   * sub-`binSize` damage into the damage-0 bucket, which the split then mistakes
+   * for a clean miss and drops.
+   *
+   * @param options.maxBuckets Coarsen to at most this many equal-width buckets
+   *   when the integer support is wider (`range > maxBuckets`); omit for a dense,
+   *   per-integer model.
+   * @param options.stackOrder Preferred outcome order (defaults to
+   *   {@link ALL_OUTCOME_TYPES}); labels outside it sort alphabetically after.
+   * @param options.epsilon Bucket-total floor below which a `shares` entry is 0
+   *   (divide-by-~0 guard). Defaults to 1e-9.
+   */
+  damageAttributionChartModel(
+    options: {
+      maxBuckets?: number;
+      stackOrder?: readonly string[];
+      epsilon?: number;
+    } = {}
+  ): DamageAttributionChartModel {
+    const { maxBuckets, stackOrder = ALL_OUTCOME_TYPES, epsilon = 1e-9 } = options;
+
+    const empty: DamageAttributionChartModel = {
+      labels: [],
+      outcomes: [],
+      series: new Map(),
+      shares: new Map(),
+      totals: [],
+      percentiles: { p80: 0, p50: 0, p20: 0 },
+      mean: 0,
+    };
+    if (this.map.size === 0) return empty;
+
+    // Split on the un-binned distribution: outcome → (damage → probability mass).
+    const split = this.attributionByValue();
+
+    // Discover outcomes across BOTH count and attr keys so any all-zero legend
+    // entries survive (matches the app's discovery), then order for stacking.
+    const discovered = new Set<string>();
+    for (const [, bin] of this.map) {
+      for (const k in bin.count) discovered.add(k);
+      if (bin.attr) for (const k in bin.attr) discovered.add(k);
+    }
+    const outcomes = sortOutcomes([...discovered], stackOrder);
+    const hasAttribution = outcomes.length > 0;
+
+    // Support window over values carrying positive mass (the app's allDamageValues):
+    // from the split for attributed PMFs, from positive-p bins for pure ones.
+    const valuesWithMass = new Set<number>();
+    if (hasAttribution) {
+      for (const s of split.values())
+        for (const [d, m] of s) if (m > 0) valuesWithMass.add(d);
+    } else {
+      for (const [d, bin] of this.map) if ((bin.p || 0) > 0) valuesWithMass.add(d);
+    }
+    if (valuesWithMass.size === 0) return empty;
+
+    let min = Infinity;
+    let max = -Infinity;
+    for (const d of valuesWithMass) {
+      if (d < min) min = d;
+      if (d > max) max = d;
+    }
+    const range = max - min;
+
+    // Binning geometry — dense (per-integer) unless range > maxBuckets.
+    const binned =
+      maxBuckets !== undefined && maxBuckets > 0 && range > maxBuckets;
+    const binSize = binned ? Math.ceil((range + 1) / maxBuckets!) : 1;
+    const numBins = binned ? Math.ceil((range + 1) / binSize) : range + 1;
+    const bucketOf = (d: number): number => Math.floor((d - min) / binSize);
+
+    const labels: number[] = [];
+    const binRanges: { start: number; end: number }[] | undefined = binned
+      ? []
+      : undefined;
+    for (let i = 0; i < numBins; i++) {
+      const start = min + i * binSize;
+      labels.push(start);
+      if (binRanges)
+        binRanges.push({ start, end: Math.min(start + binSize - 1, max) });
+    }
+
+    // Aggregate per-outcome masses into buckets.
+    const series = new Map<string, number[]>();
+    for (const outcome of outcomes) {
+      const arr = new Array<number>(numBins).fill(0);
+      const s = split.get(outcome);
+      if (s) {
+        for (const [d, m] of s) {
+          const b = bucketOf(d);
+          if (b >= 0 && b < numBins) arr[b] += m;
+        }
+      }
+      series.set(outcome, arr);
+    }
+
+    // Per-bucket totals: sum of the attributed series, or (pure) of raw p.
+    const totals = new Array<number>(numBins).fill(0);
+    if (hasAttribution) {
+      for (const arr of series.values())
+        for (let i = 0; i < numBins; i++) totals[i] += arr[i];
+    } else {
+      for (const [d, bin] of this.map) {
+        const p = bin.p || 0;
+        if (p <= 0) continue;
+        const b = bucketOf(d);
+        if (b >= 0 && b < numBins) totals[b] += p;
+      }
+    }
+
+    // Conditional shares for tooltips (guarded against a ~zero bucket total).
+    const shares = new Map<string, number[]>();
+    for (const outcome of outcomes) {
+      const arr = series.get(outcome)!;
+      const sh = new Array<number>(numBins).fill(0);
+      for (let i = 0; i < numBins; i++) {
+        sh[i] = totals[i] > epsilon ? arr[i] / totals[i] : 0;
+      }
+      shares.set(outcome, sh);
+    }
+
+    return {
+      labels,
+      binRanges,
+      outcomes,
+      series,
+      shares,
+      totals,
+      percentiles: this.attributionPercentiles(),
+      mean: this.mean(),
+    };
   }
 
   tailProbGE(t: number): number {
