@@ -28,8 +28,10 @@ jobs:
       - name: Enable Corepack (Yarn 4)
         run: |
           corepack enable
-          # Lock to the version in your packageManager field
-          corepack prepare yarn@4.9.4 --activate
+          # Lock to the version in your packageManager field. Yarn >= 4.17 is
+          # required for the builtin typescript compat patch to understand the
+          # TypeScript 7 (Go-native) package layout.
+          corepack prepare yarn@4.17.1 --activate
 
       # Cache Yarn Berry artifacts (helps a lot for CI speed)
       - name: Cache Yarn
