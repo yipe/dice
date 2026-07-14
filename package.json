@@ -1,6 +1,6 @@
 {
   "name": "@yipe/dice",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A high-performance dice probability engine for D&D 5e DPR calculations. Powers dprcalc.com.",
   "keywords": [
     "dnd",
@@ -21,7 +21,7 @@
   "license": "MIT",
   "author": "Michael Margolis <acct@yipe.org>",
   "type": "module",
-  "packageManager": "yarn@4.9.4",
+  "packageManager": "yarn@4.17.1",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -62,11 +62,11 @@
     "./dist/builder/dc.js"
   ],
   "scripts": {
-    "format": "eslint . --fix",
-    "lint": "eslint .",
+    "format": "node -r ./config/eslint-ts6-alias.cjs ./node_modules/eslint/bin/eslint.js . --fix",
+    "lint": "node -r ./config/eslint-ts6-alias.cjs ./node_modules/eslint/bin/eslint.js .",
     "typecheck": "tsc -p config/tsconfig.build.json --noEmit",
-    "build": "tsup --config config/tsup.config.ts",
-    "types": "tsc -p config/tsconfig.build.json --emitDeclarationOnly",
+    "build": "tsup --config config/tsup.config.ts && yarn types",
+    "types": "tsc -p config/tsconfig.build.json --emitDeclarationOnly && node config/postbuild-dts.mjs",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "prepare": "yarn build",
@@ -80,14 +80,15 @@
     "node": ">=18.17"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
-    "@typescript-eslint/eslint-plugin": "^8.62.0",
-    "@typescript-eslint/parser": "^8.62.0",
-    "@vitest/coverage-v8": "^4.1.9",
-    "eslint": "^10.6.0",
+    "@types/node": "^26.1.1",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "@typescript/typescript6": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.7.0",
     "tsup": "^8.5.1",
-    "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
