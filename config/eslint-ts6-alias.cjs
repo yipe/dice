@@ -15,16 +15,11 @@
 const Module = require("node:module");
 
 const originalResolve = Module._resolveFilename;
-const bridgeMain = require.resolve("@typescript/typescript6");
 
 Module._resolveFilename = function (request, ...rest) {
-  if (request === "typescript") {
-    return bridgeMain;
-  }
-  if (request.startsWith("typescript/")) {
-    return require.resolve(
-      "@typescript/typescript6/" + request.slice("typescript/".length),
-    );
+  // `typescript` -> bridge package root; `typescript/<subpath>` -> same subpath.
+  if (request === "typescript" || request.startsWith("typescript/")) {
+    return require.resolve("@typescript/typescript6" + request.slice("typescript".length));
   }
   return originalResolve.call(this, request, ...rest);
 };

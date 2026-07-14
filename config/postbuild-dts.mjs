@@ -22,8 +22,11 @@ import { fileURLToPath } from "node:url";
 
 const distDir = resolve(fileURLToPath(import.meta.url), "../../dist");
 
-// Matches the specifier in `from "..."` and bare `import "..."` clauses.
-const SPECIFIER = /(\bfrom\s*|\bimport\s*)(["'])(\.\.?\/[^"']*)\2/g;
+// Matches the relative specifier in the three forms tsc emits into .d.ts:
+//   export * from "./x"        import { T } from "./x"        import "./x"
+//   import("./x").T            (inferred import-type nodes)
+// The optional `(` after `import` captures the dynamic-import-type form.
+const SPECIFIER = /(\b(?:from|import)\s*\(?\s*)(["'])(\.\.?\/[^"']*)\2/g;
 
 function addExtension(specifier) {
   // Leave anything that already carries a recognized extension.
@@ -31,20 +34,17 @@ function addExtension(specifier) {
   return `${specifier}.js`;
 }
 
-async function* walk(dir) {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) yield* walk(full);
-    else if (entry.name.endsWith(".d.ts")) yield full;
-  }
-}
+const files = (await readdir(distDir, { recursive: true })).filter((f) =>
+  f.endsWith(".d.ts"),
+);
 
 let patched = 0;
-for await (const file of walk(distDir)) {
+for (const rel of files) {
+  const file = join(distDir, rel);
   const src = await readFile(file, "utf8");
   const out = src.replace(
     SPECIFIER,
-    (_m, kw, quote, spec) => `${kw}${quote}${addExtension(spec)}${quote}`,
+    (_m, prefix, quote, spec) => `${prefix}${quote}${addExtension(spec)}${quote}`,
   );
   if (out !== src) {
     await writeFile(file, out);
