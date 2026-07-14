@@ -2,9 +2,10 @@
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 import tsParser from "@typescript-eslint/parser";
 export default [
+  // Global ignores (a config object with only `ignores` applies repo-wide).
+  { ignores: ["dist/**", "node_modules/**", ".yarn/**"] },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["dist/**", "node_modules/**"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
