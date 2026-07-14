@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+Moves the full stacked damage-attribution chart pipeline into the library, so
+consumers own no dice-or-probability logic for that chart.
+
+### Added
+
+- **`PMF.damageAttributionChartModel(options?)`** (and a `DiceQuery` convenience)
+  returns the complete numeric model for the stacked damage-attribution chart:
+  bucket `labels`/`binRanges`, discovered `outcomes` in stack order, per-outcome
+  per-bucket `series` (bar-height mass) and `shares` (conditional tooltip share,
+  with an `epsilon` divide-by-~0 guard), per-bucket `totals`, reversed-convention
+  CCDF `percentiles`, and the `mean`. Options: `maxBuckets` (coarsen wide
+  distributions — split-first-then-bin, so sub-`binSize` damage is never folded
+  into the miss credit), `stackOrder`, `epsilon`. Exported type
+  `DamageAttributionChartModel`.
+
+### Removed
+
+- **BREAKING:** removed the superseded, unused `DiceQuery` chart-series methods
+  `toAttributionChartSeries`, `toDamageAttributionChartSeries`, and
+  `toOutcomeAttributionChartSeries`. Use `attributionByValue()` for the raw split
+  or `damageAttributionChartModel()` for the full chart model.
+
 ## [0.6.0]
 
 Toolchain release: migrates the build to **TypeScript 7.0** (the Go-native
