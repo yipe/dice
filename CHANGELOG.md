@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+Toolchain release: migrates the build to **TypeScript 7.0** (the Go-native
+compiler). No library API or runtime behavior changes — the compiler port is
+behavior-preserving, and consumer type resolution is verified equivalent across
+`node16`, `nodenext`, and `bundler`.
+
+### Changed
+
+- **Migrated to TypeScript 7.0.2** (native Go `tsc`). Type-checking and
+  declaration emit are ~5× faster on this codebase.
+- Declarations are now emitted by the native `tsc` (tsup handles JS bundling
+  only; its `rollup-plugin-dts` path does not support the TS 7 compiler API). A
+  small post-build step adds explicit `.js` extensions to relative specifiers so
+  the output resolves under `node16`/`nodenext`/`bundler`. The published `.d.ts`
+  changes from a single bundled file to a mirrored tree; **named exports and
+  type resolution are unchanged**.
+- Bumped the dev toolchain: Yarn 4.17.1, plus latest `@types/node`,
+  `typescript-eslint`, `eslint`, `tsx`, and `vitest`. Added the
+  `@typescript/typescript6` bridge so `typescript-eslint` (which does not yet
+  support TS 7) continues to lint against the 6.0 API while `tsc` runs on 7.0.
+
 ## [0.5.0]
 
 Pushes damage-attribution / provenance and D&D-probability logic that the
