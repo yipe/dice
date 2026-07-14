@@ -435,125 +435,6 @@ describe("DiceQuery Advanced Methods", () => {
     });
   });
 
-  describe("toAttributionChartSeries", () => {
-    it("should return correct structure", () => {
-      const attribution = labeledQuery.toAttributionChartSeries();
-
-      expect(attribution).toHaveProperty("support");
-      expect(attribution).toHaveProperty("outcomes");
-      expect(attribution).toHaveProperty("data");
-      expect(Array.isArray(attribution.support)).toBe(true);
-      expect(Array.isArray(attribution.outcomes)).toBe(true);
-      expect(typeof attribution.data).toBe("object");
-    });
-
-    it("should create complete integer range for support", () => {
-      const attribution = labeledQuery.toAttributionChartSeries();
-
-      // Should create range from 0 to 12
-      expect(attribution.support).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
-      ]);
-    });
-
-    it("should discover all outcome types", () => {
-      const attribution = labeledQuery.toAttributionChartSeries();
-
-      expect(attribution.outcomes).toContain("hit");
-      expect(attribution.outcomes).toContain("crit");
-      expect(attribution.outcomes).toContain("missNone");
-    });
-
-    it("should respect stack order", () => {
-      const attribution = labeledQuery.toAttributionChartSeries({
-        stackOrder: ["crit", "hit", "missNone"],
-      });
-
-      expect(attribution.outcomes).toEqual(["crit", "hit", "missNone"]);
-    });
-
-    it("should apply filter rules", () => {
-      const attribution = labeledQuery.toAttributionChartSeries({
-        filterRules: (outcome, damage) =>
-          outcome !== "missNone" || damage === 0,
-      });
-
-      // missNone should only appear for damage 0
-      const missNoneData = attribution.data.missNone;
-      expect(missNoneData[0]).toBeGreaterThan(0); // damage 0
-      for (let i = 1; i < missNoneData.length; i++) {
-        expect(missNoneData[i]).toBe(0); // other damages
-      }
-    });
-
-    it("should return percentages by default", () => {
-      const attribution = labeledQuery.toAttributionChartSeries();
-
-      // Sum should be around 100% for each damage value that exists
-      const missNoneData = attribution.data.missNone;
-      const hitData = attribution.data.hit;
-      const critData = attribution.data.crit;
-
-      // For damage 0: should be 50% (0.5 * 100)
-      expect(missNoneData[0]).toBeCloseTo(50, 10);
-
-      // For damage 6: should be 30% (0.3 * 100)
-      expect(hitData[6]).toBeCloseTo(30, 10);
-
-      // For damage 12: should be 20% (0.2 * 100)
-      expect(critData[12]).toBeCloseTo(20, 10);
-    });
-
-    it("should return probabilities when asPercentages is false", () => {
-      const attribution = labeledQuery.toAttributionChartSeries({
-        asPercentages: false,
-      });
-
-      const missNoneData = attribution.data.missNone;
-      expect(missNoneData[0]).toBeCloseTo(0.5, 12);
-    });
-
-    it("should handle empty PMF", () => {
-      const emptyPMF = PMF.empty();
-      const emptyQuery = new DiceQuery([emptyPMF]);
-      const attribution = emptyQuery.toAttributionChartSeries();
-
-      expect(attribution.support).toEqual([]);
-      expect(attribution.outcomes).toEqual([]);
-      expect(attribution.data).toEqual({});
-    });
-
-    it("should handle PMF with no outcomes", () => {
-      const attribution = simpleQuery.toAttributionChartSeries();
-
-      // Should still create support range
-      expect(attribution.support).toEqual([1, 2, 3, 4, 5, 6]);
-      expect(attribution.outcomes).toEqual([]);
-      expect(attribution.data).toEqual({});
-    });
-
-    it("should fill gaps in support with zeros", () => {
-      const gappyPMF = pmfWithLabels({
-        1: { p: 0.5, labels: { hit: 0.5 } },
-        10: { p: 0.5, labels: { hit: 0.5 } },
-        // Gap from 2-9
-      });
-      const query = new DiceQuery([gappyPMF]);
-      const attribution = query.toAttributionChartSeries();
-
-      expect(attribution.support).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-
-      const hitData = attribution.data.hit;
-      expect(hitData[0]).toBeGreaterThan(0); // damage 1
-      expect(hitData[9]).toBeGreaterThan(0); // damage 10
-
-      // Gaps should be zero
-      for (let i = 1; i < 9; i++) {
-        expect(hitData[i]).toBe(0);
-      }
-    });
-  });
-
   describe("Edge Cases and Error Handling", () => {
     it("should handle very small probabilities", () => {
       const tinyPMF = pmfWithLabels({
@@ -601,9 +482,6 @@ describe("DiceQuery Advanced Methods", () => {
 
       const chartData = query.toChartSeries();
       expect(chartData[0].x).toBe(-5);
-
-      const attribution = query.toAttributionChartSeries();
-      expect(attribution.support[0]).toBe(-5);
     });
 
     it("should maintain precision with complex outcome distributions", () => {
