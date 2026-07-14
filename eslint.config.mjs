@@ -6,7 +6,6 @@ export default [
   { ignores: ["dist/**", "node_modules/**", ".yarn/**"] },
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["dist/**", "node_modules/**"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
