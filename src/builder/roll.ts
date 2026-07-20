@@ -79,6 +79,18 @@ export class RollBuilder {
     return this.subRollConfigs.map((c: RollConfig) => ({ ...c }));
   }
 
+  /**
+   * A cheap, stable string that FULLY identifies this builder's PMF — used by {@link AttackBuilder.toPMF}
+   * to cache resolved attack PMFs across rebuilds without walking the AST via {@link toExpression}. A plain
+   * roll is fully determined by its {@link RollConfig} array (count/sides/modifier/reroll/explode/minimum/
+   * bestOf/keep/rollType/isSubtraction), so serializing that is sound. Subclasses whose PMF depends on
+   * hidden state NOT captured by `subRollConfigs` (half/scale/max/parsed/pooled/composite transforms) return
+   * `null` to opt OUT of caching — a conservative miss is always safe; a wrong key would corrupt DPR.
+   */
+  cacheKey(): string | null {
+    return JSON.stringify(this.subRollConfigs);
+  }
+
   // for testing
   static fromConfig(config: Partial<RollConfig>): RollBuilder {
     return new RollBuilder([{ ...defaultConfig, ...config }]);
@@ -755,6 +767,10 @@ export class HalfRollBuilder extends RollBuilder {
     return this.innerRoll.hasHiddenState();
   }
 
+  override cacheKey(): string | null {
+    return null; // half-of transform not captured by subRollConfigs
+  }
+
   // No need to override create if we don't expose RollBuilder methods that use it,
   // but HalfRollBuilder extends RollBuilder so it does.
   // However, HalfRollBuilder seems to just wrap another roll.
@@ -816,6 +832,10 @@ export class ScaleRollBuilder extends RollBuilder {
     return this.innerRoll.hasHiddenState();
   }
 
+  override cacheKey(): string | null {
+    return null; // scale transform not captured by subRollConfigs
+  }
+
   override get lastConfig(): RollConfig {
     return (this.innerRoll as unknown as { lastConfig: RollConfig }).lastConfig;
   }
@@ -867,6 +887,10 @@ export class MaxOfRollBuilder extends RollBuilder {
 
   override hasHiddenState(): boolean {
     return this.innerRoll.hasHiddenState();
+  }
+
+  override cacheKey(): string | null {
+    return null; // max-of transform not captured by subRollConfigs
   }
 
   override get lastConfig(): RollConfig {
@@ -977,6 +1001,11 @@ export class AlwaysHitBuilder extends RollBuilder {
     return this.attackConfig.critThreshold;
   }
 
+  override cacheKey(): string | null {
+    const base = super.cacheKey();
+    return base === null ? null : `H|${this.attackConfig.critThreshold}|${base}`;
+  }
+
   // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
   critOn(critThreshold: number): AlwaysHitBuilder {
     const newConfig = { critThreshold };
@@ -1051,6 +1080,11 @@ export class AlwaysCritBuilder extends RollBuilder {
     return this.attackConfig.critThreshold;
   }
 
+  override cacheKey(): string | null {
+    const base = super.cacheKey();
+    return base === null ? null : `C|${this.fromAlwaysHit ? 1 : 0}|${this.attackConfig.critThreshold}|${this.attackConfig.ac ?? ""}|${base}`;
+  }
+
   critOn(critThreshold: number): AlwaysCritBuilder {
     const newConfig = { critThreshold, ac: this.attackConfig.ac };
     return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
@@ -1088,6 +1122,10 @@ export class ParsedRollBuilder extends RollBuilder {
 
   override hasHiddenState(): boolean {
     return true;
+  }
+
+  override cacheKey(): string | null {
+    return null; // parsed expression not captured by subRollConfigs
   }
 
   protected create(configs: readonly RollConfig[]): RollBuilder {
@@ -1141,6 +1179,10 @@ export class PooledRollBuilder extends RollBuilder {
 
   override hasHiddenState(): boolean {
     return true;
+  }
+
+  override cacheKey(): string | null {
+    return null; // pooled keep-highest not captured by subRollConfigs
   }
 
   override d(_sides: number | undefined): RollBuilder {
@@ -1293,6 +1335,10 @@ class CompositeSumRollBuilder extends RollBuilder {
 
   override hasHiddenState(): boolean {
     return true;
+  }
+
+  override cacheKey(): string | null {
+    return null; // composite sum not captured by subRollConfigs
   }
 
   override getSubRollConfigs(): readonly RollConfig[] {
