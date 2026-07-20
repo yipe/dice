@@ -40,6 +40,11 @@ export class ACBuilder extends RollBuilder {
     return this.attackConfig.critThreshold;
   }
 
+  override cacheKey(): string | null {
+    const base = super.cacheKey();
+    return base === null ? null : `A|${this.attackConfig.ac}|${this.attackConfig.critThreshold}|${base}`;
+  }
+
   // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
   critOn(threshold: number): ACBuilder {
     const newConfig: AttackConfig = {
