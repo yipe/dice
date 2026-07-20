@@ -1,5 +1,6 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -15,6 +16,21 @@ import {
 import type { AttackResolution, CheckBuilder } from "./types";
 
 type ActionEffect = RollBuilder;
+
+/**
+ * Resolved-attack PMF cache. `resolve()`/`toPMF()` re-runs the damage convolution + hit/crit/miss mixture
+ * every call; a DPR sweep resolves the SAME attack thousands of times (dprcalc measured ~99.9% repeats).
+ * Keyed by {@link AttackBuilder.cacheKey} — a cheap serialization of the check + effect {@link RollConfig}s
+ * (NOT the AST-walking `toExpression`), which fully determines the PMF. `null` key ⇒ an effect opted out
+ * (parsed/pooled/half/scale/max/composite) ⇒ resolve uncached. Cached PMFs are immutable (every PMF op
+ * returns a new instance), so sharing is safe.
+ */
+const attackPMFCache = new LRUCache<string, PMF>(4000);
+
+/** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
+export function clearAttackCache(): void {
+  attackPMFCache.clear();
+}
 
 export class AttackBuilder implements CheckBuilder {
   constructor(
@@ -281,9 +297,51 @@ export class AttackBuilder implements CheckBuilder {
     };
   }
 
-  // By default, create PMF with no pruning
+  /**
+   * A cheap, complete key for this attack's resolved PMF, or `null` when it can't be cached soundly (an
+   * effect whose PMF isn't captured by its {@link RollConfig}s — see {@link RollBuilder.cacheKey}). Composed
+   * from the check + hit/crit/miss effect keys + `eps`. `critEffect === null` (noCrit) and `undefined`
+   * (auto-double the hit dice) are distinct crit states, encoded separately.
+   */
+  private cacheKey(eps: number): string | null {
+    const checkKey = this.check.cacheKey();
+    if (checkKey === null) return null;
+
+    let hitKey = "";
+    if (this.hitEffect) {
+      const k = this.hitEffect.cacheKey();
+      if (k === null) return null;
+      hitKey = k;
+    }
+
+    let critKey: string;
+    if (this.critEffect === null) critKey = "n";
+    else if (this.critEffect === undefined) critKey = "a";
+    else {
+      const k = this.critEffect.cacheKey();
+      if (k === null) return null;
+      critKey = k;
+    }
+
+    let missKey = "";
+    if (this.missEffect) {
+      const k = this.missEffect.cacheKey();
+      if (k === null) return null;
+      missKey = k;
+    }
+
+    return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*e${eps}`;
+  }
+
+  // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.
   toPMF(eps: number = 0): PMF {
-    return this.resolve(eps).pmf;
+    const key = this.cacheKey(eps);
+    if (key === null) return this.resolve(eps).pmf;
+    const cached = attackPMFCache.get(key);
+    if (cached) return cached;
+    const pmf = this.resolve(eps).pmf;
+    attackPMFCache.set(key, pmf);
+    return pmf;
   }
 
   get pmf() {
