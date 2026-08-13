@@ -1,6 +1,7 @@
 import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
 import type { DCBuilder } from "./dc";
+import { LRUCache } from "../common/lru-cache";
 import { parse } from "../parser/parser";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -9,6 +10,23 @@ import { AttackBuilder } from "./attack";
 import { d20RollPMF } from "./d20";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
+
+/**
+ * Plain-roll PMF cache, the sibling of {@link attackPMFCache}. `toPMF()` re-runs the whole AST convolution
+ * every call, and a DPR sweep rebuilds the SAME damage roll thousands of times — a Paladin's smite damage,
+ * a Wizard's Fireball. Keyed by {@link RollBuilder.cacheKey} plus `eps`; a `null` key (half/scale/max/parsed/
+ * pooled/composite, whose PMF is not captured by `subRollConfigs`) resolves uncached, because a conservative
+ * miss is always safe and a wrong key would corrupt DPR.
+ *
+ * Subclasses that override `toPMF` (Half/Scale/MaxOf/Composite) never reach this — and all of them return a
+ * `null` key anyway, so they are uncacheable by the same rule either way.
+ */
+const rollPMFCache = new LRUCache<string, PMF>(4000);
+
+/** Clears the plain-roll PMF cache (test/bench seam; mirrors {@link clearAttackCache}). */
+export function clearRollCache(): void {
+  rollPMFCache.clear();
+}
 
 export const defaultConfig: RollConfig = {
   count: 1,
@@ -550,9 +568,16 @@ export class RollBuilder {
     return result.replace(/\+ -/g, "-");
   }
 
+  // Main AST entry point. Cached by the cheap config key across identical rebuilds; see `rollPMFCache`.
   toPMF(eps: number = 0): PMF {
-    // Main AST entry point
-    return pmfFromRollBuilder(this, eps);
+    const key = this.cacheKey();
+    if (key === null) return pmfFromRollBuilder(this, eps);
+    const fullKey = `${key}*e${eps}`;
+    const cached = rollPMFCache.get(fullKey);
+    if (cached) return cached;
+    const pmf = pmfFromRollBuilder(this, eps);
+    rollPMFCache.set(fullKey, pmf);
+    return pmf;
   }
 
   get pmf() {
