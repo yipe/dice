@@ -1,5 +1,6 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -10,6 +11,19 @@ import { ParsedRollBuilder, type RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
 
 export type SaveOutcome = "normal" | "half";
+
+/**
+ * Resolved-save PMF cache, the save-side sibling of {@link attackPMFCache}. `resolve()` re-runs the failure
+ * PMF, the half-damage scale and the success/fail mixture on every call; a save-based DPR sweep (a caster's
+ * Fireball, a Paladin's smite) resolves the SAME save thousands of times. Keyed by
+ * {@link SaveBuilder.cacheKey}; a `null` key resolves uncached.
+ */
+const savePMFCache = new LRUCache<string, PMF>(4000);
+
+/** Clears the resolved-save PMF cache (test/bench seam; mirrors {@link clearAttackCache}). */
+export function clearSaveCache(): void {
+  savePMFCache.clear();
+}
 
 export class SaveBuilder implements CheckBuilder {
   constructor(
@@ -63,9 +77,35 @@ export class SaveBuilder implements CheckBuilder {
     };
   }
 
-  // By default, create PMF with no pruning
+  /**
+   * A cheap, complete key for this save's resolved PMF, or `null` when it can't be cached soundly.
+   * {@link resolve} reads exactly three things: the DC check (via `resolveProbabilities`), the failure
+   * effect's PMF, and the save outcome — so composing their keys pins it. A `ParsedRollBuilder` failure
+   * effect returns `null`, which correctly forces this uncached.
+   */
+  private cacheKey(eps: number): string | null {
+    const checkKey = this.check.cacheKey();
+    if (checkKey === null) return null;
+
+    let failKey = "";
+    if (this.failureEffect) {
+      const k = this.failureEffect.cacheKey();
+      if (k === null) return null;
+      failKey = k;
+    }
+
+    return `${checkKey}*F${failKey}*O${this.saveOutcome}*e${eps}`;
+  }
+
+  // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.
   toPMF(eps: number = 0): PMF {
-    return this.resolve(eps).pmf;
+    const key = this.cacheKey(eps);
+    if (key === null) return this.resolve(eps).pmf;
+    const cached = savePMFCache.get(key);
+    if (cached) return cached;
+    const pmf = this.resolve(eps).pmf;
+    savePMFCache.set(key, pmf);
+    return pmf;
   }
 
   get pmf() {
