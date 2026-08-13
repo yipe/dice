@@ -1,3 +1,4 @@
+import { LRUCache } from "../common/lru-cache";
 import { PMF } from "../pmf/pmf";
 import { pmfFromRollBuilder } from "./ast";
 import { d20RollPMF } from "./d20";
@@ -6,6 +7,17 @@ import { SaveBuilder } from "./save";
 
 interface SaveConfig {
   dc: number;
+}
+
+/**
+ * DC-check PMF cache. The two-outcome success/fail PMF is re-derived on every `toPMF()`, and a save-based
+ * DPR sweep asks for the SAME check thousands of times. Keyed by {@link DCBuilder.cacheKey} + `eps`.
+ */
+const dcPMFCache = new LRUCache<string, PMF>(4000);
+
+/** Clears the DC-check PMF cache (test/bench seam). */
+export function clearDCCache(): void {
+  dcPMFCache.clear();
 }
 
 export class DCBuilder extends RollBuilder {
@@ -65,7 +77,24 @@ export class DCBuilder extends RollBuilder {
     return `(${expression} DC ${this.saveConfig.dc})`;
   }
 
+  /**
+   * The DC check's PMF is fully determined by the save DC plus everything `toPMF` below reads off the roll
+   * configs (`rollType`, `baseReroll`, `modifier`, bonus dice) — all of which `super.cacheKey()` already
+   * serializes. So extend the base key with the DC, mirroring {@link AlwaysHitBuilder.cacheKey}.
+   */
+  override cacheKey(): string | null {
+    const base = super.cacheKey();
+    return base === null ? null : `DC|${this.saveConfig.dc}|${base}`;
+  }
+
   override toPMF(eps: number = 0): PMF {
+    const key = this.cacheKey();
+    const fullKey = key === null ? null : `${key}*e${eps}`;
+    if (fullKey !== null) {
+      const cached = dcPMFCache.get(fullKey);
+      if (cached) return cached;
+    }
+
     const saveDC = this.saveDC;
     const rollType = this.rollType;
     const rerollOne = this.baseReroll > 0;
@@ -91,7 +120,9 @@ export class DCBuilder extends RollBuilder {
       [0, psuccess > 0 ? psuccess : 0],
       [1, pfail > 0 ? pfail : 0],
     ]);
-    return PMF.fromMap(m, eps);
+    const pmf = PMF.fromMap(m, eps);
+    if (fullKey !== null) dcPMFCache.set(fullKey, pmf);
+    return pmf;
   }
 }
 
