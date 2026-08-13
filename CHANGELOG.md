@@ -5,6 +5,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1]
+
+Extends the resolved-PMF cache to every builder kind, so no consumer has to
+key its own cache by the AST-walking `toExpression()`.
+
+### Changed
+
+- **`RollBuilder.toPMF`, `DCBuilder.toPMF` and `SaveBuilder.toPMF` now cache their
+  resolved PMFs**, joining `AttackBuilder` (0.8.0). All four key by a cheap
+  serialization of their `RollConfig`s and return `null` — resolving uncached —
+  whenever a transform's PMF is not captured by those configs, so a conservative
+  miss is always preferred to a wrong hit.
+  - `RollBuilder` reuses the `cacheKey()` that already existed for
+    `AttackBuilder`'s benefit. Subclasses overriding `toPMF`
+    (`Half`/`Scale`/`MaxOf`/`Composite`) return a `null` key and stay uncached.
+  - `DCBuilder` gains a `cacheKey()` extending the base with the save DC.
+  - `SaveBuilder` gains a `cacheKey()` over the check, the failure effect and the
+    save outcome.
+
+  Motivation: profiling a dprcalc DPR plan put `toExpression()` at ~18% of self
+  time — the largest single cost — because only attacks had an internal cache, so
+  the consumer keyed its own by the expression string. Save-based builds have no
+  such fallback: removing that consumer cache without this change regressed a
+  Swords Bard by 15% and an Evoker Wizard by 11%. With it, the consumer layer can
+  be deleted outright (measured −1% to −4% across five character canaries).
+
+### Added
+
+- `clearRollCache()`, `clearDCCache()` and `clearSaveCache()` test/bench seams,
+  mirroring `clearAttackCache()`.
+
+## [0.8.0]
+
+### Added
+
+- **`AttackBuilder.toPMF` caches its resolved PMF**, keyed by a cheap
+  serialization of the check + effect `RollConfig`s rather than the AST-walking
+  `toExpression()`. A DPR sweep resolves the same attack thousands of times
+  (~99.9% repeats measured in dprcalc). `clearAttackCache()` is the test seam.
+
 ## [0.7.0]
 
 Moves the full stacked damage-attribution chart pipeline into the library, so
