@@ -343,7 +343,7 @@ import { turn, d20, d4, d6, roll } from "@yipe/dice/builder";
 
 const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 
-const rogue = turn([dagger, dagger]).rider({ damage: roll(3, d6), on: "first-hit" });
+const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
 
 rogue.mean();      // 18.6225
 rogue.pmf.pAt(0);  // 0.1225 — chance the whole turn whiffs
@@ -353,26 +353,27 @@ A `Turn` resolves the **exact joint distribution**. Riders are correlated with t
 trigger them, so building a rider as a separate PMF and convolving it in gets the right mean but the
 wrong distribution — in the example above it reports a whiff chance of `0.015` instead of `0.1225`.
 
-| `on` | fires when | example |
+| method | fires when | example |
 |---|---|---|
-| `first-hit` | the first attack that lands (doubled if it crit) | Sneak Attack |
-| `any-crit` | at least one attack crit | Divine Smite |
-| `any-miss` | at least one attack missed | Unerring Accuracy, Lucky |
-| `every-hit` | once per landing attack | Hunter's Mark, Hex, Rage |
-| `not-fired` | a named rider did *not* fire | "flurry of blows if I didn't smite" |
+| `onFirstHit` | the first attack that lands (doubled if it crit) | Sneak Attack |
+| `onAnyCrit` | at least one attack crit | Divine Smite |
+| `onAnyMiss` | at least one attack missed | Unerring Accuracy, Lucky |
+| `onEveryHit` | once per landing attack | Hunter's Mark, Hex, Rage |
+| `otherwise` | the rider just before it did *not* fire | "flurry of blows if I didn't smite" |
 
-`of` selects which attacks a rider watches; it defaults to all of them. Riders can be attacks
-themselves, and can be sources for other riders:
+Each takes an optional second argument: `{ id, of, critDamage }`. `of` selects which attacks the
+rider watches and defaults to all of them. Riders can be attacks themselves, and can be sources for
+other riders:
 
 ```ts
 const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
 
 const goliath = turn([dagger, dagger])
-  .rider({ damage: roll(3, d6), on: "first-hit" })                   // sneak attack
-  .rider({ damage: d10, on: "first-hit" })                           // fire's burn
-  .rider({ id: "smite", damage: roll(2, d8), on: "any-crit" })
-  .rider({ damage: [flurry, flurry], on: "not-fired", of: "smite" }) // 2 attacks if no smite
-  .rider({ damage: d6, on: "every-hit" });                           // hunter's mark
+  .onFirstHit(roll(3, d6))                    // sneak attack
+  .onFirstHit(d10)                            // fire's burn
+  .onAnyCrit(roll(2, d8), { id: "smite" })
+  .otherwise([flurry, flurry])                // two more attacks if the smite missed out
+  .onEveryHit(d6);                            // hunter's mark
 
 goliath.mean();                        // 39.5903
 goliath.fireProbability("smite");      // 0.0975
@@ -380,19 +381,25 @@ goliath.query().damageAttributionChartModel();
 ```
 
 Riders sharing a trigger resolve **jointly**: sneak attack and fire's burn above fire together or not
-at all, which is visible in the spread even though it never changes the mean.
+at all, which is visible in the spread even though it never changes the mean. `otherwise()` binds to
+the rider immediately before it, so the smite and the flurry are two branches of one decision and
+can never both land.
 
-Building a turn from plain data instead — validated eagerly, with a typed `TurnSpecError.code`
-(`unknown-id`, `cycle`, `not-an-attack`, …) that a UI can map straight onto field states:
+Every method is sugar over `rider()`, which takes the trigger as data — `{ damage, on, of }` with
+`on` one of `first-hit`, `any-crit`, `any-miss`, `every-hit`, `not-fired`. `Trigger` is JSON-safe, so
+a UI can persist one and hand it straight back:
 
 ```ts
 import { Turn } from "@yipe/dice/builder";
 
-Turn.from({
+const turnFromUI = Turn.from({
   attacks: [{ id: "dagger 1", attack: dagger }, { id: "dagger 2", attack: dagger }],
   riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
-}).query();
+});
 ```
+
+`Turn.from` validates up front and throws a `TurnSpecError` whose `code` (`unknown-id`, `cycle`,
+`not-an-attack`, …) maps straight onto a field state.
 
 ### Statistics and Charts
 

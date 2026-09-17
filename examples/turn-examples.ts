@@ -11,10 +11,7 @@ const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
  * that first landing attack was a crit.
  */
 function sneakAttack() {
-  const rogue = turn([dagger, dagger]).rider({
-    damage: roll(3, d6),
-    on: "first-hit",
-  });
+  const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
 
   printSummary("Rogue: two daggers + Sneak Attack", rogue.query());
   console.log("P(whiff turn):", rogue.pmf.pAt(0).toFixed(4));
@@ -27,12 +24,8 @@ function sneakAttack() {
  */
 function perHitVersusOncePerTurn() {
   const attacks = turn([dagger, dagger]);
-  const mark = turn([dagger, dagger]).rider({
-    id: "mark",
-    damage: d6,
-    on: "every-hit",
-  });
-  const sneak = turn([dagger, dagger]).rider({ damage: d6, on: "first-hit" });
+  const mark = turn([dagger, dagger]).onEveryHit(d6, { id: "mark" });
+  const sneak = turn([dagger, dagger]).onFirstHit(d6);
 
   console.log("\nBase two daggers      :", attacks.mean().toFixed(4));
   console.log("+ 1d6 every hit       :", mark.mean().toFixed(4));
@@ -49,11 +42,11 @@ function goliathRogueMonkPaladin() {
   const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
 
   const goliath = turn([dagger, dagger])
-    .rider({ damage: roll(3, d6), on: "first-hit" }) // sneak attack
-    .rider({ damage: d10, on: "first-hit" }) // fire's burn
-    .rider({ id: "smite", damage: roll(2, d8), on: "any-crit" })
-    .rider({ id: "flurry", damage: [flurry, flurry], on: "not-fired", of: "smite" })
-    .rider({ id: "mark", damage: d6, on: "every-hit" });
+    .onFirstHit(roll(3, d6)) // sneak attack
+    .onFirstHit(d10) // fire's burn
+    .onAnyCrit(roll(2, d8), { id: "smite" })
+    .otherwise([flurry, flurry], { id: "flurry" })
+    .onEveryHit(d6, { id: "mark" });
 
   printSummary("Goliath rogue/monk/paladin", goliath.query());
   console.log("P(smite) :", goliath.fireProbability("smite").toFixed(4));
@@ -71,11 +64,7 @@ function goliathRogueMonkPaladin() {
  * attack gated on "something missed".
  */
 function unerringAccuracy() {
-  const monk = turn([dagger, dagger]).rider({
-    id: "reroll",
-    damage: dagger,
-    on: "any-miss",
-  });
+  const monk = turn([dagger, dagger]).onAnyMiss(dagger, { id: "reroll" });
 
   console.log("\nWith a once-per-turn miss reroll:", monk.mean().toFixed(4));
   console.log("P(reroll used):", monk.fireProbability("reroll").toFixed(4));
