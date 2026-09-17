@@ -1,5 +1,5 @@
 import type { OutcomeType } from "../common/types";
-import { EPS } from "../common/types";
+import { ALL_OUTCOME_TYPES, EPS } from "../common/types";
 import { PMF } from "./pmf";
 import type { DamageAttributionChartModel } from "./pmf";
 
@@ -1042,6 +1042,56 @@ export class DiceQuery {
       out.set(o, { min: r.min ?? 0, avg, max: r.max ?? 0 });
     }
     return out;
+  }
+
+  /**
+   * Per-outcome probabilities and damage ranges, aggregated over the individual
+   * singles rather than read off the combined distribution.
+   *
+   * `damageRange` is the sum, over every single that can produce the outcome, of
+   * that single's own conditional damage range: "what this outcome contributes
+   * across the whole turn when every attack that can produce it does". Linear in
+   * the number of attacks by construction.
+   *
+   * Prefer this over {@link DiceQuery.snapshot} for a multi-attack query.
+   * `snapshot` reads `damageRange` off the combined PMF's `count`, which the
+   * convolution accumulates as an expected count, so its `avg` is size-biased
+   * for N≥2 (its own doc comment says so). The two agree for a single attack.
+   *
+   * Only outcomes that actually occur appear in the result.
+   *
+   * @param outcomes Which outcomes to consider; defaults to every canonical one.
+   */
+  outcomeStats(
+    outcomes: readonly OutcomeType[] = ALL_OUTCOME_TYPES
+  ): Map<OutcomeType, OutcomeSnapshot> {
+    const stats = new Map<OutcomeType, OutcomeSnapshot>();
+    const perSingle = this.singles.map((pmf) => new DiceQuery([pmf], undefined, this._eps));
+
+    for (const outcome of outcomes) {
+      const atLeastOneProbability = this.probAtLeastOne(outcome);
+      if (atLeastOneProbability <= 0) continue;
+
+      const damageRange = { min: 0, avg: 0, max: 0 };
+      let contributors = 0;
+      for (const single of perSingle) {
+        if (single.probAtLeastOne(outcome) <= 0) continue;
+        contributors++;
+        const stat = single.damageStatsFrom(outcome);
+        damageRange.min += stat.min;
+        damageRange.avg += stat.avg;
+        damageRange.max += stat.max;
+      }
+
+      stats.set(outcome, {
+        atLeastOneProbability,
+        allProbability:
+          contributors > 0 ? this.probExactlyK(outcome, contributors) : 0,
+        damageRange,
+      });
+    }
+
+    return stats;
   }
 
   /**
