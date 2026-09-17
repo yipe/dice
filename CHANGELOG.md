@@ -51,6 +51,31 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   decision rather than an independent event — mutually exclusive riders can never
   both land. Riders may be attacks themselves, and may be sources for other riders.
 
+- **`tryParse(expression)`** — `parse` without the throw, returning an empty PMF
+  for junk. It also accepts a bare integer, which the grammar rejects but a
+  half-typed damage field is for a keystroke or two. Every consumer had written
+  this try/catch; dprcalc's version fell back to `1d1 + (n - 1)`, which the
+  parser then rejected for negative `n`. This one builds the delta directly.
+
+- **`withRollType(expression, rollType)`** — rewrite an expression's attack roll
+  between flat / advantage / disadvantage / elven accuracy, leaving the damage,
+  crit and miss clauses alone. Only an `AC` group is touched: a `DC` group is the
+  target's saving throw, which the attacker's advantage does not affect, so saves
+  and pure damage expressions come back unchanged and the function is safe to map
+  over a mixed list. A halfling-luck `h` prefix is preserved.
+
+  dprcalc was doing this by round-tripping through its own `AttackModel` parser
+  and re-serializing, 47 lines deep, because there was no way to say "same attack,
+  with advantage" to the library.
+
+- **`DiceQuery.outcomeStats(outcomes?)`** — per-outcome `atLeastOneProbability`,
+  `allProbability` and `damageRange`, with the range summed over the singles that
+  can produce the outcome rather than read off the combined PMF. `snapshot()`
+  takes its range from the combined `count`, which the convolution accumulates as
+  an expected count, so its `avg` is size-biased for two or more attacks (its own
+  doc comment says so). `outcomeStats` is linear in the attack count by
+  construction, and the two agree for a single attack.
+
 - **`Turn.from(spec)`** for plain-data construction, validated up front with a
   typed `TurnSpecError.code` (`unknown-id`, `duplicate-id`, `self-reference`,
   `cycle`, `not-an-attack`, `too-many-groups`), so a consumer UI can map errors to
