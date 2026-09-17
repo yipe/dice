@@ -85,6 +85,16 @@ export class DiceQuery {
       return this._combinedWithAttr;
     }
 
+    // An explicitly provided `combined` is NOT the convolution of `singles` —
+    // a Turn's exact joint distribution, for instance, is narrower than the
+    // independent product because riders correlate with their sources.
+    // Re-convolving would silently discard it (and drop the riders' damage
+    // entirely), so attribute the provided distribution itself.
+    if (this._combinedProvided) {
+      this._combinedWithAttr = this.combined.withAttribution();
+      return this._combinedWithAttr;
+    }
+
     // Fast path: if every single already carries attribution (as parser-
     // generated PMFs do), the attributed convolution is bit-for-bit identical
     // to `combined` — reuse it instead of convolving a second time.

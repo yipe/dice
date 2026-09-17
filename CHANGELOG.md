@@ -5,6 +5,69 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0]
+
+Adds `Turn`: attacks plus conditional damage riders, resolved to one exact joint
+distribution. This is the roadmap's `Turn` / `DamageRider` item.
+
+### Added
+
+- **`turn()` / `Turn`** (`@yipe/dice/builder`). Declare attacks, then riders with a
+  `Trigger`: `first-hit` (Sneak Attack), `any-crit` (Divine Smite), `any-miss`
+  (Unerring Accuracy, Lucky), `every-hit` (Hunter's Mark, Hex, Rage), or
+  `not-fired` ("flurry of blows if I didn't smite"). `of` selects which attacks a
+  rider watches and defaults to all of them.
+
+  ```ts
+  const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+  const rogue = turn([dagger, dagger]).rider({ damage: roll(3, d6), on: "first-hit" });
+  rogue.mean();     // 18.6225
+  rogue.pmf.pAt(0); // 0.1225
+  ```
+
+  Motivation: the pattern the README used to recommend — build a rider PMF with
+  `firstSuccessSplit` + `PMF.exclusive`, then convolve it alongside the attacks —
+  is only correct in the mean. A rider is perfectly correlated with the attacks
+  that trigger it, so treating it as an independent single corrupts the
+  distribution. For two `d20+8 AC 16 → 1d4+4` daggers plus `3d6` Sneak Attack it
+  reports P(0 damage) = 0.015 against a true 0.1225, and a standard deviation of
+  7.18 against 8.89. Because the means agreed, DPR checks never caught it while
+  every distribution chart and percentile was wrong. `Turn` owns the sources and
+  walks the joint outcome space instead, carrying one packed byte of state per
+  trigger group.
+
+  Riders sharing a trigger resolve jointly, so Sneak Attack and Fire's Burn fire
+  together or not at all, and a `not-fired` rider is the other branch of the same
+  decision rather than an independent event — mutually exclusive riders can never
+  both land. Riders may be attacks themselves, and may be sources for other riders.
+
+- **`Turn.from(spec)`** for plain-data construction, validated up front with a
+  typed `TurnSpecError.code` (`unknown-id`, `duplicate-id`, `self-reference`,
+  `cycle`, `not-an-attack`, `too-many-groups`), so a consumer UI can map errors to
+  field states rather than reimplementing the checks. `Trigger` is JSON-safe and
+  meant to be persisted verbatim.
+
+- **`Turn.fireProbability(id)`** — P(a rider fired), which the walk already knows. For
+  `every-hit` riders it reports P(at least one source hit).
+
+- `examples/turn-examples.ts` and `yarn example turn`.
+
+### Changed
+
+- **`DiceQuery.combinedWithAttribution()` now honours an explicitly provided
+  `combined` distribution** instead of re-convolving `singles`. A provided
+  combined is not necessarily the independent product of the singles — a `Turn`'s
+  is strictly narrower — and re-convolving discarded it, dropping every rider's
+  damage from attribution charts. Queries that provide no combined are unaffected.
+
+### Removed
+
+- `examples/sneak-attack-examples.ts` (~800 lines, six hand-rolled variants of the
+  same turn). It only existed because there was no primitive for conditional
+  riders. Its state-machine variant is the ancestor of `Turn`'s walk, and its
+  agreement checks are now `tests/turn-exactness.test.ts`, which compares `Turn`
+  against a brute-force enumeration of every attack-outcome sequence.
+
 ## [0.8.1]
 
 Extends the resolved-PMF cache to every builder kind, so no consumer has to
