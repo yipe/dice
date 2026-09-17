@@ -369,14 +369,13 @@ other riders:
 const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
 
 const goliath = turn([dagger, dagger])
-  .onFirstHit(roll(3, d6))                    // sneak attack
-  .onFirstHit(d10)                            // fire's burn
-  .onAnyCrit(roll(2, d8), { id: "smite" })
-  .otherwise([flurry, flurry])                // two more attacks if the smite missed out
-  .onEveryHit(d6);                            // hunter's mark
+  .onFirstHit(roll(3, d6))     // sneak attack
+  .onFirstHit(d10)             // fire's burn
+  .onAnyCrit(roll(2, d8))      // divine smite
+  .otherwise([flurry, flurry]) // two more attacks if the smite missed out
+  .onEveryHit(d6);             // hunter's mark
 
-goliath.mean();                        // 39.5903
-goliath.fireProbability("smite");      // 0.0975
+goliath.mean(); // 39.5903
 goliath.query().damageAttributionChartModel();
 ```
 
@@ -384,6 +383,14 @@ Riders sharing a trigger resolve **jointly**: sneak attack and fire's burn above
 at all, which is visible in the spread even though it never changes the mean. `otherwise()` binds to
 the rider immediately before it, so the smite and the flurry are two branches of one decision and
 can never both land.
+
+Nothing above needs an `id`. Name a rider when you want to ask about it afterwards, or when you want
+a `not-fired` trigger to point somewhere other than the previous rider:
+
+```ts
+const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" });
+paladin.fireProbability("smite"); // 0.0975
+```
 
 Every method is sugar over `rider()`, which takes the trigger as data — `{ damage, on, of }` with
 `on` one of `first-hit`, `any-crit`, `any-miss`, `every-hit`, `not-fired`. `Trigger` is JSON-safe, so
