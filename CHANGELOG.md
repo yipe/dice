@@ -12,18 +12,28 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
 
 ### Added
 
-- **`turn()` / `Turn`** (`@yipe/dice/builder`). Declare attacks, then riders with a
-  `Trigger`: `first-hit` (Sneak Attack), `any-crit` (Divine Smite), `any-miss`
-  (Unerring Accuracy, Lucky), `every-hit` (Hunter's Mark, Hex, Rage), or
-  `not-fired` ("flurry of blows if I didn't smite"). `of` selects which attacks a
-  rider watches and defaults to all of them.
+- **`turn()` / `Turn`** (`@yipe/dice/builder`). Declare attacks, then chain riders
+  in the same `onX` vocabulary the builders already use: `onFirstHit` (Sneak
+  Attack), `onAnyCrit` (Divine Smite), `onAnyMiss` (Unerring Accuracy, Lucky),
+  `onEveryHit` (Hunter's Mark, Hex, Rage), and `otherwise` for the branch where
+  the preceding rider did not fire ("flurry of blows if I didn't smite").
 
   ```ts
   const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
-  const rogue = turn([dagger, dagger]).rider({ damage: roll(3, d6), on: "first-hit" });
+  const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
   rogue.mean();     // 18.6225
   rogue.pmf.pAt(0); // 0.1225
+
+  const goliath = turn([dagger, dagger])
+    .onFirstHit(roll(3, d6))
+    .onAnyCrit(roll(2, d8), { id: "smite" })
+    .otherwise([flurry, flurry])
+    .onEveryHit(d6);
   ```
+
+  Each method takes an optional `{ id, of, critDamage }`, where `of` selects which
+  attacks the rider watches and defaults to all of them. All of them are sugar
+  over `rider({ damage, on, of })`, which takes the trigger as plain data.
 
   Motivation: the pattern the README used to recommend — build a rider PMF with
   `firstSuccessSplit` + `PMF.exclusive`, then convolve it alongside the attacks —

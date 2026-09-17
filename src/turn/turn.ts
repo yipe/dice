@@ -12,7 +12,14 @@ import {
   MISS_BIT,
   START_CODE,
 } from "./state";
-import type { Attack, Rider, Source, TurnSpec } from "./types";
+import type {
+  Attack,
+  Rider,
+  RiderDamage,
+  RiderOptions,
+  Source,
+  TurnSpec,
+} from "./types";
 import { TurnSpecError } from "./types";
 
 /** Which payload a rider uses when it fires, or `null` when it doesn't fire. */
@@ -110,6 +117,69 @@ export class Turn {
       this.eps,
       undefined
     );
+  }
+
+  /** 3d6 on the first dagger that lands — Sneak Attack. */
+  onFirstHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    return this.rider({ ...options, damage, on: "first-hit" });
+  }
+
+  /** 2d8 whenever anything crits — Divine Smite. */
+  onAnyCrit(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    return this.rider({ ...options, damage, on: "any-crit" });
+  }
+
+  /** A fresh attack when something missed — Unerring Accuracy, Lucky. */
+  onAnyMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    return this.rider({ ...options, damage, on: "any-miss" });
+  }
+
+  /** 1d6 on each attack that lands — Hunter's Mark, Hex, Rage. */
+  onEveryHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    return this.rider({ ...options, damage, on: "every-hit" });
+  }
+
+  /**
+   * Damage for the turns where the rider added just before this one did *not*
+   * fire: "flurry of blows if I didn't smite".
+   *
+   * ```ts
+   * turn([dagger, dagger])
+   *   .onAnyCrit(roll(2, d8))      // smite
+   *   .otherwise([flurry, flurry]) // ... or two more attacks
+   * ```
+   *
+   * Always binds to the *immediately* preceding rider, so the two are branches of
+   * one decision and can never both land. Note that chaining it therefore
+   * alternates rather than laddering: `a.otherwise(b).otherwise(c)` makes `c`
+   * fire whenever `b` did not, which is exactly when `a` did. For a genuine
+   * three-way priority chain, name the riders and use explicit `not-fired`
+   * triggers against the right one.
+   */
+  otherwise(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    const index = this.riders.length - 1;
+    if (index < 0) {
+      throw new TurnSpecError(
+        "unknown-id",
+        "",
+        "otherwise() needs a preceding rider to negate."
+      );
+    }
+    const previous = this.riders[index];
+    if (previous.on === "every-hit") {
+      throw new TurnSpecError(
+        "not-an-attack",
+        previous.id ?? `rider ${index + 1}`,
+        "otherwise() cannot negate an every-hit rider: it can fire more than once."
+      );
+    }
+
+    // `of` must name the previous rider, so give it the id `buildPlan` would.
+    const target = previous.id ?? `rider ${index + 1}`;
+    const riders: Rider[] = [...this.riders];
+    riders[index] = { ...previous, id: target };
+    riders.push({ ...options, damage, on: "not-fired", of: target });
+    return new Turn(this.attacks, riders, this.eps, undefined);
   }
 
   /** The exact joint distribution: mass 1, outcome-labelled. Computed once. */

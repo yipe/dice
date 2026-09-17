@@ -37,13 +37,23 @@ export type Damage = PMF | ToPMF;
 /** A source must resolve to an *outcome-labelled* PMF (hit/crit/miss). */
 export type Source = Damage;
 
-export type Rider = Trigger & {
+/** One payload, or several to convolve: Flurry of Blows is `[flurry, flurry]`. */
+export type RiderDamage = Damage | readonly Damage[];
+
+/** Everything about a rider except what it does and when — see `Turn.onFirstHit`. */
+export interface RiderOptions {
   /** Required only if another rider names this one in `of`. */
   id?: string;
-  /** An array is convolved: Flurry of Blows is `[flurry, flurry]`. */
-  damage: Damage | readonly Damage[];
+  /** Which attacks to watch. Defaults to every declared attack. */
+  of?: readonly string[];
   /** Defaults to `damage` with dice doubled when that is possible, else `damage`. */
-  critDamage?: Damage | readonly Damage[];
+  critDamage?: RiderDamage;
+}
+
+export type Rider = Trigger & {
+  id?: string;
+  damage: RiderDamage;
+  critDamage?: RiderDamage;
 };
 
 /** A bare source gets the id `attack 1`, `attack 2`, … in declaration order. */
