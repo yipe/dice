@@ -44,9 +44,11 @@ function goliathRogueMonkPaladin() {
   const goliath = turn([dagger, dagger])
     .onFirstHit(roll(3, d6)) // sneak attack
     .onFirstHit(d10) // fire's burn
+    // Only `smite` and `flurry` are named, because the lines below ask about
+    // them by name; `otherwise` itself finds its target without an id.
     .onAnyCrit(roll(2, d8), { id: "smite" })
     .otherwise([flurry, flurry], { id: "flurry" })
-    .onEveryHit(d6, { id: "mark" });
+    .onEveryHit(d6);
 
   printSummary("Goliath rogue/monk/paladin", goliath.query());
   console.log("P(smite) :", goliath.fireProbability("smite").toFixed(4));
