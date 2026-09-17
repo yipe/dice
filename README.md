@@ -121,6 +121,11 @@ src/
 ├── parser/           # String-based dice expression parser
 │   ├── parser.ts     # Main parser implementation
 │   └── dice.ts       # Dice class (legacy parser representation)
+├── turn/             # Turns: attacks + conditional damage riders
+│   ├── types.ts      # Trigger, Rider, TurnSpec, TurnSpecError
+│   ├── plan.ts       # Spec validation and step/group resolution
+│   ├── state.ts      # Packed per-group trigger state
+│   └── turn.ts       # Turn class - exact joint distribution
 ├── pmf/              # Probability Mass Function core
 │   ├── pmf.ts        # PMF class - core data structure
 │   ├── query.ts      # DiceQuery - analysis interface
@@ -329,27 +334,64 @@ try {
 }
 ```
 
-### Sneak Attack (Conditional Damage)
+### Damage Riders (Sneak Attack, Smite, Hunter's Mark)
 
-Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:
+Conditional damage is a **`turn()`**: attacks, plus riders that fire based on what those attacks did.
 
 ```ts
-import { DiceQuery, PMF, roll } from "@yipe/dice";
+import { turn, d20, d4, d6, roll } from "@yipe/dice/builder";
 
-function sneakAttack() {
-  const attackPMF = d20.plus(8).ac(16).onHit(d4.plus(4)).pmf;
-  const sneakAttack = roll(3, d6);
-  const attacks = new DiceQuery([attackPMF, attackPMF]);
-  const [pHit, pCrit] = attacks.firstSuccessSplit(onAnyHit, onCritOnly);
-  const sneakPMF = PMF.exclusive([
-    [sneakAttack.pmf, pHit],
-    [sneakAttack.doubleDice().pmf, pCrit],
-  ]);
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 
-  return new DiceQuery([attackPMF, attackPMF, sneakPMF]);
-}
+const rogue = turn([dagger, dagger]).rider({ damage: roll(3, d6), on: "first-hit" });
 
-console.log("DPR with once-per-turn sneak attack: ", sneakAttack().mean());
+rogue.mean();      // 18.6225
+rogue.pmf.pAt(0);  // 0.1225 — chance the whole turn whiffs
+```
+
+A `Turn` resolves the **exact joint distribution**. Riders are correlated with the attacks that
+trigger them, so building a rider as a separate PMF and convolving it in gets the right mean but the
+wrong distribution — in the example above it reports a whiff chance of `0.015` instead of `0.1225`.
+
+| `on` | fires when | example |
+|---|---|---|
+| `first-hit` | the first attack that lands (doubled if it crit) | Sneak Attack |
+| `any-crit` | at least one attack crit | Divine Smite |
+| `any-miss` | at least one attack missed | Unerring Accuracy, Lucky |
+| `every-hit` | once per landing attack | Hunter's Mark, Hex, Rage |
+| `not-fired` | a named rider did *not* fire | "flurry of blows if I didn't smite" |
+
+`of` selects which attacks a rider watches; it defaults to all of them. Riders can be attacks
+themselves, and can be sources for other riders:
+
+```ts
+const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
+
+const goliath = turn([dagger, dagger])
+  .rider({ damage: roll(3, d6), on: "first-hit" })                   // sneak attack
+  .rider({ damage: d10, on: "first-hit" })                           // fire's burn
+  .rider({ id: "smite", damage: roll(2, d8), on: "any-crit" })
+  .rider({ damage: [flurry, flurry], on: "not-fired", of: "smite" }) // 2 attacks if no smite
+  .rider({ damage: d6, on: "every-hit" });                           // hunter's mark
+
+goliath.mean();                        // 39.5903
+goliath.fireProbability("smite");      // 0.0975
+goliath.query().damageAttributionChartModel();
+```
+
+Riders sharing a trigger resolve **jointly**: sneak attack and fire's burn above fire together or not
+at all, which is visible in the spread even though it never changes the mean.
+
+Building a turn from plain data instead — validated eagerly, with a typed `TurnSpecError.code`
+(`unknown-id`, `cycle`, `not-an-attack`, …) that a UI can map straight onto field states:
+
+```ts
+import { Turn } from "@yipe/dice/builder";
+
+Turn.from({
+  attacks: [{ id: "dagger 1", attack: dagger }, { id: "dagger 2", attack: dagger }],
+  riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
+}).query();
 ```
 
 ### Statistics and Charts
@@ -386,7 +428,7 @@ This repository includes example scripts:
 ```bash
 yarn example basic
 yarn example stats
-yarn example sneakattack
+yarn example turn
 yarn example misc
 ```
 
@@ -467,7 +509,7 @@ This enables rich statistics like "how much damage comes from crits vs hits".
 ## 🧱 Roadmap
 
 - [ ] Create a **web playground** with live examples
-- [ ] Consider creating higher-level APIs: `Turn`, `Attack`, `DamageRider`
+- [x] Higher-level `Turn` API for conditional damage riders (0.9.0)
 - [ ] Add more comprehensive 5e rule examples
 - [ ] Performance improvements for DPR-only calculations
 - [ ] Multi-round and sustained vs nova simulations
