@@ -366,13 +366,13 @@ rider watches and defaults to all of them. Riders can be attacks themselves, and
 other riders:
 
 ```ts
-const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
+const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
 
 const goliath = turn([dagger, dagger])
   .onFirstHit(roll(3, d6))     // sneak attack
   .onFirstHit(d10)             // fire's burn
   .onAnyCrit(roll(2, d8))      // divine smite
-  .otherwise([flurry, flurry]) // two more attacks if the smite missed out
+  .otherwise([unarmed, unarmed]) // two more attacks if the smite missed out
   .onEveryHit(d6);             // hunter's mark
 
 goliath.mean(); // 39.5903

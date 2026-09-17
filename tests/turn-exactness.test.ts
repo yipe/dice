@@ -95,15 +95,15 @@ describe("Turn exactness vs brute force", () => {
 
   it("matches any-crit plus its not-fired complement", () => {
     const smite = roll(2, d8);
-    const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
+    const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
 
     const actual = turn([dagger, dagger])
       .rider({ id: "smite", damage: smite, on: "any-crit" })
-      .rider({ damage: [flurry, flurry], on: "not-fired", of: "smite" }).pmf;
+      .rider({ damage: [unarmed, unarmed], on: "not-fired", of: "smite" }).pmf;
 
-    const flurryPair = flurry.pmf.convolve(flurry.pmf);
+    const flurry = unarmed.pmf.convolve(unarmed.pmf);
     const expected = bruteForce(2, (sequence) =>
-      sequence.includes("crit") ? [smite.doubleDice().pmf] : [flurryPair]
+      sequence.includes("crit") ? [smite.doubleDice().pmf] : [flurry]
     );
 
     expectSamePMF(actual, expected);

@@ -5,7 +5,7 @@ import { d10, d20, d4, d6, d8, roll } from "../src/builder/factory";
 import { turn, TurnSpecError } from "../src/turn";
 
 const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
-const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
+const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
 
 describe("chained trigger methods", () => {
   it("each onX method matches the equivalent rider object", () => {
@@ -49,14 +49,14 @@ describe("chained trigger methods", () => {
       .onFirstHit(roll(3, d6))
       .onFirstHit(d10)
       .onAnyCrit(roll(2, d8), { id: "smite" })
-      .otherwise([flurry, flurry])
+      .otherwise([unarmed, unarmed])
       .onEveryHit(d6);
 
     const spelled = turn([dagger, dagger])
       .rider({ damage: roll(3, d6), on: "first-hit" })
       .rider({ damage: d10, on: "first-hit" })
       .rider({ id: "smite", damage: roll(2, d8), on: "any-crit" })
-      .rider({ damage: [flurry, flurry], on: "not-fired", of: "smite" })
+      .rider({ damage: [unarmed, unarmed], on: "not-fired", of: "smite" })
       .rider({ damage: d6, on: "every-hit" });
 
     expect(chained.mean()).toBeCloseTo(spelled.mean(), 10);

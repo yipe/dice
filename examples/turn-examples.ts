@@ -39,7 +39,7 @@ function perHitVersusOncePerTurn() {
  * exclusive rather than independent.
  */
 function goliathRogueMonkPaladin() {
-  const flurry = d20.plus(8).ac(16).onHit(d6.plus(4));
+  const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
 
   const goliath = turn([dagger, dagger])
     .onFirstHit(roll(3, d6)) // sneak attack
@@ -47,7 +47,7 @@ function goliathRogueMonkPaladin() {
     // Only `smite` and `flurry` are named, because the lines below ask about
     // them by name; `otherwise` itself finds its target without an id.
     .onAnyCrit(roll(2, d8), { id: "smite" })
-    .otherwise([flurry, flurry], { id: "flurry" })
+    .otherwise([unarmed, unarmed], { id: "flurry" })
     .onEveryHit(d6);
 
   printSummary("Goliath rogue/monk/paladin", goliath.query());
