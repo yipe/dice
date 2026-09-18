@@ -8,7 +8,7 @@
 // Types:
 //   basic       Basic dice rolling and query examples
 //   stats       Advanced statistics and probability analysis
-//   sneakattack Sneak attack stress test examples
+//   turn        Conditional damage riders (sneak attack, smite, flurry)
 //   misc        Miscellaneous examples
 //   list        Show detailed descriptions
 
@@ -31,13 +31,11 @@ function showList() {
     "                Displays detailed statistical tables, PMF/CDF charts, and outcome breakdowns\n"
   );
 
-  console.log("  sneakattack - Sneak attack examples");
+  console.log("  turn        - Conditional damage riders");
   console.log(
-    "                Implements the same conditional damage rider approach in multiple ways."
+    "                Sneak Attack, Divine Smite, flurry-if-no-smite, Hunter's Mark,"
   );
-  console.log(
-    "                This stress tests the underlying PMF implementation.\n"
-  );
+  console.log("                and a once-per-turn miss reroll, via `turn()`.\n");
 
   console.log("  misc        - Miscellaneous examples");
   console.log("                A collection of many random examples\n");
@@ -61,11 +59,8 @@ function showList() {
       await runExample("./basic-usage", "Running basic usage example...");
       break;
 
-    case "sneakattack":
-      await runExample(
-        "./sneak-attack-examples",
-        "Running sneak attack examples..."
-      );
+    case "turn":
+      await runExample("./turn-examples", "Running turn/rider examples...");
       break;
 
     case "list":
