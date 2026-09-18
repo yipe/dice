@@ -367,3 +367,26 @@ describe("id accessors", () => {
     expect(() => built.fireProbability("attack 1")).toThrow(/Riders: "smite"/);
   });
 });
+
+describe("critDamage on an attack-shaped rider", () => {
+  it("is rejected rather than silently dropped", () => {
+    const greatsword = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5));
+    expect(
+      codeOf(() =>
+        turn([greatsword, greatsword]).onAnyCrit(greatsword, {
+          critDamage: roll(20, d6),
+        })
+      )
+    ).toBe("unused-crit-damage");
+  });
+
+  it("is still honoured for plain damage dice", () => {
+    const built = turn([dagger, dagger]).onAnyCrit(d6, {
+      critDamage: roll(10, d6),
+    });
+    expect(built.mean() - turn([dagger, dagger]).mean()).toBeCloseTo(
+      0.0975 * 35,
+      8
+    );
+  });
+});

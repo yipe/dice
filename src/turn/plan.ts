@@ -352,6 +352,17 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const id = riderIds[index];
     const hit = toPMF(rider.damage, eps);
     const slices = sliceSource(hit);
+    if (slices && rider.critDamage !== undefined) {
+      // An attack-shaped rider rolls its own d20 and crits on its own terms —
+      // a bonus attack triggered by a crit does not deal doubled dice — so
+      // there is nothing for `critDamage` to mean. Silently dropping it would
+      // hide a real misunderstanding.
+      fail(
+        "unused-crit-damage",
+        id,
+        `Rider "${id}" rolls its own attack, so its critDamage would never be used. Remove it, or pass plain damage dice instead.`
+      );
+    }
     const negatedRider =
       rider.on === "not-fired"
         ? (riderIndexById.get(rider.of) as number)

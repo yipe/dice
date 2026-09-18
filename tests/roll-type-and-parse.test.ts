@@ -158,3 +158,52 @@ describe("tryParse and the n substitution", () => {
     expect(tryParse("nd6").mean()).toBe(0);
   });
 });
+
+describe("withRollType with nested parentheses", () => {
+  it("finds the AC check when it is not in the innermost group", () => {
+    const nested = "((d20 + 8) AC 16) * (1d4 + 4)";
+    expect(parse(nested).mean()).toBeCloseTo(4.225, 3);
+    expect(withRollType(nested, "advantage")).toBe(
+      "((d20 > d20 + 8) AC 16) * (1d4 + 4)"
+    );
+  });
+
+  it("still leaves a nested save alone", () => {
+    const nested = "((d20 + 5) DC 16) * (8d6) save half";
+    expect(withRollType(nested, "advantage")).toBe(nested);
+  });
+
+  it("uses the nearest enclosing check when both appear", () => {
+    const mixed = "(d20 + 8 AC 16) * (1d8) + (d20 + 5 DC 16) * (2d6) save half";
+    expect(withRollType(mixed, "advantage")).toBe(
+      "(d20 > d20 + 8 AC 16) * (1d8) + (d20 + 5 DC 16) * (2d6) save half"
+    );
+  });
+
+  it("leaves a bare d20 with no check alone", () => {
+    expect(withRollType("d20 + 5", "advantage")).toBe("d20 + 5");
+  });
+
+  it("rewrites an unparenthesised attack", () => {
+    expect(withRollType("d20 + 8 AC 16", "advantage")).toBe(
+      "d20 > d20 + 8 AC 16"
+    );
+  });
+});
+
+describe("tryParse and integer range", () => {
+  it("rejects signed integers past the safe range rather than losing precision", () => {
+    // Only signed integers reach this wrapper's fallback: parse() handles
+    // unsigned ones itself. Number("-9007199254740993") is …992, so a delta
+    // there would be a lie.
+    expect(tryParse("-9007199254740993").mass()).toBe(0);
+    expect(tryParse("-999999999999999999999").mass()).toBe(0);
+    expect(tryParse("-9007199254740991").mean()).toBe(-9007199254740991);
+  });
+
+  it("covers the signed integers the grammar rejects", () => {
+    expect(() => parse("-3")).toThrow();
+    expect(tryParse("-3").mean()).toBe(-3);
+    expect(tryParse("+7").mean()).toBe(7);
+  });
+});
