@@ -84,7 +84,18 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   is JSON-safe and meant to be persisted verbatim.
 
 - **`Turn.toQuery()`**, named to match `RollBuilder`/`AttackBuilder`/`SaveBuilder`,
-  alongside a `pmf` getter as those have.
+  alongside a `pmf` getter as those have. There is no `toPMF(eps)`: a turn's
+  epsilon is fixed at construction, where its plan is validated and its sources
+  resolved.
+
+- **`Turn.attackIds` / `Turn.riderIds`** in declaration order, including the
+  `attack 1` / `rider 2` defaults, so a caller can discover the names that `of`
+  and `fireProbability` accept instead of having to have supplied them all.
+
+- Every construction path — `Turn.from`, `attack()`, `rider()` and the `onX`
+  methods — validates immediately, so a bad `of` throws at the call that
+  introduced it rather than later at `pmf` access. Measured at 0.63ms for the
+  six validations in the full goliath chain, with an unchanged 26-AC sweep.
 
 - **`Turn.fireProbability(id)`** — P(a rider fired), which the walk already knows. For
   `every-hit` riders it reports P(at least one source hit).
