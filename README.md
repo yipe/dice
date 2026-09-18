@@ -375,7 +375,9 @@ prefix is preserved.
 
 ### Damage Riders (Sneak Attack, Smite, Hunter's Mark)
 
-Conditional damage is a **`turn()`**: attacks, plus riders that fire based on what those attacks did.
+Most of what makes 5e damage interesting is conditional: Sneak Attack needs *a* dagger to land,
+Divine Smite wants a crit, a flurry of blows only happens if you didn't smite. A **`turn()`** is
+attacks plus riders that fire based on what those attacks did.
 
 ```ts
 import { turn, d20, d4, d6, roll } from "@yipe/dice/builder";
@@ -388,66 +390,107 @@ rogue.mean();      // 18.6225
 rogue.pmf.pAt(0);  // 0.1225 — chance the whole turn whiffs
 ```
 
-A `Turn` resolves the **exact joint distribution**. Riders are correlated with the attacks that
-trigger them, so building a rider as a separate PMF and convolving it in gets the right mean but the
-wrong distribution — in the example above it reports a whiff chance of `0.015` instead of `0.1225`.
+That is the whole API for the common case. A `Turn` resolves the **exact joint distribution**: a
+rider is correlated with the attacks that trigger it, so building one as a separate PMF and
+convolving it in gets the right mean but the wrong shape — the example above would report a whiff
+chance of 0.015 instead of 0.1225.
 
-| method | fires when | example |
+| method | fires | example |
 |---|---|---|
-| `onFirstHit` | the first attack that lands (doubled if it crit) | Sneak Attack |
-| `onAnyCrit` | at least one attack crit | Divine Smite |
-| `onAnyMiss` | at least one attack missed | Unerring Accuracy, Lucky |
-| `onEveryHit` | once per landing attack | Hunter's Mark, Hex, Rage |
-| `otherwise` | the rider just before it did *not* fire | "flurry of blows if I didn't smite" |
+| `onFirstHit` | once, on the first attack that lands — doubled if it crit | Sneak Attack |
+| `onAnyCrit` | once, if any attack crit | Divine Smite |
+| `onAnyMiss` | once, if any attack missed | Unerring Accuracy, Lucky |
+| `onEveryHit` | once per attack that lands | Hunter's Mark, Hex, Rage |
+| `otherwise` | when the rider before it did *not* | flurry of blows if you didn't smite |
 
-Each takes an optional second argument: `{ id, of, critDamage }`. `of` selects which attacks the
-rider watches and defaults to all of them. Riders can be attacks themselves, and can be sources for
-other riders:
+#### Extra Attack
+
+`attacks(count, source)` mirrors `roll(count, die)`, so the Fighter's four — or eight, with Action
+Surge — stays one line:
 
 ```ts
+const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
+
+turn().attacks(4, sword).onEveryHit(d6).mean(); // 35.0  — hunter's mark on each hit
+turn().attacks(8, sword).onEveryHit(d6).mean(); // 70.0  — action surge
+```
+
+#### A rider can be anything that makes damage
+
+Riders take the same builders attacks do, so "extra damage" and "an extra attack" are the same call.
+A whole attack, a list of attacks, a flat bonus, or a saving throw all work:
+
+```ts
+const greatsword = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5));
 const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
+const poison = d20.dc(13).onSaveFailure(roll(3, d6)).saveHalf();
 
+turn([greatsword, greatsword]).onAnyCrit(greatsword);   // Great Weapon Master's bonus attack
+turn([dagger]).onFirstHit(poison);                      // hit, then the target saves
+turn([sword, sword]).onEveryHit(flat(2));               // Rage
+turn([dagger, dagger]).onAnyCrit(roll(4, d8)).otherwise([unarmed, unarmed]); // smite, or flurry
+```
+
+#### The hard build
+
+A goliath rogue/monk/paladin, every trigger at once:
+
+```ts
 const goliath = turn([dagger, dagger])
-  .onFirstHit(roll(3, d6))     // sneak attack
-  .onFirstHit(d10)             // fire's burn
-  .onAnyCrit(roll(2, d8))      // divine smite
-  .otherwise([unarmed, unarmed]) // two more attacks if the smite missed out
-  .onEveryHit(d6);             // hunter's mark
+  .onFirstHit(roll(3, d6))       // sneak attack
+  .onFirstHit(d10)               // fire's burn
+  .onAnyCrit(roll(2, d8))        // divine smite
+  .otherwise([unarmed, unarmed]) // flurry of blows, if the smite didn't happen
+  .onEveryHit(d6);               // hunter's mark
 
-goliath.mean(); // 39.5903
+goliath.mean();                                // 39.5903
 goliath.toQuery().damageAttributionChartModel();
 ```
 
-Riders sharing a trigger resolve **jointly**: sneak attack and fire's burn above fire together or not
-at all, which is visible in the spread even though it never changes the mean. `otherwise()` binds to
-the rider immediately before it, so the smite and the flurry are two branches of one decision and
-can never both land.
+Two things that would be easy to get wrong are handled for you. Riders sharing a trigger resolve
+**jointly** — sneak attack and fire's burn fire together or not at all, which shows up in the spread
+even though it never moves the mean. And `otherwise()` binds to the rider immediately before it, so
+the smite and the flurry are two branches of one decision and can never both land.
 
-Every construction path validates immediately and throws a `TurnSpecError` whose `code`
-(`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `too-many-groups`) maps
-straight onto a field state — so a bad `of` fails at the call that introduced it, not later at
-`.mean()`.
-
-Nothing above needs an `id`. Attacks and riders get `attack 1`, `rider 2`, … in declaration order,
-readable from `attackIds` and `riderIds`. Name a rider when you want to ask about it afterwards, or
-when you want a `not-fired` trigger to point somewhere other than the previous rider:
+#### Asking questions
 
 ```ts
-goliath.attackIds; // ["attack 1", "attack 2"]
-goliath.riderIds;  // ["rider 1", "rider 2", "smite", "rider 4", "rider 5"]
+const t = turn([dagger, dagger]).onFirstHit(roll(3, d6));
 
-const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" });
-paladin.fireProbability("smite"); // 0.0975
+t.mean();                                   // 18.6225
+t.pmf.pAt(0);                               // 0.1225  — P(whiff)
+t.pmf.stdev();                              // 8.8860
+t.toQuery().probTotalAtLeast(20);           // 0.5062  — P(20+ damage)
+t.toQuery().percentiles([0.25, 0.5, 0.75]); // [15, 20, 24]
 ```
 
-Every method is sugar over `rider()`, which takes the trigger as data — `{ damage, on, of }` with
-`on` one of `first-hit`, `any-crit`, `any-miss`, `every-hit`, `not-fired`. `Trigger` is JSON-safe, so
-a UI can persist one and hand it straight back:
+#### Ids, errors, and plain data
+
+Nothing above needs an `id`: attacks and riders get `attack 1`, `rider 2`, … in declaration order,
+and `otherwise()` finds its own target. Name a rider when you want to ask about it afterwards:
+
+```ts
+const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" });
+
+paladin.fireProbability("smite"); // 0.0975
+paladin.attackIds;                // ["attack 1", "attack 2"]
+paladin.riderIds;                 // ["smite"]
+```
+
+Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
+`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `too-many-groups` — maps
+straight onto a UI field state. A bad `of` fails at the call that introduced it, not later at
+`.mean()`.
+
+Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
+rider watches and defaults to all of them. All of them are sugar over `rider()`, which takes the
+trigger as plain data — and `Trigger` is JSON-safe, so a UI can persist one and hand it straight
+back:
 
 ```ts
 import { Turn } from "@yipe/dice/builder";
 
-const turnFromUI = Turn.from({
+const fromUI = Turn.from({
   attacks: [{ id: "dagger 1", source: dagger }, { id: "dagger 2", source: dagger }],
   riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
 });

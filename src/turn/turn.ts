@@ -81,7 +81,7 @@ function fireMode(
  */
 export class Turn {
   private readonly eps: number;
-  private readonly attacks: readonly Attack[];
+  private readonly declaredAttacks: readonly Attack[];
   private readonly riders: readonly Rider[];
   private readonly plan: TurnPlan;
   private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
@@ -95,12 +95,12 @@ export class Turn {
     // mutating it. Shallow is the right depth: the entries are builders and
     // PMFs this module does not own and which are immutable by convention
     // throughout this library.
-    this.attacks = [...attacks];
+    this.declaredAttacks = [...attacks];
     this.riders = [...riders];
     this.eps = eps;
     // Built here, not on first use, so every way of constructing a Turn
     // validates at the same moment: the call that introduced the mistake.
-    this.plan = buildPlan({ attacks: this.attacks, riders: this.riders }, eps);
+    this.plan = buildPlan({ attacks: this.declaredAttacks, riders: this.riders }, eps);
   }
 
   /**
@@ -119,7 +119,27 @@ export class Turn {
    */
   attack(source: Source, id?: string): Turn {
     const entry: Attack = id === undefined ? source : { id, source };
-    return new Turn([...this.attacks, entry], this.riders, this.eps);
+    return new Turn([...this.declaredAttacks, entry], this.riders, this.eps);
+  }
+
+  /**
+   * Appends `count` copies of the same attack — the Extra Attack case, which is
+   * most of 5e. Argument order mirrors `roll(count, die)`.
+   *
+   * ```ts
+   * turn().attacks(4, greatsword).onEveryHit(d6); // fighter 20 + hunter's mark
+   * ```
+   *
+   * @throws {RangeError} if `count` is not a positive integer.
+   */
+  attacks(count: number, source: Source): Turn {
+    if (!Number.isInteger(count) || count < 1) {
+      throw new RangeError(
+        `attacks(count) needs a positive integer, got ${count}.`
+      );
+    }
+    const added: Attack[] = new Array<Attack>(count).fill(source);
+    return new Turn([...this.declaredAttacks, ...added], this.riders, this.eps);
   }
 
   /**
@@ -127,7 +147,7 @@ export class Turn {
    * invalid. The `onX` methods below are the readable way to call this.
    */
   rider(rider: Rider): Turn {
-    return new Turn(this.attacks, [...this.riders, rider], this.eps);
+    return new Turn(this.declaredAttacks, [...this.riders, rider], this.eps);
   }
 
   /**
@@ -205,7 +225,7 @@ export class Turn {
     const riders: Rider[] = [...this.riders];
     riders[index] = { ...previous, id: target };
     riders.push({ ...options, damage, on: "not-fired", of: target });
-    return new Turn(this.attacks, riders, this.eps);
+    return new Turn(this.declaredAttacks, riders, this.eps);
   }
 
   /**
@@ -402,7 +422,22 @@ export class Turn {
   }
 }
 
-/** Starts a {@link Turn}, optionally with its attacks already declared. */
-export function turn(attacks: readonly Attack[] = [], eps: number = EPS): Turn {
-  return Turn.from({ attacks, riders: [] }, eps);
+/**
+ * Starts a {@link Turn}. Takes one attack or a list of them, so the two common
+ * shapes both read straight:
+ *
+ * ```ts
+ * turn(greatsword).onAnyCrit(roll(4, d8));      // one attack
+ * turn([dagger, dagger]).onFirstHit(roll(3, d6)); // two
+ * turn().attacks(4, greatsword);                 // four
+ * ```
+ */
+export function turn(
+  attacks: Attack | readonly Attack[] = [],
+  eps: number = EPS
+): Turn {
+  return Turn.from(
+    { attacks: Array.isArray(attacks) ? attacks : [attacks as Attack] },
+    eps
+  );
 }
