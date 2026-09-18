@@ -16,18 +16,23 @@ import { parse } from "./parser";
  * than assume a usable PMF. Anywhere a bad expression should be surfaced instead
  * of absorbed, call {@link parse} and handle `DiceParseError`.
  *
+ * Takes no second argument on purpose. {@link parse}'s is `n`, the substitution
+ * value for an `n`-dice expression — not an epsilon — so forwarding one here
+ * would silently reinterpret it: `tryParse("nd6", 1e-9)` rolled `1d6` and
+ * reported 3.5 where the default `n` of 0 means no dice at all.
+ *
  * @returns the parsed PMF, or an empty (mass 0) PMF for input that is neither a
  * valid expression nor an integer.
  */
-export function tryParse(expression: string, eps?: number): PMF {
+export function tryParse(expression: string): PMF {
   try {
-    return parse(expression, eps);
+    return parse(expression);
   } catch {
     const numeric = Number(expression);
     if (expression.trim() !== "" && Number.isInteger(numeric)) {
-      return PMF.delta(numeric, eps);
+      return PMF.delta(numeric);
     }
-    return PMF.empty(eps);
+    return PMF.empty();
   }
 }
 
