@@ -84,12 +84,21 @@ export class Turn {
   private plan?: TurnPlan;
   private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
 
+  private readonly attacks: readonly Attack[];
+  private readonly riders: readonly Rider[];
+
   private constructor(
-    private readonly attacks: readonly Attack[],
-    private readonly riders: readonly Rider[],
+    attacks: readonly Attack[],
+    riders: readonly Rider[],
     eps: number = EPS,
     plan?: TurnPlan
   ) {
+    // Copied, because a caller can hand in an array they still hold and keep
+    // mutating it. Shallow is the right depth: the entries are builders and
+    // PMFs this module does not own and which are immutable by convention
+    // throughout this library.
+    this.attacks = [...attacks];
+    this.riders = [...riders];
     this.eps = eps;
     this.plan = plan;
   }
