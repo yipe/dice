@@ -18,6 +18,23 @@ function sneakAttack() {
 }
 
 /**
+ * Extra Attack: `attacks(count, source)` mirrors `roll(count, die)`, so a
+ * Fighter's four swings stay on one line.
+ */
+function extraAttack() {
+  const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
+
+  console.log("\nFighter, Hunter's Mark on every hit:");
+  for (const count of [1, 2, 3, 4]) {
+    const t = turn().attacks(count, sword).onEveryHit(d6);
+    console.log(`  ${count} attack(s): ${t.mean().toFixed(2)}`);
+  }
+  console.log(
+    `  4 + action surge: ${turn().attacks(8, sword).onEveryHit(d6).mean().toFixed(2)}`
+  );
+}
+
+/**
  * Hunter's Mark fires on EVERY hit, so with two attacks it applies about 1.5x as
  * often as a once-per-turn rider — not 2x, because two attacks land at least once
  * most of the time.
@@ -73,6 +90,7 @@ function unerringAccuracy() {
 }
 
 sneakAttack();
+extraAttack();
 perHitVersusOncePerTurn();
 goliathRogueMonkPaladin();
 unerringAccuracy();
