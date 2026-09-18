@@ -5,6 +5,137 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0]
+
+Adds `Turn`: attacks plus conditional damage riders, resolved to one exact joint
+distribution. This is the roadmap's `Turn` / `DamageRider` item.
+
+### Added
+
+- **`turn()` / `Turn`** (`@yipe/dice/builder`). Declare attacks, then chain riders
+  in the same `onX` vocabulary the builders already use: `onFirstHit` (Sneak
+  Attack), `onAnyCrit` (Divine Smite), `onAnyMiss` (Unerring Accuracy, Lucky),
+  `onEveryHit` (Hunter's Mark, Hex, Rage), and `otherwise` for the branch where
+  the preceding rider did not fire ("flurry of blows if I didn't smite").
+
+  ```ts
+  const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+  const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
+
+  const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
+  rogue.mean();     // 18.6225
+  rogue.pmf.pAt(0); // 0.1225
+
+  const goliath = turn([dagger, dagger])
+    .onFirstHit(roll(3, d6))
+    .onAnyCrit(roll(2, d8), { id: "smite" })
+    .otherwise([unarmed, unarmed])
+    .onEveryHit(d6);
+  ```
+
+  Each method takes an optional `{ id, of, critDamage }`, where `of` selects which
+  attacks the rider watches and defaults to all of them. All of them are sugar
+  over `rider({ damage, on, of })`, which takes the trigger as plain data.
+
+  Motivation: the pattern the README used to recommend — build a rider PMF with
+  `firstSuccessSplit` + `PMF.exclusive`, then convolve it alongside the attacks —
+  is only correct in the mean. A rider is perfectly correlated with the attacks
+  that trigger it, so treating it as an independent single corrupts the
+  distribution. For two `d20+8 AC 16 → 1d4+4` daggers plus `3d6` Sneak Attack it
+  reports P(0 damage) = 0.015 against a true 0.1225, and a standard deviation of
+  7.18 against 8.89. Because the means agreed, DPR checks never caught it while
+  every distribution chart and percentile was wrong. `Turn` owns the sources and
+  walks the joint outcome space instead, carrying one packed byte of state per
+  trigger group.
+
+  Riders sharing a trigger resolve jointly, so Sneak Attack and Fire's Burn fire
+  together or not at all, and a `not-fired` rider is the other branch of the same
+  decision rather than an independent event — mutually exclusive riders can never
+  both land. Riders may be attacks themselves, and may be sources for other riders.
+
+- **`tryParse(expression)`** — `parse` without the throw, returning an empty PMF
+  for junk. It also accepts a *signed* integer, which the grammar rejects:
+  `parse("7")` already returns a delta, but `parse("-3")` throws, and a
+  half-typed damage field is a bare signed number often enough to matter. Every
+  consumer had written this try/catch; dprcalc's version fell back to
+  `1d1 + (n - 1)`, which the parser then rejected for a negative `n`. This one
+  builds the delta directly, and refuses values outside the safe-integer range
+  rather than quietly rounding them.
+
+- **`withRollType(expression, rollType)`** — rewrite an expression's attack rolls
+  between flat / advantage / disadvantage / elven accuracy, leaving the damage,
+  crit and miss clauses alone. Each `d20` is resolved against the nearest
+  enclosing check, so nesting works and an expression with several attacks is
+  fully converted: `AC` is an attack roll, `DC` is the target's saving throw,
+  which the attacker's advantage does not affect. Saves and pure damage come back
+  unchanged, so this is safe to map over a mixed list. A halfling-luck `h` prefix
+  is preserved.
+
+  dprcalc was doing this by round-tripping through its own `AttackModel` parser
+  and re-serializing, 47 lines deep, because there was no way to say "same attack,
+  with advantage" to the library.
+
+- **`DiceQuery.outcomeStats(outcomes?)`** — per-outcome `atLeastOneProbability`,
+  `allProbability` and `damageRange`, with the range summed over the singles that
+  can produce the outcome rather than read off the combined PMF. `snapshot()`
+  takes its range from the combined `count`, which the convolution accumulates as
+  an expected count, so its `avg` is size-biased for two or more attacks (its own
+  doc comment says so). `outcomeStats` is linear in the attack count by
+  construction, and the two agree for a single attack.
+
+- **`Turn.from(spec)`** for plain-data construction from
+  `{ attacks: [{ id, source }], riders: [{ id, damage, on, of }] }`, validated up
+  front with a typed `TurnSpecError.code` (`unknown-id`, `duplicate-id`,
+  `self-reference`, `cycle`, `not-an-attack`, `too-many-groups`), so a consumer UI
+  can map errors to field states rather than reimplementing the checks. `Trigger`
+  is JSON-safe and meant to be persisted verbatim.
+
+- **`Turn.toQuery()`**, named to match `RollBuilder`/`AttackBuilder`/`SaveBuilder`,
+  alongside a `pmf` getter as those have. There is no `toPMF(eps)`: a turn's
+  epsilon is fixed at construction, where its plan is validated and its sources
+  resolved.
+
+- **`Turn.attacks(count, source)`** for Extra Attack, mirroring `roll(count, die)`,
+  so a Fighter's four swings do not have to be spelled out as
+  `turn([sword, sword, sword, sword])`. `turn()` also takes a bare source now, so
+  a one-attack turn needs no brackets.
+
+- `TurnSpecError` code **`unused-crit-damage`**, for a `critDamage` passed to a
+  rider that rolls its own attack. Such a rider crits on its own terms — Great
+  Weapon Master's bonus swing does not deal doubled dice because the attack that
+  triggered it crit — so there was nothing for the value to mean and it was
+  being dropped in silence.
+
+- **`Turn.attackIds` / `Turn.riderIds`** in declaration order, including the
+  `attack 1` / `rider 2` defaults, so a caller can discover the names that `of`
+  and `fireProbability` accept instead of having to have supplied them all.
+
+- Every construction path — `Turn.from`, `attack()`, `rider()` and the `onX`
+  methods — validates immediately, so a bad `of` throws at the call that
+  introduced it rather than later at `pmf` access. Measured at 0.63ms for the
+  six validations in the full goliath chain, with an unchanged 26-AC sweep.
+
+- **`Turn.fireProbability(id)`** — P(a rider fired), which the walk already knows. For
+  `every-hit` riders it reports P(at least one source hit).
+
+- `examples/turn-examples.ts` and `yarn example turn`.
+
+### Changed
+
+- **`DiceQuery.combinedWithAttribution()` now honours an explicitly provided
+  `combined` distribution** instead of re-convolving `singles`. A provided
+  combined is not necessarily the independent product of the singles — a `Turn`'s
+  is strictly narrower — and re-convolving discarded it, dropping every rider's
+  damage from attribution charts. Queries that provide no combined are unaffected.
+
+### Removed
+
+- `examples/sneak-attack-examples.ts` (~800 lines, six hand-rolled variants of the
+  same turn). It only existed because there was no primitive for conditional
+  riders. Its state-machine variant is the ancestor of `Turn`'s walk, and its
+  agreement checks are now `tests/turn-exactness.test.ts`, which compares `Turn`
+  against a brute-force enumeration of every attack-outcome sequence.
+
 ## [0.8.1]
 
 Extends the resolved-PMF cache to every builder kind, so no consumer has to
