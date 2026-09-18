@@ -137,3 +137,14 @@ describe("DiceQuery.outcomeStats", () => {
     expect(hit.allProbability).toBeLessThan(hit.atLeastOneProbability);
   });
 });
+
+describe("tryParse and the n substitution", () => {
+  // parse()'s second argument is `n`, not an epsilon. tryParse deliberately
+  // exposes no second argument so a caller cannot silently rebind it.
+  it("leaves n-dice expressions at their default", () => {
+    // Default n is 0, so `nd6` is no dice at all. Forwarding an epsilon as `n`
+    // used to turn this into 1d6 and report 3.5.
+    expect(tryParse("nd6").mean()).toBeCloseTo(parse("nd6").mean(), 12);
+    expect(tryParse("nd6").mean()).toBe(0);
+  });
+});

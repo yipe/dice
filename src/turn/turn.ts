@@ -256,13 +256,17 @@ export class Turn {
       const next = new Map<string, State>();
 
       const merge = (state: State): void => {
-        // Firing decisions are part of the state: two paths that agree on group
-        // codes but disagree on whether a rider fired must not be merged, or a
+        // Whether each rider fired is part of the state: two paths that agree on
+        // group codes but disagree on a rider's firing must not merge, or a
         // `not-fired` rider downstream would see an ill-defined predicate.
+        //
+        // Only the fired/not-fired bit belongs in the key, though — nothing
+        // reads the mode back, and keying on it would split otherwise identical
+        // states and multiply the convolutions for no change in the result.
         const key =
           String.fromCharCode(...state.codes) +
           "\u0001" +
-          state.fired.map((mode) => mode ?? "-").join("");
+          state.fired.map((mode) => (mode === null ? "-" : "+")).join("");
         const existing = next.get(key);
         if (existing) existing.pmf = existing.pmf.add(state.pmf);
         else next.set(key, state);
