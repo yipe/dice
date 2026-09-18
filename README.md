@@ -121,6 +121,11 @@ src/
 ├── parser/           # String-based dice expression parser
 │   ├── parser.ts     # Main parser implementation
 │   └── dice.ts       # Dice class (legacy parser representation)
+├── turn/             # Turns: attacks + conditional damage riders
+│   ├── types.ts      # Trigger, Rider, TurnSpec, TurnSpecError
+│   ├── plan.ts       # Spec validation and step/group resolution
+│   ├── state.ts      # Packed per-group trigger state
+│   └── turn.ts       # Turn class - exact joint distribution
 ├── pmf/              # Probability Mass Function core
 │   ├── pmf.ts        # PMF class - core data structure
 │   ├── query.ts      # DiceQuery - analysis interface
@@ -329,27 +334,172 @@ try {
 }
 ```
 
-### Sneak Attack (Conditional Damage)
-
-Conditional damage ("once-per-turn damage riders") like Sneak Attack can be modeled easily:
+For UI code that parses on every keystroke, `tryParse()` returns an empty PMF
+instead of throwing, and accepts a bare integer — which the grammar rejects, but
+a half-typed damage field is one for a keystroke or two:
 
 ```ts
-import { DiceQuery, PMF, roll } from "@yipe/dice";
+import { tryParse } from "@yipe/dice";
 
-function sneakAttack() {
-  const attackPMF = d20.plus(8).ac(16).onHit(d4.plus(4)).pmf;
-  const sneakAttack = roll(3, d6);
-  const attacks = new DiceQuery([attackPMF, attackPMF]);
-  const [pHit, pCrit] = attacks.firstSuccessSplit(onAnyHit, onCritOnly);
-  const sneakPMF = PMF.exclusive([
-    [sneakAttack.pmf, pHit],
-    [sneakAttack.doubleDice().pmf, pCrit],
-  ]);
+tryParse("1d6 + 2").mean(); // 5.5
+tryParse("-3").mean(); // -3   — signed integers, which the grammar rejects
+tryParse("0x10").mass(); // 0  — decimal only
+tryParse("1d").mass(); // 0   — empty PMF
+```
 
-  return new DiceQuery([attackPMF, attackPMF, sneakPMF]);
-}
+The failure value has **mass 0**, not a distribution, and convolving it collapses
+the whole result to mass 0 — check `mass()` or skip empties when combining
+several expressions. Where a bad expression should surface rather than be
+absorbed, use `parse()` and handle `DiceParseError`.
 
-console.log("DPR with once-per-turn sneak attack: ", sneakAttack().mean());
+### Roll Types
+
+`withRollType()` rewrites an expression's attack roll, leaving the damage, crit
+and miss clauses alone — the usual way to chart one attack across advantage
+states:
+
+```ts
+import { withRollType } from "@yipe/dice";
+
+const attack = "(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)";
+
+withRollType(attack, "advantage"); // "(d20 > d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)"
+withRollType(attack, "elven accuracy"); // "(d20 > d20 > d20 + 8 AC 16) * ..."
+```
+
+Every attack roll is rewritten, so an expression holding several attacks is fully
+converted, nesting and all. Each `d20` is resolved against the nearest enclosing
+check: `AC` is an attack roll, while `DC` is the *target's* saving throw, which
+the attacker's advantage does not affect. Saves therefore come back unchanged, as
+does anything with no check at all, which makes this safe to map over a mixed
+list. A halfling-luck `h` prefix is preserved.
+
+### Damage Riders (Sneak Attack, Smite, Hunter's Mark)
+
+Most of what makes 5e damage interesting is conditional: Sneak Attack needs *a* dagger to land,
+Divine Smite wants a crit, a flurry of blows only happens if you didn't smite. A **`turn()`** is
+attacks plus riders that fire based on what those attacks did.
+
+```ts
+import { turn, d20, d4, d6, roll } from "@yipe/dice/builder";
+
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+
+const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
+
+rogue.mean();      // 18.6225
+rogue.pmf.pAt(0);  // 0.1225 — chance the whole turn whiffs
+```
+
+That is the whole API for the common case. A `Turn` resolves the **exact joint distribution**: a
+rider is correlated with the attacks that trigger it, so building one as a separate PMF and
+convolving it in gets the right mean but the wrong shape — the example above would report a whiff
+chance of 0.015 instead of 0.1225.
+
+| method | fires | example |
+|---|---|---|
+| `onFirstHit` | once, on the first attack that lands — doubled if it crit | Sneak Attack |
+| `onAnyCrit` | once, if any attack crit | Divine Smite |
+| `onAnyMiss` | once, if any attack missed | Unerring Accuracy, Lucky |
+| `onEveryHit` | once per attack that lands | Hunter's Mark, Hex, Rage |
+| `otherwise` | when the rider before it did *not* | flurry of blows if you didn't smite |
+
+#### Extra Attack
+
+`attacks(count, source)` mirrors `roll(count, die)`, so the Fighter's four — or eight, with Action
+Surge — stays one line:
+
+```ts
+const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
+
+turn().attacks(4, sword).onEveryHit(d6).mean(); // 35.0  — hunter's mark on each hit
+turn().attacks(8, sword).onEveryHit(d6).mean(); // 70.0  — action surge
+```
+
+#### A rider can be anything that makes damage
+
+Riders take the same builders attacks do, so "extra damage" and "an extra attack" are the same call.
+A whole attack, a list of attacks, a flat bonus, or a saving throw all work:
+
+```ts
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
+const greatsword = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5));
+const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
+const poison = d20.dc(13).onSaveFailure(roll(3, d6)).saveHalf();
+
+turn([greatsword, greatsword]).onAnyCrit(greatsword);   // Great Weapon Master's bonus attack
+turn([dagger]).onFirstHit(poison);                      // hit, then the target saves
+turn([sword, sword]).onEveryHit(flat(2));               // Rage
+turn([dagger, dagger]).onAnyCrit(roll(4, d8)).otherwise([unarmed, unarmed]); // smite, or flurry
+```
+
+#### The hard build
+
+A goliath rogue/monk/paladin, every trigger at once:
+
+```ts
+const goliath = turn([dagger, dagger])
+  .onFirstHit(roll(3, d6))       // sneak attack
+  .onFirstHit(d10)               // fire's burn
+  .onAnyCrit(roll(2, d8))        // divine smite
+  .otherwise([unarmed, unarmed]) // flurry of blows, if the smite didn't happen
+  .onEveryHit(d6);               // hunter's mark
+
+goliath.mean();                                // 39.5903
+goliath.toQuery().damageAttributionChartModel();
+```
+
+Two things that would be easy to get wrong are handled for you. Riders sharing a trigger resolve
+**jointly** — sneak attack and fire's burn fire together or not at all, which shows up in the spread
+even though it never moves the mean. And `otherwise()` binds to the rider immediately before it, so
+the smite and the flurry are two branches of one decision and can never both land.
+
+#### Asking questions
+
+```ts
+const t = turn([dagger, dagger]).onFirstHit(roll(3, d6));
+
+t.mean();                                   // 18.6225
+t.pmf.pAt(0);                               // 0.1225  — P(whiff)
+t.pmf.stdev();                              // 8.8860
+t.toQuery().probTotalAtLeast(20);           // 0.5062  — P(20+ damage)
+t.toQuery().percentiles([0.25, 0.5, 0.75]); // [15, 20, 24]
+```
+
+#### Ids, errors, and plain data
+
+Nothing above needs an `id`: attacks and riders get `attack 1`, `rider 2`, … in declaration order,
+and `otherwise()` finds its own target. Name a rider when you want to ask about it afterwards:
+
+```ts
+const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" });
+
+paladin.fireProbability("smite"); // 0.0975
+paladin.attackIds;                // ["attack 1", "attack 2"]
+paladin.riderIds;                 // ["smite"]
+```
+
+Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
+`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `unused-crit-damage`,
+`too-many-groups` — maps
+straight onto a UI field state. A bad `of` fails at the call that introduced it, not later at
+`.mean()`.
+
+Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
+rider watches and defaults to all of them. All of them are sugar over `rider()`, which takes the
+trigger as plain data — and `Trigger` is JSON-safe, so a UI can persist one and hand it straight
+back:
+
+```ts
+import { Turn, d20, d4, d6, roll } from "@yipe/dice/builder";
+
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+
+const fromUI = Turn.from({
+  attacks: [{ id: "dagger 1", source: dagger }, { id: "dagger 2", source: dagger }],
+  riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
+});
 ```
 
 ### Statistics and Charts
@@ -386,7 +536,7 @@ This repository includes example scripts:
 ```bash
 yarn example basic
 yarn example stats
-yarn example sneakattack
+yarn example turn
 yarn example misc
 ```
 
@@ -467,7 +617,7 @@ This enables rich statistics like "how much damage comes from crits vs hits".
 ## 🧱 Roadmap
 
 - [ ] Create a **web playground** with live examples
-- [ ] Consider creating higher-level APIs: `Turn`, `Attack`, `DamageRider`
+- [x] Higher-level `Turn` API for conditional damage riders (0.9.0)
 - [ ] Add more comprehensive 5e rule examples
 - [ ] Performance improvements for DPR-only calculations
 - [ ] Multi-round and sustained vs nova simulations
