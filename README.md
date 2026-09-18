@@ -343,6 +343,7 @@ import { tryParse } from "@yipe/dice";
 
 tryParse("1d6 + 2").mean(); // 5.5
 tryParse("7").mean(); // 7    — delta, not a parse error
+tryParse("0x10").mass(); // 0 — decimal integers only
 tryParse("1d").mass(); // 0   — empty PMF
 ```
 

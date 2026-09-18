@@ -339,8 +339,19 @@ export class Turn {
     }
 
     const pmf = total ?? PMF.delta(0, eps);
+    const totalMass = pmf.mass();
+    const needsNormalizing = Math.abs(totalMass - 1) > eps && totalMass > 0;
+
+    // Firing masses are accumulated in the same unnormalized units as the
+    // terminal states, so they have to follow the distribution through
+    // normalization or `fireProbability` stops agreeing with `pmf`. Reachable
+    // whenever a caller supplies a source PMF whose own mass is not 1.
+    if (needsNormalizing) {
+      for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
+    }
+
     this.resolved = {
-      pmf: Math.abs(pmf.mass() - 1) <= eps ? pmf : pmf.normalize(),
+      pmf: needsNormalizing ? pmf.normalize() : pmf,
       fireMass,
     };
     return this.resolved;

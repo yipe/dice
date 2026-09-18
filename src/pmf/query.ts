@@ -1060,6 +1060,13 @@ export class DiceQuery {
    *
    * Only outcomes that actually occur appear in the result.
    *
+   * Like every `singles`-based helper on this class, it describes the singles
+   * and not an explicitly provided `combined`. `Turn.query()` supplies one whose
+   * distribution also contains rider attacks that are absent from `singles`
+   * (an `otherwise([unarmed, unarmed])` flurry, say), so those attacks do not
+   * appear here. For rider-inclusive figures read the combined distribution
+   * directly: {@link DiceQuery.outcomeTotals}, {@link DiceQuery.outcomeDamageRanges}.
+   *
    * @param outcomes Which outcomes to consider; defaults to every canonical one.
    */
   outcomeStats(
