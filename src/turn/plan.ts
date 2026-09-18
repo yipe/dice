@@ -83,7 +83,17 @@ function toPMF(
         `"${id}" is neither a PMF nor a builder with toPMF().`
       );
     }
-    return part.toPMF(eps);
+    // Also checked on the way out: a callable `toPMF` that returns something
+    // else would otherwise reach PMF.convolveMany and fail deep inside it.
+    const resolved = part.toPMF(eps);
+    if (!(resolved instanceof PMF)) {
+      throw new TurnSpecError(
+        "not-an-attack",
+        id,
+        `"${id}" has a toPMF() that did not return a PMF.`
+      );
+    }
+    return resolved;
   });
   return PMF.convolveMany(pmfs, eps);
 }

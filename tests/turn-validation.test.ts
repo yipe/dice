@@ -390,3 +390,25 @@ describe("critDamage on an attack-shaped rider", () => {
     );
   });
 });
+
+describe("malformed sources from untyped callers", () => {
+  it("reports not-an-attack for a source that is not a PMF or builder", () => {
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ id: "a", source: "1d6" as never }],
+        }).mean()
+      )
+    ).toBe("not-an-attack");
+  });
+
+  it("reports not-an-attack when toPMF returns something else", () => {
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ id: "a", source: { toPMF: () => "nope" as never } }],
+        }).mean()
+      )
+    ).toBe("not-an-attack");
+  });
+});
