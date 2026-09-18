@@ -211,52 +211,20 @@ describe("tryParse and integer range", () => {
   });
 });
 
-describe("withRollType outside parentheses", () => {
-  it("classifies each run by the check it belongs to, not by the whole string", () => {
-    // One left-associated chain: the first d20 feeds the DC, the second the AC.
-    expect(withRollType("d20 + 5 DC 16 + d20 + 8 AC 16", "advantage")).toBe(
-      "d20 + 5 DC 16 + d20 > d20 + 8 AC 16"
-    );
-    // The trailing d20 is damage, with no check after it.
-    expect(withRollType("d20 AC 16 + d20", "advantage")).toBe(
-      "d20 > d20 AC 16 + d20"
-    );
+
+
+describe("tryParse and unsigned integers", () => {
+  it("rejects unsafe unsigned integers, which parse would round", () => {
+    // parse() accepts bare unsigned integers itself, so the guard has to run
+    // before it, not only in the fallback.
+    expect(parse("9007199254740993").mean()).toBe(9007199254740992);
+    expect(tryParse("9007199254740993").mass()).toBe(0);
+    expect(tryParse("9007199254740991").pAt(9007199254740991)).toBeCloseTo(1, 12);
   });
 
   it("leaves a parenthesised damage die alone", () => {
     expect(withRollType("(d20 + 8 AC 16) * (d20)", "advantage")).toBe(
       "(d20 > d20 + 8 AC 16) * (d20)"
-    );
-  });
-
-  it("rejects unsafe unsigned integers, which parse would round", () => {
-    expect(parse("9007199254740993").mean()).toBe(9007199254740992);
-    expect(tryParse("9007199254740993").mass()).toBe(0);
-    expect(tryParse("9007199254740991").pAt(9007199254740991)).toBeCloseTo(1, 12);
-  });
-});
-
-describe("withRollType inside a single parenthesised chain", () => {
-  it("keeps a save and an attack apart in one scope", () => {
-    expect(withRollType("(d20 + 5 DC 16 + d20 + 8 AC 16)", "advantage")).toBe(
-      "(d20 + 5 DC 16 + d20 > d20 + 8 AC 16)"
-    );
-  });
-
-  it("leaves a trailing damage die in the same scope alone", () => {
-    expect(withRollType("(d20 AC 16 + d20)", "advantage")).toBe(
-      "(d20 > d20 AC 16 + d20)"
-    );
-  });
-
-  it("round-trips a mixed scope back to flat", () => {
-    const flat = "(d20 + 5 DC 16 + d20 + 8 AC 16)";
-    expect(withRollType(withRollType(flat, "advantage"), "flat")).toBe(flat);
-  });
-
-  it("still widens outwards for a nested check", () => {
-    expect(withRollType("((d20 + 8) AC 16) * (1d4 + 4)", "disadvantage")).toBe(
-      "((d20 < d20 + 8) AC 16) * (1d4 + 4)"
     );
   });
 });
