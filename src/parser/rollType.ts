@@ -76,6 +76,14 @@ const RUN_FOR_ROLL_TYPE: Record<RollType, string> = {
  * with no attack roll at all. This makes the function safe to map over a mixed
  * list of expressions.
  *
+ * Assumes **one check per group**, which is what every well-formed attack or
+ * save expression looks like and what `modelToExpression` emits. The grammar
+ * will swallow a group naming two — `(d20 + 5 DC 16 + d20 + 8 AC 16)` parses,
+ * as a single `AC` check whose roll happens to contain the save's 0/1 result —
+ * but that is not an expression anyone means, and the roll type it should get is
+ * undefined. Such input is rewritten on a best-effort basis rather than
+ * diagnosed.
+ *
  * A halfling-luck `h` prefix is preserved on the first die of each run, since it
  * describes the same roll.
  */
@@ -86,7 +94,7 @@ export function withRollType(expression: string, rollType: RollType): string {
 
   for (const run of expression.matchAll(new RegExp(D20_RUN, "gi"))) {
     const at = run.index as number;
-    if (!isAttackRoll(expression, scopes, at, run[0].length)) continue;
+    if (!isAttackRoll(expression, scopes, at)) continue;
 
     const replacement = run[0].toLowerCase().startsWith("h")
       ? `h${RUN_FOR_ROLL_TYPE[rollType]}`
@@ -124,39 +132,32 @@ function enclosingScopes(
 }
 
 /**
- * Whether the d20 run at `at` is an attack roll.
+ * Whether the d20 run at `at` is the attack roll of a check.
  *
- * The grammar parses one left-associated chain, so the check a run belongs to is
- * the *first* `AC` or `DC` token after it — not any token anywhere near it.
- * Searching forward is what keeps the two runs in
- * `d20 + 5 DC 16 + d20 + 8 AC 16` apart: the first feeds the save, the second
- * the attack. Likewise the trailing run in `d20 AC 16 + d20` is damage, because
- * no check follows it.
+ * Classified by the nearest enclosing group that names a check, widening
+ * outwards, which is what makes nesting work: in `((d20 + 8) AC 16)` the run's
+ * own group names nothing and the group outside it says `AC`.
  *
- * The search widens outwards one scope at a time, which is what makes nesting
- * work: in `((d20 + 8) AC 16)` nothing follows the run inside its own group, and
- * the group outside it says `AC`. A run that runs out of scopes without meeting
- * a check is damage — the second run in `(d20 + 8 AC 16) * (d20)` — and only a
- * wholly unparenthesised run falls back to the rest of the expression.
+ * A run whose groups name no check is not an attack roll — the second run in
+ * `(d20 + 8 AC 16) * (d20)` is damage — and an unparenthesised run is judged by
+ * the whole expression, since there is nothing narrower to go on.
  */
 function isAttackRoll(
   expression: string,
   scopes: readonly { start: number; end: number }[],
-  at: number,
-  length: number
+  at: number
 ): boolean {
-  const from = at + length;
   let scoped = false;
 
   for (const scope of scopes) {
     if (at < scope.start || at >= scope.end) continue;
     scoped = true;
-    const check = CHECK_TOKEN.exec(expression.slice(from, scope.end));
+    const check = CHECK_TOKEN.exec(expression.slice(scope.start, scope.end));
     if (check) return check[1].toUpperCase() === "AC";
   }
 
   if (scoped) return false;
 
-  const check = CHECK_TOKEN.exec(expression.slice(from));
+  const check = CHECK_TOKEN.exec(expression);
   return check !== null && check[1].toUpperCase() === "AC";
 }
