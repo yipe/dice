@@ -15,6 +15,16 @@ describe("tryParse", () => {
     expect(tryParse("-3").mean()).toBeCloseTo(-3, 12);
   });
 
+  it("accepts only decimal integers, not every Number() form", () => {
+    // Number() would read these as 16, 3 and 1000; nobody typing into a damage
+    // field means that.
+    for (const bad of ["0x10", "0b11", "0o7", "1e3", "Infinity"]) {
+      expect(tryParse(bad).mass()).toBe(0);
+    }
+    expect(tryParse(" 7 ").mean()).toBeCloseTo(7, 12);
+    expect(tryParse("+7").mean()).toBeCloseTo(7, 12);
+  });
+
   it("returns an empty PMF for input that is neither", () => {
     for (const bad of ["", "   ", "1d", "AC 15", "(((", "2.5", "seven"]) {
       expect(tryParse(bad).mass()).toBe(0);

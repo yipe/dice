@@ -244,3 +244,27 @@ describe("every-hit riders cannot be referenced", () => {
     ).toBeCloseTo(1, 10);
   });
 });
+
+describe("Turn with source PMFs whose mass is not 1", () => {
+  it("normalizes fire probabilities along with the distribution", () => {
+    const lopsided = dagger.pmf.scaleMass(0.5);
+    const built = turn([lopsided]).rider({
+      id: "sneak",
+      damage: d6,
+      on: "first-hit",
+    });
+    const reference = turn([dagger]).rider({
+      id: "sneak",
+      damage: d6,
+      on: "first-hit",
+    });
+
+    expect(built.pmf.mass()).toBeCloseTo(1, 10);
+    // Scaling every source's mass cannot change a conditional probability.
+    expect(built.fireProbability("sneak")).toBeCloseTo(
+      reference.fireProbability("sneak"),
+      10
+    );
+    expect(built.fireProbability("sneak")).toBeLessThanOrEqual(1);
+  });
+});

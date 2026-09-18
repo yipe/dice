@@ -2,6 +2,9 @@ import type { RollType } from "../common/types";
 import { PMF } from "../pmf/pmf";
 import { parse } from "./parser";
 
+/** A bare decimal integer, optionally signed, with surrounding whitespace. */
+const DECIMAL_INTEGER = /^\s*[+-]?\d+\s*$/;
+
 /**
  * Parse without throwing — for UI code that reparses on every keystroke, where
  * a transiently invalid expression is normal rather than exceptional.
@@ -28,9 +31,10 @@ export function tryParse(expression: string): PMF {
   try {
     return parse(expression);
   } catch {
-    const numeric = Number(expression);
-    if (expression.trim() !== "" && Number.isInteger(numeric)) {
-      return PMF.delta(numeric);
+    // Decimal only. `Number()` would also take "0x10" as 16, "0b11" as 3 and
+    // "1e3" as 1000, none of which anyone typing into a damage field means.
+    if (DECIMAL_INTEGER.test(expression)) {
+      return PMF.delta(Number(expression));
     }
     return PMF.empty();
   }
