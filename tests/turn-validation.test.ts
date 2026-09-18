@@ -22,7 +22,7 @@ describe("TurnSpecError codes", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [{ id: "sneak", damage: d6, on: "first-hit", of: ["gone"] }],
         })
       )
@@ -33,7 +33,7 @@ describe("TurnSpecError codes", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [{ damage: d6, on: "not-fired", of: "d1" }],
         })
       )
@@ -45,8 +45,8 @@ describe("TurnSpecError codes", () => {
       codeOf(() =>
         Turn.from({
           attacks: [
-            { id: "d1", attack: dagger },
-            { id: "d1", attack: dagger },
+            { id: "d1", source: dagger },
+            { id: "d1", source: dagger },
           ],
         })
       )
@@ -57,7 +57,7 @@ describe("TurnSpecError codes", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [{ id: "sneak", damage: d6, on: "not-fired", of: "sneak" }],
         })
       )
@@ -68,7 +68,7 @@ describe("TurnSpecError codes", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [
             { id: "a", damage: d6, on: "not-fired", of: "b" },
             { id: "b", damage: d6, on: "not-fired", of: "a" },
@@ -82,7 +82,7 @@ describe("TurnSpecError codes", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [
             { id: "sneak", damage: roll(3, d6), on: "first-hit" },
             { id: "extra", damage: d6, on: "first-hit", of: ["sneak"] },
@@ -95,7 +95,7 @@ describe("TurnSpecError codes", () => {
   it("too-many-groups", () => {
     const attacks = Array.from({ length: MAX_TRIGGER_GROUPS + 1 }, (_, i) => ({
       id: `a${i}`,
-      attack: dagger,
+      source: dagger,
     }));
     expect(
       codeOf(() =>
@@ -192,7 +192,7 @@ describe("Turn attribution", () => {
   it("produces a usable attribution chart model", () => {
     const model = turn([dagger, dagger])
       .rider({ damage: roll(3, d6), on: "first-hit" })
-      .query()
+      .toQuery()
       .damageAttributionChartModel();
     expect(model.outcomes.length).toBeGreaterThan(0);
     expect(model.mean).toBeCloseTo(18.6225, 4);
@@ -206,7 +206,7 @@ describe("every-hit riders cannot be referenced", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [
             { id: "mark", damage: d6, on: "every-hit" },
             { damage: d6, on: "not-fired", of: "mark" },
@@ -221,7 +221,7 @@ describe("every-hit riders cannot be referenced", () => {
     expect(
       codeOf(() =>
         Turn.from({
-          attacks: [{ id: "d1", attack: dagger }],
+          attacks: [{ id: "d1", source: dagger }],
           riders: [
             { id: "bonus", damage: bonus, on: "every-hit" },
             { damage: d6, on: "first-hit", of: ["bonus"] },
@@ -233,7 +233,7 @@ describe("every-hit riders cannot be referenced", () => {
 
   it("still allows referencing a non-every-hit rider", () => {
     const built = Turn.from({
-      attacks: [{ id: "d1", attack: dagger }],
+      attacks: [{ id: "d1", source: dagger }],
       riders: [
         { id: "smite", damage: d6, on: "any-crit" },
         { id: "fallback", damage: d6, on: "not-fired", of: "smite" },

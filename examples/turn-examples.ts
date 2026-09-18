@@ -13,7 +13,7 @@ const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 function sneakAttack() {
   const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
 
-  printSummary("Rogue: two daggers + Sneak Attack", rogue.query());
+  printSummary("Rogue: two daggers + Sneak Attack", rogue.toQuery());
   console.log("P(whiff turn):", rogue.pmf.pAt(0).toFixed(4));
 }
 
@@ -50,7 +50,7 @@ function goliathRogueMonkPaladin() {
     .otherwise([unarmed, unarmed], { id: "flurry" })
     .onEveryHit(d6);
 
-  printSummary("Goliath rogue/monk/paladin", goliath.query());
+  printSummary("Goliath rogue/monk/paladin", goliath.toQuery());
   console.log("P(smite) :", goliath.fireProbability("smite").toFixed(4));
   console.log("P(flurry):", goliath.fireProbability("flurry").toFixed(4));
   console.log(

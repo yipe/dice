@@ -128,10 +128,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const attackSlices: ({ hit: PMF; crit: PMF; miss: PMF } | null)[] = [];
 
   spec.attacks.forEach((entry: Attack, index) => {
-    const named = entry as { id?: string; attack?: Damage };
-    const hasWrapper = typeof named.id === "string" && named.attack !== undefined;
+    const named = entry as { id?: string; source?: Damage };
+    const hasWrapper =
+      typeof named.id === "string" && named.source !== undefined;
     const id = hasWrapper ? (named.id as string) : `attack ${index + 1}`;
-    const source = hasWrapper ? (named.attack as Damage) : (entry as Damage);
+    const source = hasWrapper ? (named.source as Damage) : (entry as Damage);
     const pmf = toPMF(source, eps);
 
     attackIds.push(id);
