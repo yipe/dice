@@ -9,9 +9,10 @@ const DECIMAL_INTEGER = /^\s*[+-]?\d+\s*$/;
  * Parse without throwing — for UI code that reparses on every keystroke, where
  * a transiently invalid expression is normal rather than exceptional.
  *
- * Also accepts a bare integer, which the grammar rejects: `"7"` becomes a delta
- * at 7, `"-3"` a delta at -3. Consumers hit that case constantly, because a
- * half-typed damage field is a bare number for a keystroke or two.
+ * Also accepts a *signed* integer, which the grammar rejects: `"-3"` becomes a
+ * delta at -3, `"+7"` one at 7. Unsigned integers need no help — `parse("7")`
+ * already returns a delta at 7 — but a half-typed damage field is a bare signed
+ * number often enough to be worth covering.
  *
  * The failure value is {@link PMF.empty}, which has **mass 0**, not a
  * distribution. Convolving it collapses the whole result to mass 0, so a caller
@@ -33,8 +34,13 @@ export function tryParse(expression: string): PMF {
   } catch {
     // Decimal only. `Number()` would also take "0x10" as 16, "0b11" as 3 and
     // "1e3" as 1000, none of which anyone typing into a damage field means.
+    // Safe integers only too: past 2^53 the conversion loses precision, so
+    // "-9007199254740993" would silently become …992. (`parse` itself accepts
+    // unsigned integers and does lose precision there; that is its own
+    // long-standing behaviour, not something this wrapper can fix.)
     if (DECIMAL_INTEGER.test(expression)) {
-      return PMF.delta(Number(expression));
+      const value = Number(expression);
+      if (Number.isSafeInteger(value)) return PMF.delta(value);
     }
     return PMF.empty();
   }
@@ -73,30 +79,68 @@ const RUN_FOR_ROLL_TYPE: Record<RollType, string> = {
  * describes the same roll.
  */
 export function withRollType(expression: string, rollType: RollType): string {
+  const scopes = enclosingScopes(expression);
   let rewritten = "";
   let copiedUpTo = 0;
 
-  for (const group of expression.matchAll(/\(([^()]*)\)/g)) {
-    const body = group[1];
-    if (!/\bAC\b/i.test(body)) continue;
-
-    const run = D20_RUN.exec(body);
-    if (!run) continue;
+  for (const run of expression.matchAll(new RegExp(D20_RUN, "gi"))) {
+    const at = run.index as number;
+    if (!isAttackRoll(expression, scopes, at)) continue;
 
     const replacement = run[0].toLowerCase().startsWith("h")
       ? `h${RUN_FOR_ROLL_TYPE[rollType]}`
       : RUN_FOR_ROLL_TYPE[rollType];
 
-    const start = group.index as number;
-    rewritten +=
-      expression.slice(copiedUpTo, start) +
-      "(" +
-      body.slice(0, run.index) +
-      replacement +
-      body.slice(run.index + run[0].length) +
-      ")";
-    copiedUpTo = start + group[0].length;
+    rewritten += expression.slice(copiedUpTo, at) + replacement;
+    copiedUpTo = at + run[0].length;
   }
 
   return rewritten + expression.slice(copiedUpTo);
+}
+
+/**
+ * Balanced parenthesised ranges, innermost first, so a run's enclosing scopes
+ * can be walked outwards. Unbalanced input simply yields fewer scopes; the
+ * parser is what rejects it.
+ */
+function enclosingScopes(
+  expression: string
+): readonly { start: number; end: number }[] {
+  const open: number[] = [];
+  const scopes: { start: number; end: number }[] = [];
+
+  for (let i = 0; i < expression.length; i++) {
+    if (expression[i] === "(") open.push(i);
+    else if (expression[i] === ")") {
+      const start = open.pop();
+      if (start !== undefined) scopes.push({ start, end: i + 1 });
+    }
+  }
+
+  // Closing order is innermost-first already; sorting by width keeps that true
+  // for sibling groups too.
+  return scopes.sort((a, b) => a.end - a.start - (b.end - b.start));
+}
+
+/**
+ * Whether the d20 run at `at` is an attack roll, by walking outwards to the
+ * nearest scope that names a check: `AC` means yes, `DC` means it is the
+ * target's saving throw, and naming neither means there is no check to convert.
+ *
+ * Walking outwards is what makes nesting work — in `((d20 + 8) AC 16)` the run's
+ * own group says nothing and the one outside it says `AC`.
+ */
+function isAttackRoll(
+  expression: string,
+  scopes: readonly { start: number; end: number }[],
+  at: number
+): boolean {
+  for (const scope of scopes) {
+    if (at < scope.start || at >= scope.end) continue;
+    const body = expression.slice(scope.start, scope.end);
+    if (/\bAC\b/i.test(body)) return true;
+    if (/\bDC\b/i.test(body)) return false;
+  }
+  if (/\bAC\b/i.test(expression)) return true;
+  return false;
 }

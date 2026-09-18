@@ -52,17 +52,22 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   both land. Riders may be attacks themselves, and may be sources for other riders.
 
 - **`tryParse(expression)`** — `parse` without the throw, returning an empty PMF
-  for junk. It also accepts a bare integer, which the grammar rejects but a
-  half-typed damage field is for a keystroke or two. Every consumer had written
-  this try/catch; dprcalc's version fell back to `1d1 + (n - 1)`, which the
-  parser then rejected for negative `n`. This one builds the delta directly.
+  for junk. It also accepts a *signed* integer, which the grammar rejects:
+  `parse("7")` already returns a delta, but `parse("-3")` throws, and a
+  half-typed damage field is a bare signed number often enough to matter. Every
+  consumer had written this try/catch; dprcalc's version fell back to
+  `1d1 + (n - 1)`, which the parser then rejected for a negative `n`. This one
+  builds the delta directly, and refuses values outside the safe-integer range
+  rather than quietly rounding them.
 
-- **`withRollType(expression, rollType)`** — rewrite an expression's attack roll
+- **`withRollType(expression, rollType)`** — rewrite an expression's attack rolls
   between flat / advantage / disadvantage / elven accuracy, leaving the damage,
-  crit and miss clauses alone. Only an `AC` group is touched: a `DC` group is the
-  target's saving throw, which the attacker's advantage does not affect, so saves
-  and pure damage expressions come back unchanged and the function is safe to map
-  over a mixed list. A halfling-luck `h` prefix is preserved.
+  crit and miss clauses alone. Each `d20` is resolved against the nearest
+  enclosing check, so nesting works and an expression with several attacks is
+  fully converted: `AC` is an attack roll, `DC` is the target's saving throw,
+  which the attacker's advantage does not affect. Saves and pure damage come back
+  unchanged, so this is safe to map over a mixed list. A halfling-luck `h` prefix
+  is preserved.
 
   dprcalc was doing this by round-tripping through its own `AttackModel` parser
   and re-serializing, 47 lines deep, because there was no way to say "same attack,
@@ -92,6 +97,12 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   so a Fighter's four swings do not have to be spelled out as
   `turn([sword, sword, sword, sword])`. `turn()` also takes a bare source now, so
   a one-attack turn needs no brackets.
+
+- `TurnSpecError` code **`unused-crit-damage`**, for a `critDamage` passed to a
+  rider that rolls its own attack. Such a rider crits on its own terms — Great
+  Weapon Master's bonus swing does not deal doubled dice because the attack that
+  triggered it crit — so there was nothing for the value to mean and it was
+  being dropped in silence.
 
 - **`Turn.attackIds` / `Turn.riderIds`** in declaration order, including the
   `attack 1` / `rider 2` defaults, so a caller can discover the names that `of`
