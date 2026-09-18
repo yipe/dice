@@ -318,3 +318,52 @@ describe("trigger source sets", () => {
     expect(built.toQuery().singles).toHaveLength(1);
   });
 });
+
+describe("validation timing", () => {
+  it("throws at the call that introduced the mistake, not at pmf access", () => {
+    const built = turn([dagger]);
+    // Before: this returned a Turn and blew up later, at .mean().
+    expect(() => built.onFirstHit(d6, { of: ["nope"] })).toThrow(TurnSpecError);
+  });
+
+  it("validates every construction path the same way", () => {
+    expect(codeOf(() => turn([dagger]).onFirstHit(d6, { of: ["x"] }))).toBe(
+      "unknown-id"
+    );
+    expect(
+      codeOf(() => turn([dagger]).rider({ damage: d6, on: "first-hit", of: ["x"] }))
+    ).toBe("unknown-id");
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ id: "d1", source: dagger }],
+          riders: [{ damage: d6, on: "first-hit", of: ["x"] }],
+        })
+      )
+    ).toBe("unknown-id");
+  });
+});
+
+describe("id accessors", () => {
+  it("names bare attacks and anonymous riders in declaration order", () => {
+    const built = turn([dagger, dagger])
+      .onFirstHit(d6)
+      .onAnyCrit(d6, { id: "smite" })
+      .onEveryHit(d6);
+
+    expect(built.attackIds).toEqual(["attack 1", "attack 2"]);
+    expect(built.riderIds).toEqual(["rider 1", "smite", "rider 3"]);
+  });
+
+  it("accepts every listed rider id in fireProbability", () => {
+    const built = turn([dagger, dagger]).onFirstHit(d6).onEveryHit(d6);
+    for (const id of built.riderIds) {
+      expect(built.fireProbability(id)).toBeGreaterThan(0);
+    }
+  });
+
+  it("names the available riders when given an attack id", () => {
+    const built = turn([dagger]).onAnyCrit(d6, { id: "smite" });
+    expect(() => built.fireProbability("attack 1")).toThrow(/Riders: "smite"/);
+  });
+});

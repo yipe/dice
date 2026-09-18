@@ -21,7 +21,10 @@ export type AttackTriggerOn =
  * - `every-hit` — once per landing source, in that hit's mode (Hunter's Mark, Hex, Rage).
  * - `not-fired` — the named rider did **not** fire ("flurry of blows if I didn't smite").
  *
- * `of` defaults to every declared attack, which is what most riders mean.
+ * For the attack triggers `of` is a list of attack ids and defaults to every
+ * declared attack, which is what most riders mean. For `not-fired` it is the
+ * single required id of the rider being negated — negating a set of riders has
+ * no unambiguous meaning, so the type does not offer it.
  */
 export type Trigger =
   | { on: AttackTriggerOn; of?: readonly string[] }

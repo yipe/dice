@@ -81,17 +81,15 @@ function fireMode(
  */
 export class Turn {
   private readonly eps: number;
-  private plan?: TurnPlan;
-  private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
-
   private readonly attacks: readonly Attack[];
   private readonly riders: readonly Rider[];
+  private readonly plan: TurnPlan;
+  private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
 
   private constructor(
     attacks: readonly Attack[],
     riders: readonly Rider[],
-    eps: number = EPS,
-    plan?: TurnPlan
+    eps: number
   ) {
     // Copied, because a caller can hand in an array they still hold and keep
     // mutating it. Shallow is the right depth: the entries are builders and
@@ -100,50 +98,66 @@ export class Turn {
     this.attacks = [...attacks];
     this.riders = [...riders];
     this.eps = eps;
-    this.plan = plan;
+    // Built here, not on first use, so every way of constructing a Turn
+    // validates at the same moment: the call that introduced the mistake.
+    this.plan = buildPlan({ attacks: this.attacks, riders: this.riders }, eps);
   }
 
   /**
-   * Validates eagerly and throws {@link TurnSpecError} — use this from a UI, where
-   * `error.code` maps to the row/field state to show.
+   * Builds a turn from plain data, throwing {@link TurnSpecError} if it is
+   * malformed. Use this from a UI, where `error.code` maps to the field state to
+   * show.
    */
   static from(spec: TurnSpec, eps: number = EPS): Turn {
-    const plan = buildPlan(spec, eps);
-    return new Turn(spec.attacks, spec.riders ?? [], eps, plan);
+    return new Turn(spec.attacks, spec.riders ?? [], eps);
   }
 
-  /** Appends an attack. Validation is deferred to the first `pmf` access. */
+  /**
+   * Appends an attack, throwing {@link TurnSpecError} if that makes the turn
+   * invalid. Declare attacks before the riders that trigger on them — a rider's
+   * `of` defaults to the attacks known at the time it is added.
+   */
   attack(source: Source, id?: string): Turn {
     const entry: Attack = id === undefined ? source : { id, source };
-    return new Turn([...this.attacks, entry], this.riders, this.eps, undefined);
+    return new Turn([...this.attacks, entry], this.riders, this.eps);
   }
 
-  /** Appends a rider. Validation is deferred to the first `pmf` access. */
+  /**
+   * Appends a rider, throwing {@link TurnSpecError} if that makes the turn
+   * invalid. The `onX` methods below are the readable way to call this.
+   */
   rider(rider: Rider): Turn {
-    return new Turn(
-      this.attacks,
-      [...this.riders, rider],
-      this.eps,
-      undefined
-    );
+    return new Turn(this.attacks, [...this.riders, rider], this.eps);
   }
 
-  /** 3d6 on the first dagger that lands — Sneak Attack. */
+  /**
+   * Fires once, on the first source that lands, in that source's mode — so a
+   * crit on the first landing attack doubles the rider's dice. Sneak Attack.
+   */
   onFirstHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "first-hit" });
   }
 
-  /** 2d8 whenever anything crits — Divine Smite. */
+  /**
+   * Fires once if any source crit, always in crit mode. Divine Smite: nothing is
+   * lost by holding it for a crit, so this is "any", not "first".
+   */
   onAnyCrit(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "any-crit" });
   }
 
-  /** A fresh attack when something missed — Unerring Accuracy, Lucky. */
+  /**
+   * Fires once if any source missed. The reroll gate: a reroll is a fresh attack,
+   * so pass one as the damage. Kensei's Unerring Accuracy, Lucky.
+   */
   onAnyMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "any-miss" });
   }
 
-  /** 1d6 on each attack that lands — Hunter's Mark, Hex, Rage. */
+  /**
+   * Fires once per source that lands, in that hit's mode — so it can fire several
+   * times in a turn. Hunter's Mark, Hex, Rage.
+   */
   onEveryHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "every-hit" });
   }
@@ -191,12 +205,24 @@ export class Turn {
     const riders: Rider[] = [...this.riders];
     riders[index] = { ...previous, id: target };
     riders.push({ ...options, damage, on: "not-fired", of: target });
-    return new Turn(this.attacks, riders, this.eps, undefined);
+    return new Turn(this.attacks, riders, this.eps);
   }
 
-  /** The exact joint distribution: mass 1, outcome-labelled. Computed once. */
+  /**
+   * The exact joint distribution: mass 1, outcome-labelled. Resolved once and
+   * cached.
+   *
+   * There is no `toPMF(eps)` to match the builders: a turn's epsilon is fixed
+   * when it is constructed, because the plan is validated and its sources are
+   * resolved at that point.
+   */
   get pmf(): PMF {
     return this.resolve().pmf;
+  }
+
+  /** Mean damage for the turn. */
+  mean(): number {
+    return this.pmf.mean();
   }
 
   /**
@@ -204,22 +230,36 @@ export class Turn {
    * distribution is the exact turn PMF.
    *
    * Riders are inside the combined PMF, not in `singles`, so singles-based
-   * helpers (`probAtLeastOne`, `countSinglesWith`) describe the attacks only.
-   * Read rider-inclusive statistics off the combined PMF —
+   * helpers (`probAtLeastOne`, `countSinglesWith`, `outcomeStats`) describe the
+   * attacks only. Read rider-inclusive statistics off the combined PMF —
    * `outcomeTotals`, `outcomeDamageRanges`, `damageAttributionChartModel`.
    */
   toQuery(): DiceQuery {
-    const plan = this.ensurePlan();
-    return new DiceQuery([...plan.attackPMFs], this.pmf, this.eps);
-  }
-
-  mean(): number {
-    return this.pmf.mean();
+    return new DiceQuery([...this.plan.attackPMFs], this.pmf, this.eps);
   }
 
   /**
-   * P(rider fires). For `every-hit` riders this is P(at least one source hit) —
-   * such a rider can fire more than once per turn.
+   * Attack ids in declaration order, including the `attack 1`, `attack 2`, …
+   * defaults given to bare sources. These are the names `of` accepts.
+   */
+  get attackIds(): readonly string[] {
+    return this.plan.attackIds;
+  }
+
+  /**
+   * Rider ids in declaration order, including the `rider 1`, `rider 2`, …
+   * defaults. These are the names {@link Turn.fireProbability} accepts.
+   */
+  get riderIds(): readonly string[] {
+    return this.plan.riderIds;
+  }
+
+  /**
+   * P(this rider fired). For an `every-hit` rider it is P(at least one source
+   * hit), since that rider can fire more than once in a turn.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider — attack ids
+   * included, since attacks always happen and have no firing probability.
    */
   fireProbability(id: string): number {
     const mass = this.resolve().fireMass.get(id);
@@ -227,26 +267,18 @@ export class Turn {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not a rider in this turn.`
+        `"${id}" is not a rider in this turn. Riders: ${this.plan.riderIds
+          .map((each) => `"${each}"`)
+          .join(", ")}.`
       );
     }
     return mass;
   }
 
-  private ensurePlan(): TurnPlan {
-    if (!this.plan) {
-      this.plan = buildPlan(
-        { attacks: this.attacks, riders: this.riders },
-        this.eps
-      );
-    }
-    return this.plan;
-  }
-
   private resolve(): { pmf: PMF; fireMass: ReadonlyMap<string, number> } {
     if (this.resolved) return this.resolved;
 
-    const plan = this.ensurePlan();
+    const plan = this.plan;
     const eps = this.eps;
     const width = plan.groupCount;
 

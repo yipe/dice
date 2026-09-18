@@ -21,6 +21,10 @@ export interface TurnPlan {
   groupCount: number;
   /** Declared attacks only, in order — what `DiceQuery.singles` gets. */
   attackPMFs: readonly PMF[];
+  /** Every attack id, in declaration order. */
+  attackIds: readonly string[];
+  /** Every rider id, in declaration order, including `every-hit` riders. */
+  riderIds: readonly string[];
   /** Rider id → step index, for `fireProbability` and `not-fired`. */
   riderSteps: ReadonlyMap<string, number>;
   /**
@@ -375,6 +379,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     steps,
     groupCount: groupSources.length,
     attackPMFs,
+    attackIds,
+    riderIds,
     riderSteps,
     perHitGroups,
   };
