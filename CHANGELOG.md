@@ -20,6 +20,8 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
 
   ```ts
   const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+  const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
+
   const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6));
   rogue.mean();     // 18.6225
   rogue.pmf.pAt(0); // 0.1225
@@ -27,7 +29,7 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   const goliath = turn([dagger, dagger])
     .onFirstHit(roll(3, d6))
     .onAnyCrit(roll(2, d8), { id: "smite" })
-    .otherwise([flurry, flurry])
+    .otherwise([unarmed, unarmed])
     .onEveryHit(d6);
   ```
 

@@ -114,8 +114,13 @@ export class Turn {
 
   /**
    * Appends an attack, throwing {@link TurnSpecError} if that makes the turn
-   * invalid. Declare attacks before the riders that trigger on them — a rider's
-   * `of` defaults to the attacks known at the time it is added.
+   * invalid.
+   *
+   * A rider with no explicit `of` watches every declared attack *including ones
+   * appended after it*, because `of` is resolved when the plan is built rather
+   * than when the rider is added. Pass an explicit `of` to pin a rider to the
+   * attacks it already saw. One attack must exist before a rider with a default
+   * `of` is added, or the build fails `unknown-id`.
    */
   attack(source: Source, id?: string): Turn {
     const entry: Attack = id === undefined ? source : { id, source };
