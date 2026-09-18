@@ -89,6 +89,7 @@ export type TurnSpecErrorCode =
   | "self-reference"
   | "cycle"
   | "not-an-attack"
+  | "unused-crit-damage"
   | "too-many-groups";
 
 /**

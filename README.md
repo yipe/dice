@@ -342,8 +342,8 @@ a half-typed damage field is one for a keystroke or two:
 import { tryParse } from "@yipe/dice";
 
 tryParse("1d6 + 2").mean(); // 5.5
-tryParse("7").mean(); // 7    — delta, not a parse error
-tryParse("0x10").mass(); // 0 — decimal integers only
+tryParse("-3").mean(); // -3   — signed integers, which the grammar rejects
+tryParse("0x10").mass(); // 0  — decimal only
 tryParse("1d").mass(); // 0   — empty PMF
 ```
 
@@ -367,11 +367,12 @@ withRollType(attack, "advantage"); // "(d20 > d20 + 8 AC 16) * (1d4 + 4) crit (2
 withRollType(attack, "elven accuracy"); // "(d20 > d20 > d20 + 8 AC 16) * ..."
 ```
 
-Every `AC` group is rewritten, so an expression holding several attacks is fully
-converted. A `DC` group is the *target's* saving throw, which the attacker's
-advantage does not affect, so saves come back unchanged — as does anything with
-no attack roll. That makes it safe to map over a mixed list. A halfling-luck `h`
-prefix is preserved.
+Every attack roll is rewritten, so an expression holding several attacks is fully
+converted, nesting and all. Each `d20` is resolved against the nearest enclosing
+check: `AC` is an attack roll, while `DC` is the *target's* saving throw, which
+the attacker's advantage does not affect. Saves therefore come back unchanged, as
+does anything with no check at all, which makes this safe to map over a mixed
+list. A halfling-luck `h` prefix is preserved.
 
 ### Damage Riders (Sneak Attack, Smite, Hunter's Mark)
 
@@ -478,7 +479,8 @@ paladin.riderIds;                 // ["smite"]
 ```
 
 Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
-`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `too-many-groups` — maps
+`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `unused-crit-damage`,
+`too-many-groups` — maps
 straight onto a UI field state. A bad `of` fails at the call that introduced it, not later at
 `.mean()`.
 
