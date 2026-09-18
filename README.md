@@ -423,10 +423,19 @@ at all, which is visible in the spread even though it never changes the mean. `o
 the rider immediately before it, so the smite and the flurry are two branches of one decision and
 can never both land.
 
-Nothing above needs an `id`. Name a rider when you want to ask about it afterwards, or when you want
-a `not-fired` trigger to point somewhere other than the previous rider:
+Every construction path validates immediately and throws a `TurnSpecError` whose `code`
+(`unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `too-many-groups`) maps
+straight onto a field state — so a bad `of` fails at the call that introduced it, not later at
+`.mean()`.
+
+Nothing above needs an `id`. Attacks and riders get `attack 1`, `rider 2`, … in declaration order,
+readable from `attackIds` and `riderIds`. Name a rider when you want to ask about it afterwards, or
+when you want a `not-fired` trigger to point somewhere other than the previous rider:
 
 ```ts
+goliath.attackIds; // ["attack 1", "attack 2"]
+goliath.riderIds;  // ["rider 1", "rider 2", "smite", "rider 4", "rider 5"]
+
 const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" });
 paladin.fireProbability("smite"); // 0.0975
 ```
@@ -443,9 +452,6 @@ const turnFromUI = Turn.from({
   riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
 });
 ```
-
-`Turn.from` validates up front and throws a `TurnSpecError` whose `code` (`unknown-id`, `cycle`,
-`not-an-attack`, …) maps straight onto a field state.
 
 ### Statistics and Charts
 
