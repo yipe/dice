@@ -422,6 +422,8 @@ Riders take the same builders attacks do, so "extra damage" and "an extra attack
 A whole attack, a list of attacks, a flat bonus, or a saving throw all work:
 
 ```ts
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
 const greatsword = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5));
 const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
 const poison = d20.dc(13).onSaveFailure(roll(3, d6)).saveHalf();
@@ -490,7 +492,9 @@ trigger as plain data — and `Trigger` is JSON-safe, so a UI can persist one an
 back:
 
 ```ts
-import { Turn } from "@yipe/dice/builder";
+import { Turn, d20, d4, d6, roll } from "@yipe/dice/builder";
+
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 
 const fromUI = Turn.from({
   attacks: [{ id: "dagger 1", source: dagger }, { id: "dagger 2", source: dagger }],

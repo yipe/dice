@@ -10,9 +10,11 @@ describe("tryParse", () => {
   });
 
   it("treats a bare number as that much damage", () => {
-    expect(tryParse("7").mean()).toBeCloseTo(7, 12);
-    expect(tryParse("0").mean()).toBeCloseTo(0, 12);
-    expect(tryParse("-3").mean()).toBeCloseTo(-3, 12);
+    // Assert mass too: PMF.empty() also has mean 0, so a mean-only assertion
+    // would pass for exactly the regression this guards.
+    expect(tryParse("7").pAt(7)).toBeCloseTo(1, 12);
+    expect(tryParse("0").pAt(0)).toBeCloseTo(1, 12);
+    expect(tryParse("-3").pAt(-3)).toBeCloseTo(1, 12);
   });
 
   it("accepts only decimal integers, not every Number() form", () => {
@@ -155,6 +157,7 @@ describe("tryParse and the n substitution", () => {
     // Default n is 0, so `nd6` is no dice at all. Forwarding an epsilon as `n`
     // used to turn this into 1d6 and report 3.5.
     expect(tryParse("nd6").mean()).toBeCloseTo(parse("nd6").mean(), 12);
+    expect(tryParse("nd6").mass()).toBeCloseTo(parse("nd6").mass(), 12);
     expect(tryParse("nd6").mean()).toBe(0);
   });
 });
@@ -205,5 +208,30 @@ describe("tryParse and integer range", () => {
     expect(() => parse("-3")).toThrow();
     expect(tryParse("-3").mean()).toBe(-3);
     expect(tryParse("+7").mean()).toBe(7);
+  });
+});
+
+describe("withRollType outside parentheses", () => {
+  it("classifies each run by the check it belongs to, not by the whole string", () => {
+    // One left-associated chain: the first d20 feeds the DC, the second the AC.
+    expect(withRollType("d20 + 5 DC 16 + d20 + 8 AC 16", "advantage")).toBe(
+      "d20 + 5 DC 16 + d20 > d20 + 8 AC 16"
+    );
+    // The trailing d20 is damage, with no check after it.
+    expect(withRollType("d20 AC 16 + d20", "advantage")).toBe(
+      "d20 > d20 AC 16 + d20"
+    );
+  });
+
+  it("leaves a parenthesised damage die alone", () => {
+    expect(withRollType("(d20 + 8 AC 16) * (d20)", "advantage")).toBe(
+      "(d20 > d20 + 8 AC 16) * (d20)"
+    );
+  });
+
+  it("rejects unsafe unsigned integers, which parse would round", () => {
+    expect(parse("9007199254740993").mean()).toBe(9007199254740992);
+    expect(tryParse("9007199254740993").mass()).toBe(0);
+    expect(tryParse("9007199254740991").pAt(9007199254740991)).toBeCloseTo(1, 12);
   });
 });
