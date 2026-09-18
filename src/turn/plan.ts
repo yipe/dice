@@ -162,11 +162,19 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       if (target === id) {
         fail("self-reference", id, `Rider "${id}" cannot depend on itself.`);
       }
-      if (!riderIndexById.has(target)) {
+      const targetIndex = riderIndexById.get(target);
+      if (targetIndex === undefined) {
         fail(
           "unknown-id",
           target,
           `Rider "${id}" negates "${target}", which is not a rider in this turn.`
+        );
+      }
+      if (riders[targetIndex as number].on === "every-hit") {
+        fail(
+          "not-an-attack",
+          target,
+          `Rider "${id}" negates "${target}", an every-hit rider, which can fire more than once and so has no single "did not fire" branch.`
         );
       }
       return [target];
@@ -187,6 +195,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           "unknown-id",
           sourceId,
           `Rider "${id}" depends on "${sourceId}", which is not in this turn.`
+        );
+      }
+      if (riderIndex !== undefined && riders[riderIndex].on === "every-hit") {
+        fail(
+          "not-an-attack",
+          sourceId,
+          `Rider "${id}" triggers on "${sourceId}", an every-hit rider. Those are folded into their own sources rather than resolved separately, so they cannot be triggered on — point at the attacks instead.`
         );
       }
       const slices = isAttack

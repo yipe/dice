@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { PMF } from "../src/pmf/pmf";
 import { DiceQuery } from "../src/pmf/query";
 import { parse } from "../src/parser/parser";
 import { tryParse, withRollType } from "../src/parser/rollType";
@@ -18,7 +17,7 @@ describe("tryParse", () => {
 
   it("returns an empty PMF for input that is neither", () => {
     for (const bad of ["", "   ", "1d", "AC 15", "(((", "2.5", "seven"]) {
-      expect(tryParse(bad).mass()).toBe(PMF.empty().mass());
+      expect(tryParse(bad).mass()).toBe(0);
     }
   });
 });
@@ -53,6 +52,21 @@ describe("withRollType", () => {
       "(hd20 > d20 + 8 AC 16) * (1d4 + 4)"
     );
     expect(withRollType(halfling, "flat")).toBe(halfling);
+  });
+
+  it("rewrites every attack roll, not just the first", () => {
+    const two = "(d20 + 8 AC 16) * (1d8 + 4) + (d20 + 5 AC 16) * (1d6 + 2)";
+    expect(withRollType(two, "advantage")).toBe(
+      "(d20 > d20 + 8 AC 16) * (1d8 + 4) + (d20 > d20 + 5 AC 16) * (1d6 + 2)"
+    );
+    expect(withRollType(withRollType(two, "advantage"), "flat")).toBe(two);
+  });
+
+  it("rewrites attack rolls but leaves a save in the same expression alone", () => {
+    const mixed = "(d20 + 8 AC 16) * (1d8 + 4) + (d20 + 5 DC 16) * (2d6) save half";
+    expect(withRollType(mixed, "disadvantage")).toBe(
+      "(d20 < d20 + 8 AC 16) * (1d8 + 4) + (d20 + 5 DC 16) * (2d6) save half"
+    );
   });
 
   it("leaves a saving throw alone: the attacker's advantage is not the target's", () => {
