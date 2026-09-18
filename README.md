@@ -415,7 +415,7 @@ const goliath = turn([dagger, dagger])
   .onEveryHit(d6);             // hunter's mark
 
 goliath.mean(); // 39.5903
-goliath.query().damageAttributionChartModel();
+goliath.toQuery().damageAttributionChartModel();
 ```
 
 Riders sharing a trigger resolve **jointly**: sneak attack and fire's burn above fire together or not
@@ -439,7 +439,7 @@ a UI can persist one and hand it straight back:
 import { Turn } from "@yipe/dice/builder";
 
 const turnFromUI = Turn.from({
-  attacks: [{ id: "dagger 1", attack: dagger }, { id: "dagger 2", attack: dagger }],
+  attacks: [{ id: "dagger 1", source: dagger }, { id: "dagger 2", source: dagger }],
   riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
 });
 ```

@@ -1,9 +1,14 @@
 import type { PMF } from "../pmf/pmf";
 
-/** Triggers that read the outcomes of source attacks. */
-export type HitTriggerOn = "first-hit" | "any-crit" | "any-miss" | "every-hit";
-
-export type TriggerOn = HitTriggerOn | "not-fired";
+/**
+ * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
+ * which reads another rider. Includes `any-miss`, so this is not "hit triggers".
+ */
+export type AttackTriggerOn =
+  | "first-hit"
+  | "any-crit"
+  | "any-miss"
+  | "every-hit";
 
 /**
  * When a rider fires. JSON-safe, so a consumer can persist this verbatim and hand
@@ -19,7 +24,7 @@ export type TriggerOn = HitTriggerOn | "not-fired";
  * `of` defaults to every declared attack, which is what most riders mean.
  */
 export type Trigger =
-  | { on: HitTriggerOn; of?: readonly string[] }
+  | { on: AttackTriggerOn; of?: readonly string[] }
   | { on: "not-fired"; of: string };
 
 /** Anything that can produce a PMF: `RollBuilder`, `AttackBuilder`, `SaveBuilder`, or a `PMF`. */
@@ -34,7 +39,12 @@ export interface ToPMF {
  */
 export type Damage = PMF | ToPMF;
 
-/** A source must resolve to an *outcome-labelled* PMF (hit/crit/miss). */
+/**
+ * Same shape as {@link Damage}, named separately because the requirement is
+ * stronger: a source must resolve to an *outcome-labelled* PMF carrying
+ * hit/crit/miss, which no type can express. Supplying one that does not is a
+ * `not-an-attack` {@link TurnSpecError} at build time, not a compile error.
+ */
 export type Source = Damage;
 
 /** One payload, or several to convolve: Flurry of Blows is `[flurry, flurry]`. */
@@ -56,8 +66,14 @@ export type Rider = Trigger & {
   critDamage?: RiderDamage;
 };
 
-/** A bare source gets the id `attack 1`, `attack 2`, … in declaration order. */
-export type Attack = Source | { id: string; attack: Source };
+/**
+ * A bare source gets the id `attack 1`, `attack 2`, … in declaration order.
+ *
+ * Unlike {@link Rider}, the id lives in a wrapper rather than on the value
+ * itself: an attack's value is a builder or PMF that this module does not own,
+ * so there is nowhere to hang a field.
+ */
+export type Attack = Source | { id: string; source: Source };
 
 export interface TurnSpec {
   attacks: readonly Attack[];

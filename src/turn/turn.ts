@@ -105,7 +105,7 @@ export class Turn {
 
   /** Appends an attack. Validation is deferred to the first `pmf` access. */
   attack(source: Source, id?: string): Turn {
-    const entry: Attack = id === undefined ? source : { id, attack: source };
+    const entry: Attack = id === undefined ? source : { id, source };
     return new Turn([...this.attacks, entry], this.riders, this.eps, undefined);
   }
 
@@ -156,7 +156,10 @@ export class Turn {
    * three-way priority chain, name the riders and use explicit `not-fired`
    * triggers against the right one.
    */
-  otherwise(damage: RiderDamage, options: RiderOptions = {}): Turn {
+  otherwise(
+    damage: RiderDamage,
+    options: Omit<RiderOptions, "of"> = {}
+  ): Turn {
     const index = this.riders.length - 1;
     if (index < 0) {
       throw new TurnSpecError(
@@ -196,7 +199,7 @@ export class Turn {
    * Read rider-inclusive statistics off the combined PMF —
    * `outcomeTotals`, `outcomeDamageRanges`, `damageAttributionChartModel`.
    */
-  query(): DiceQuery {
+  toQuery(): DiceQuery {
     const plan = this.ensurePlan();
     return new DiceQuery([...plan.attackPMFs], this.pmf, this.eps);
   }
