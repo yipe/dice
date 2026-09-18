@@ -76,11 +76,15 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   doc comment says so). `outcomeStats` is linear in the attack count by
   construction, and the two agree for a single attack.
 
-- **`Turn.from(spec)`** for plain-data construction, validated up front with a
-  typed `TurnSpecError.code` (`unknown-id`, `duplicate-id`, `self-reference`,
-  `cycle`, `not-an-attack`, `too-many-groups`), so a consumer UI can map errors to
-  field states rather than reimplementing the checks. `Trigger` is JSON-safe and
-  meant to be persisted verbatim.
+- **`Turn.from(spec)`** for plain-data construction from
+  `{ attacks: [{ id, source }], riders: [{ id, damage, on, of }] }`, validated up
+  front with a typed `TurnSpecError.code` (`unknown-id`, `duplicate-id`,
+  `self-reference`, `cycle`, `not-an-attack`, `too-many-groups`), so a consumer UI
+  can map errors to field states rather than reimplementing the checks. `Trigger`
+  is JSON-safe and meant to be persisted verbatim.
+
+- **`Turn.toQuery()`**, named to match `RollBuilder`/`AttackBuilder`/`SaveBuilder`,
+  alongside a `pmf` getter as those have.
 
 - **`Turn.fireProbability(id)`** — P(a rider fired), which the walk already knows. For
   `every-hit` riders it reports P(at least one source hit).

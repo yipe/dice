@@ -243,7 +243,7 @@ describe("Turn with no riders", () => {
   });
 
   it("exposes the declared attacks as query singles", () => {
-    const query = turn([dagger, dagger]).query();
+    const query = turn([dagger, dagger]).toQuery();
     expect(query.singles).toHaveLength(2);
     expect(query.mean()).toBeCloseTo(new DiceQuery([daggerPMF, daggerPMF]).mean(), 10);
   });
