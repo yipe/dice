@@ -198,3 +198,49 @@ describe("Turn attribution", () => {
     expect(model.mean).toBeCloseTo(18.6225, 4);
   });
 });
+
+describe("every-hit riders cannot be referenced", () => {
+  // They are folded into their own sources' slices rather than resolved as a
+  // step, so a trigger pointing at one used to build fine and contribute zero.
+  it("rejects not-fired against an every-hit rider", () => {
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ id: "d1", attack: dagger }],
+          riders: [
+            { id: "mark", damage: d6, on: "every-hit" },
+            { damage: d6, on: "not-fired", of: "mark" },
+          ],
+        })
+      )
+    ).toBe("not-an-attack");
+  });
+
+  it("rejects a hit trigger against an every-hit rider, even an attack-shaped one", () => {
+    const bonus = d20.plus(8).ac(16).onHit(d6.plus(4));
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ id: "d1", attack: dagger }],
+          riders: [
+            { id: "bonus", damage: bonus, on: "every-hit" },
+            { damage: d6, on: "first-hit", of: ["bonus"] },
+          ],
+        })
+      )
+    ).toBe("not-an-attack");
+  });
+
+  it("still allows referencing a non-every-hit rider", () => {
+    const built = Turn.from({
+      attacks: [{ id: "d1", attack: dagger }],
+      riders: [
+        { id: "smite", damage: d6, on: "any-crit" },
+        { id: "fallback", damage: d6, on: "not-fired", of: "smite" },
+      ],
+    });
+    expect(
+      built.fireProbability("smite") + built.fireProbability("fallback")
+    ).toBeCloseTo(1, 10);
+  });
+});

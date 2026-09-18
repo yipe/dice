@@ -346,6 +346,11 @@ tryParse("7").mean(); // 7    — delta, not a parse error
 tryParse("1d").mass(); // 0   — empty PMF
 ```
 
+The failure value has **mass 0**, not a distribution, and convolving it collapses
+the whole result to mass 0 — check `mass()` or skip empties when combining
+several expressions. Where a bad expression should surface rather than be
+absorbed, use `parse()` and handle `DiceParseError`.
+
 ### Roll Types
 
 `withRollType()` rewrites an expression's attack roll, leaving the damage, crit
@@ -361,10 +366,11 @@ withRollType(attack, "advantage"); // "(d20 > d20 + 8 AC 16) * (1d4 + 4) crit (2
 withRollType(attack, "elven accuracy"); // "(d20 > d20 > d20 + 8 AC 16) * ..."
 ```
 
-Only an `AC` group is touched. A `DC` group is the *target's* saving throw, which
-the attacker's advantage does not affect, so save expressions come back unchanged
-— as does anything with no attack roll. That makes it safe to map over a mixed
-list. A halfling-luck `h` prefix is preserved.
+Every `AC` group is rewritten, so an expression holding several attacks is fully
+converted. A `DC` group is the *target's* saving throw, which the attacker's
+advantage does not affect, so saves come back unchanged — as does anything with
+no attack roll. That makes it safe to map over a mixed list. A halfling-luck `h`
+prefix is preserved.
 
 ### Damage Riders (Sneak Attack, Smite, Hunter's Mark)
 
