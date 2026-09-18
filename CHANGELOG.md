@@ -88,6 +88,11 @@ distribution. This is the roadmap's `Turn` / `DamageRider` item.
   epsilon is fixed at construction, where its plan is validated and its sources
   resolved.
 
+- **`Turn.attacks(count, source)`** for Extra Attack, mirroring `roll(count, die)`,
+  so a Fighter's four swings do not have to be spelled out as
+  `turn([sword, sword, sword, sword])`. `turn()` also takes a bare source now, so
+  a one-attack turn needs no brackets.
+
 - **`Turn.attackIds` / `Turn.riderIds`** in declaration order, including the
   `attack 1` / `rider 2` defaults, so a caller can discover the names that `of`
   and `fireProbability` accept instead of having to have supplied them all.
