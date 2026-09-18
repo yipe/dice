@@ -181,7 +181,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       return [target];
     }
 
-    const of = rider.of ?? attackIds;
+    // Deduplicated, so `of: ["a", "a"]` shares a trigger group with `of: ["a"]`
+    // instead of consuming a second slot and tripping `too-many-groups` on a
+    // turn that is really tracking one source set. Repeats are otherwise
+    // harmless: advancing a group twice for one outcome is idempotent.
+    const of = [...new Set(rider.of ?? attackIds)];
     if (of.length === 0) {
       fail("unknown-id", id, `Rider "${id}" has no sources.`);
     }
@@ -248,7 +252,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const groupIndexByKey = new Map<string, number>();
   const groupSources: string[][] = [];
   const groupOf = (sourceIds: readonly string[]): number => {
-    const key = [...sourceIds].sort().join("\u0000");
+    // JSON, not a delimiter join: an id is consumer-supplied, and a delimiter
+    // that can appear inside one makes the encoding non-injective, so two
+    // distinct source sets could share a group.
+    const key = JSON.stringify([...sourceIds].sort());
     const existing = groupIndexByKey.get(key);
     if (existing !== undefined) return existing;
     if (groupSources.length >= MAX_TRIGGER_GROUPS) {

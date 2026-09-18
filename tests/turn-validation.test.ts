@@ -268,3 +268,53 @@ describe("Turn with source PMFs whose mass is not 1", () => {
     expect(built.fireProbability("sneak")).toBeLessThanOrEqual(1);
   });
 });
+
+describe("trigger source sets", () => {
+  it("treats a repeated source id as one source", () => {
+    const attacks = [
+      { id: "a", source: dagger },
+      { id: "b", source: dagger },
+    ];
+    const plain = turn(attacks).onFirstHit(d6, { of: ["a", "b"] });
+    const repeated = turn(attacks).onFirstHit(d6, { of: ["a", "b", "b", "a"] });
+
+    expect(repeated.mean()).toBeCloseTo(plain.mean(), 12);
+    expect(repeated.pmf.stdev()).toBeCloseTo(plain.pmf.stdev(), 12);
+  });
+
+  it("does not spend a trigger group on a duplicate-only difference", () => {
+    const attacks = [
+      { id: "a", source: dagger },
+      { id: "b", source: dagger },
+    ];
+    // ["a"] and ["a","a"] name the same set, so these are 3 groups, not 5.
+    let built = turn(attacks);
+    for (const of of [["a"], ["a", "a"], ["b"], ["b", "b"], ["a", "b"]]) {
+      built = built.onFirstHit(d6, { of });
+    }
+    expect(built.mean()).toBeGreaterThan(0);
+  });
+
+  it("keeps distinct source sets apart when an id contains the delimiter", () => {
+    const attacks = [
+      { id: "a\u0000b", source: dagger },
+      { id: "a", source: dagger },
+      { id: "b", source: dagger },
+    ];
+    const joined = turn(attacks).onFirstHit(d6, { of: ["a\u0000b"] });
+    const pair = turn(attacks).onFirstHit(d6, { of: ["a", "b"] });
+
+    // One source vs two: the second fires more often, so they must not share.
+    expect(pair.mean()).toBeGreaterThan(joined.mean());
+  });
+
+  it("ignores later mutation of a caller-owned attacks array", () => {
+    const attacks = [{ id: "a", source: dagger }];
+    const built = turn(attacks).onFirstHit(d6, { of: ["a"] });
+    const before = built.mean();
+
+    attacks.push({ id: "b", source: dagger });
+    expect(built.mean()).toBeCloseTo(before, 12);
+    expect(built.toQuery().singles).toHaveLength(1);
+  });
+});
