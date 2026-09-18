@@ -44,6 +44,9 @@ export function tryParse(expression: string): PMF {
   }
 }
 
+/** The token naming a check: `AC` for an attack roll, `DC` for a saving throw. */
+const CHECK_TOKEN = /\b(AC|DC)\b/i;
+
 /** The d20 run at the head of a check: `d20`, `hd20 > d20`, `d20 < d20`, … */
 const D20_RUN = /\bh?d20(?:\s*[><]\s*h?d20)*/i;
 
@@ -123,17 +126,18 @@ function enclosingScopes(
 /**
  * Whether the d20 run at `at` is an attack roll.
  *
- * A parenthesised run is classified by walking outwards to the nearest scope
- * that names a check, which is what makes nesting work: in
- * `((d20 + 8) AC 16)` the run's own group says nothing and the one outside it
- * says `AC`. A run whose scopes name no check is *not* an attack roll — in
- * `(d20 + 8 AC 16) * (d20)` the second run is damage.
+ * The grammar parses one left-associated chain, so the check a run belongs to is
+ * the *first* `AC` or `DC` token after it — not any token anywhere near it.
+ * Searching forward is what keeps the two runs in
+ * `d20 + 5 DC 16 + d20 + 8 AC 16` apart: the first feeds the save, the second
+ * the attack. Likewise the trailing run in `d20 AC 16 + d20` is damage, because
+ * no check follows it.
  *
- * An unparenthesised run is classified by the first check token that follows
- * it, which is the one the left-associated parse applies to it. Testing the
- * whole expression instead would rewrite the save in
- * `d20 + 5 DC 16 + d20 + 8 AC 16`, and the trailing damage die in
- * `d20 AC 16 + d20`.
+ * The search widens outwards one scope at a time, which is what makes nesting
+ * work: in `((d20 + 8) AC 16)` nothing follows the run inside its own group, and
+ * the group outside it says `AC`. A run that runs out of scopes without meeting
+ * a check is damage — the second run in `(d20 + 8 AC 16) * (d20)` — and only a
+ * wholly unparenthesised run falls back to the rest of the expression.
  */
 function isAttackRoll(
   expression: string,
@@ -141,17 +145,18 @@ function isAttackRoll(
   at: number,
   length: number
 ): boolean {
+  const from = at + length;
   let scoped = false;
+
   for (const scope of scopes) {
     if (at < scope.start || at >= scope.end) continue;
     scoped = true;
-    const body = expression.slice(scope.start, scope.end);
-    if (/\bAC\b/i.test(body)) return true;
-    if (/\bDC\b/i.test(body)) return false;
+    const check = CHECK_TOKEN.exec(expression.slice(from, scope.end));
+    if (check) return check[1].toUpperCase() === "AC";
   }
+
   if (scoped) return false;
 
-  const following = expression.slice(at + length);
-  const check = /\b(AC|DC)\b/i.exec(following);
+  const check = CHECK_TOKEN.exec(expression.slice(from));
   return check !== null && check[1].toUpperCase() === "AC";
 }

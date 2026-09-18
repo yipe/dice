@@ -235,3 +235,28 @@ describe("withRollType outside parentheses", () => {
     expect(tryParse("9007199254740991").pAt(9007199254740991)).toBeCloseTo(1, 12);
   });
 });
+
+describe("withRollType inside a single parenthesised chain", () => {
+  it("keeps a save and an attack apart in one scope", () => {
+    expect(withRollType("(d20 + 5 DC 16 + d20 + 8 AC 16)", "advantage")).toBe(
+      "(d20 + 5 DC 16 + d20 > d20 + 8 AC 16)"
+    );
+  });
+
+  it("leaves a trailing damage die in the same scope alone", () => {
+    expect(withRollType("(d20 AC 16 + d20)", "advantage")).toBe(
+      "(d20 > d20 AC 16 + d20)"
+    );
+  });
+
+  it("round-trips a mixed scope back to flat", () => {
+    const flat = "(d20 + 5 DC 16 + d20 + 8 AC 16)";
+    expect(withRollType(withRollType(flat, "advantage"), "flat")).toBe(flat);
+  });
+
+  it("still widens outwards for a nested check", () => {
+    expect(withRollType("((d20 + 8) AC 16) * (1d4 + 4)", "disadvantage")).toBe(
+      "((d20 < d20 + 8) AC 16) * (1d4 + 4)"
+    );
+  });
+});
