@@ -4,6 +4,7 @@ import type {
   Attack,
   Damage,
   Rider,
+  ToPMF,
   Trigger,
   TurnSpec,
   TurnSpecErrorCode,
@@ -63,12 +64,27 @@ const IS_HIT_TRIGGER: Record<string, true> = {
   "every-hit": true,
 };
 
-function toPMF(damage: Damage | readonly Damage[], eps: number): PMF {
+function toPMF(
+  damage: Damage | readonly Damage[],
+  eps: number,
+  id = ""
+): PMF {
   const parts = Array.isArray(damage) ? damage : [damage as Damage];
   if (parts.length === 0) return PMF.delta(0, eps);
-  const pmfs = parts.map((part) =>
-    part instanceof PMF ? part : part.toPMF(eps)
-  );
+  const pmfs = parts.map((part) => {
+    if (part instanceof PMF) return part;
+    // `Damage` rules this out, but a consumer deserializing UI state reaches
+    // here untyped. Reporting it as a spec error beats a bare TypeError from
+    // calling a method that isn't there.
+    if (typeof (part as Partial<ToPMF>).toPMF !== "function") {
+      throw new TurnSpecError(
+        "not-an-attack",
+        id,
+        `"${id}" is neither a PMF nor a builder with toPMF().`
+      );
+    }
+    return part.toPMF(eps);
+  });
   return PMF.convolveMany(pmfs, eps);
 }
 
@@ -97,6 +113,7 @@ function critPMF(rider: Rider, base: PMF, eps: number): PMF {
       return base;
     }
   }
+  if (doubled.length === 0) return base;
   return PMF.convolveMany(doubled, eps);
 }
 
@@ -137,7 +154,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       typeof named.id === "string" && named.source !== undefined;
     const id = hasWrapper ? (named.id as string) : `attack ${index + 1}`;
     const source = hasWrapper ? (named.source as Damage) : (entry as Damage);
-    const pmf = toPMF(source, eps);
+    const pmf = toPMF(source, eps, id);
 
     attackIds.push(id);
     attackPMFs.push(pmf);
@@ -215,7 +232,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       }
       const slices = isAttack
         ? attackSlices[attackIndexById.get(sourceId) as number]
-        : sliceSource(toPMF(riders[riderIndex as number].damage, eps));
+        : sliceSource(
+            toPMF(riders[riderIndex as number].damage, eps, sourceId)
+          );
       if (!slices) {
         fail(
           "not-an-attack",
@@ -292,7 +311,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   for (const index of order) {
     const rider = riders[index];
     if (rider.on !== "every-hit") continue;
-    const hit = toPMF(rider.damage, eps);
+    const hit = toPMF(rider.damage, eps, riderIds[index]);
     const payload = { hit, crit: critPMF(rider, hit, eps) };
     for (const sourceId of sourceIdsByRider[index]) {
       const existing = perHitBySource.get(sourceId);
@@ -350,7 +369,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     if (rider.on === "every-hit") continue;
 
     const id = riderIds[index];
-    const hit = toPMF(rider.damage, eps);
+    const hit = toPMF(rider.damage, eps, id);
     const slices = sliceSource(hit);
     if (slices && rider.critDamage !== undefined) {
       // An attack-shaped rider rolls its own d20 and crits on its own terms —

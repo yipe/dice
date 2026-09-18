@@ -29,19 +29,17 @@ const DECIMAL_INTEGER = /^\s*[+-]?\d+\s*$/;
  * valid expression nor an integer.
  */
 export function tryParse(expression: string): PMF {
+  // Checked before `parse`, not only in the fallback: `parse` accepts unsigned
+  // integers itself and converts them with the same precision loss, so
+  // `parse("9007199254740993")` would hand back a delta at …992.
+  if (DECIMAL_INTEGER.test(expression)) {
+    const value = Number(expression);
+    return Number.isSafeInteger(value) ? PMF.delta(value) : PMF.empty();
+  }
+
   try {
     return parse(expression);
   } catch {
-    // Decimal only. `Number()` would also take "0x10" as 16, "0b11" as 3 and
-    // "1e3" as 1000, none of which anyone typing into a damage field means.
-    // Safe integers only too: past 2^53 the conversion loses precision, so
-    // "-9007199254740993" would silently become …992. (`parse` itself accepts
-    // unsigned integers and does lose precision there; that is its own
-    // long-standing behaviour, not something this wrapper can fix.)
-    if (DECIMAL_INTEGER.test(expression)) {
-      const value = Number(expression);
-      if (Number.isSafeInteger(value)) return PMF.delta(value);
-    }
     return PMF.empty();
   }
 }
@@ -85,7 +83,7 @@ export function withRollType(expression: string, rollType: RollType): string {
 
   for (const run of expression.matchAll(new RegExp(D20_RUN, "gi"))) {
     const at = run.index as number;
-    if (!isAttackRoll(expression, scopes, at)) continue;
+    if (!isAttackRoll(expression, scopes, at, run[0].length)) continue;
 
     const replacement = run[0].toLowerCase().startsWith("h")
       ? `h${RUN_FOR_ROLL_TYPE[rollType]}`
@@ -123,24 +121,37 @@ function enclosingScopes(
 }
 
 /**
- * Whether the d20 run at `at` is an attack roll, by walking outwards to the
- * nearest scope that names a check: `AC` means yes, `DC` means it is the
- * target's saving throw, and naming neither means there is no check to convert.
+ * Whether the d20 run at `at` is an attack roll.
  *
- * Walking outwards is what makes nesting work — in `((d20 + 8) AC 16)` the run's
- * own group says nothing and the one outside it says `AC`.
+ * A parenthesised run is classified by walking outwards to the nearest scope
+ * that names a check, which is what makes nesting work: in
+ * `((d20 + 8) AC 16)` the run's own group says nothing and the one outside it
+ * says `AC`. A run whose scopes name no check is *not* an attack roll — in
+ * `(d20 + 8 AC 16) * (d20)` the second run is damage.
+ *
+ * An unparenthesised run is classified by the first check token that follows
+ * it, which is the one the left-associated parse applies to it. Testing the
+ * whole expression instead would rewrite the save in
+ * `d20 + 5 DC 16 + d20 + 8 AC 16`, and the trailing damage die in
+ * `d20 AC 16 + d20`.
  */
 function isAttackRoll(
   expression: string,
   scopes: readonly { start: number; end: number }[],
-  at: number
+  at: number,
+  length: number
 ): boolean {
+  let scoped = false;
   for (const scope of scopes) {
     if (at < scope.start || at >= scope.end) continue;
+    scoped = true;
     const body = expression.slice(scope.start, scope.end);
     if (/\bAC\b/i.test(body)) return true;
     if (/\bDC\b/i.test(body)) return false;
   }
-  if (/\bAC\b/i.test(expression)) return true;
-  return false;
+  if (scoped) return false;
+
+  const following = expression.slice(at + length);
+  const check = /\b(AC|DC)\b/i.exec(following);
+  return check !== null && check[1].toUpperCase() === "AC";
 }
