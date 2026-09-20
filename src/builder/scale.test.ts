@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { d, d20 } from "../builder";
+import { parse } from "../parser/parser";
 import { RollBuilder, ScaleRollBuilder, sumRolls } from "./roll";
 
 const mean = (pmf: { map: Map<number, { p: number }> }): number => {
@@ -33,9 +34,9 @@ describe("scaleResult / ScaleRollBuilder", () => {
     expect(mean(d6().scaleResult(1, 2).pmf)).toBeCloseTo(mean(d6().half().pmf), 10);
   });
 
-  it("doubles the total for vulnerability (2 * (expr))", () => {
+  it("doubles the total for vulnerability (2 ** (expr))", () => {
     const vuln = d6().scaleResult(2);
-    expect(vuln.toExpression()).toBe("2 * (1d6)");
+    expect(vuln.toExpression()).toBe("2 ** (1d6)");
     // 2 * (1..6) => even values 2..12, each 1/6 (NOT triangular like 2d6)
     expect(distEntries(vuln.pmf)).toEqual([
       [2, 1 / 6],
@@ -49,12 +50,37 @@ describe("scaleResult / ScaleRollBuilder", () => {
   });
 
   it("renders a general numerator/denominator form", () => {
-    expect(d6().scaleResult(3, 4).toExpression()).toBe("(1d6) * 3 // 4");
+    expect(d6().scaleResult(3, 4).toExpression()).toBe("(1d6) ** 3 // 4");
+  });
+
+  it("regression: toExpression() round-trips through parse() -- `*` in this grammar is a gate (conditionalApply), not multiply, so a naive `N * (expr)` serialization silently dropped the multiplier on re-parse", () => {
+    const vuln = d6().scaleResult(2);
+    expect(mean(parse(vuln.toExpression()))).toBeCloseTo(mean(vuln.pmf), 10);
+
+    const general = d6().scaleResult(3, 4);
+    expect(mean(parse(general.toExpression()))).toBeCloseTo(
+      mean(general.pmf),
+      10
+    );
   });
 
   it("supports round and ceil rounding modes", () => {
     // ceil(1..6 / 2) => 1,1,2,2,3,3 => mean 2
     expect(mean(d6().scaleResult(1, 2, "ceil").pmf)).toBeCloseTo(2, 10);
+  });
+
+  it("regression: toExpression() preserves the ceil rounding mode on round-trip -- it previously always emitted `//` (floor) regardless of the configured mode, so `scaleResult(1, 2, \"ceil\")` silently re-parsed with the wrong (floor) distribution", () => {
+    const ceilScale = d6().scaleResult(1, 2, "ceil");
+    expect(ceilScale.toExpression()).toBe("(1d6) / 2");
+    expect(mean(parse(ceilScale.toExpression()))).toBeCloseTo(
+      mean(ceilScale.pmf),
+      10
+    );
+  });
+
+  it("regression: toExpression() throws for \"round\" rounding -- the string grammar has only floor (//) and ceil (/) division, no round-half token", () => {
+    const roundScale = d6().scaleResult(1, 2, "round");
+    expect(() => roundScale.toExpression()).toThrow(/round/);
   });
 });
 

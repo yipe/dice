@@ -5,8 +5,19 @@ on:
     branches: ["**"]
   pull_request:
 
+# Push and pull_request both fire on every commit to an open PR's branch (intentional -- CI
+# should run on both), but each trigger type builds up its own history of now-stale runs as new
+# commits land. Group by (workflow, ref): push and pull_request use different refs for the same
+# commit (refs/heads/<branch> vs refs/pull/<n>/merge), so this cancels a branch's own superseded
+# push runs and a PR's own superseded pull_request runs independently, without push and
+# pull_request cancelling each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

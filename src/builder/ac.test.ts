@@ -683,7 +683,7 @@ describe("AttackRollBuilder", () => {
     });
 
     it("handles minimum dice", () => {
-      const action = d20.plus(2).ac(10).onHit(roll(2).d6().plus(3).minimum(1));
+      const action = d20.plus(2).ac(10).onHit(roll(2).d6().plus(3).minimum(2));
       expect(action.toExpression()).toBe(
         "(d20 + 2 AC 10) * (2(2>d6) + 3) crit (4(2>d6) + 3)"
       );
@@ -695,9 +695,9 @@ describe("AttackRollBuilder", () => {
       const action = d20
         .plus(2)
         .ac(10)
-        .onHit(roll(2).d6().plus(3).minimum(1).reroll(3));
+        .onHit(roll(2).d6().plus(3).minimum(2).reroll(3));
       expect(action.toExpression()).toBe(
-        "(d20 + 2 AC 10) * (2(2>(d6 reroll 3 reroll 2 reroll 1)) + 3) crit (4(2>(d6 reroll 3 reroll 2 reroll 1)) + 3)"
+        "(d20 + 2 AC 10) * (2(2>(d6 reroll d3)) + 3) crit (4(2>(d6 reroll d3)) + 3)"
       );
       expect(action.toPMF()).toBeDefined();
       // expect(action.toPMF()?.mean()).toBeCloseTo(17.75, 5)
@@ -723,10 +723,10 @@ describe("AttackRollBuilder", () => {
         )
         .onMiss(roll.flat(1));
       expect(action.toExpression()).toBe(
-        "(d20 + 5 AC 15) * (3>d8 + 4(d4 reroll 1 reroll 2) + 2d6 + 8) xcrit4 (2(3>d8) + 8(d4 reroll 1 reroll 2) + 4d6 + 8) miss (1)"
+        "(d20 + 5 AC 15) * (2>d8 + 4(d4 reroll d2) + 2d6 + 8) xcrit4 (2(2>d8) + 8(d4 reroll d2) + 4d6 + 8) miss (1)"
       );
       expect(action.toPMF()).toBeDefined();
-      expect(action.toPMF()?.mean()).toBeCloseTo(22.75625, 5);
+      expect(action.toPMF()?.mean()).toBeCloseTo(22.56875, 5);
     });
 
     describe("Error Handling", () => {
@@ -838,7 +838,7 @@ describe("Combined Dice Expression Generation", () => {
 
   it("should not merge dice with different minimum configs", () => {
     const minAttack = d20.plus(2, d6).plus(2, d6.minimum(2)).plus(5).ac(15);
-    expect(minAttack.toExpression()).toBe("(d20 + 5 + 2(3>d6) + 2d6 AC 15)");
+    expect(minAttack.toExpression()).toBe("(d20 + 5 + 2(2>d6) + 2d6 AC 15)");
   });
 
   it("should handle subtraction correctly", () => {
@@ -912,5 +912,43 @@ describe("Percentile values for attack rolls", () => {
     expect(disAdvPercentiles[1]).toBe(0); // p50
     expect(disAdvPercentiles[2]).toBe(0); // p75
     expect(disAdvPercentiles[3]).toBe(0); // p90
+  });
+});
+
+describe("minimum d20 roll (e.g. Trance of Order) survives .ac()", () => {
+  it("floors every attack roll before the AC check, not just the display expression", () => {
+    // A floor of 10 against +9 to hit and AC 18 means every roll (10..20, +9 = 19..29) beats
+    // AC 18 -- there is no possible miss.
+    const attack = d20
+      .plus(9)
+      .minimum(10)
+      .ac(18)
+      .onHit(roll(2, d6).plus(5))
+      .onCrit(roll(4, d6).plus(5));
+
+    const query = attack.toPMF().query();
+    expect(query.probabilityOf("crit")).toBeCloseTo(0.05, 6);
+    expect(query.probabilityOf("hit")).toBeCloseTo(0.95, 6);
+    expect(query.probabilityOf("hit") + query.probabilityOf("crit")).toBeCloseTo(1, 6);
+    // 0.95 * mean(2d6+5=12) + 0.05 * mean(4d6+5=19)
+    expect(attack.toPMF().mean()).toBeCloseTo(12.35, 4);
+  });
+});
+
+describe("expanded crit range (critOn < 20) still requires beating AC", () => {
+  it("a natural roll in the crit range that doesn't beat AC is a miss, not a crit", () => {
+    // +5 to hit vs AC 25: only a natural 20 can possibly hit (20 + 5 = 25). critOn(19) must NOT
+    // credit a crit for a natural 19 (19 + 5 = 24 < 25) -- only the natural 20 crits.
+    const attack19 = d20.plus(5).ac(25).critOn(19).onHit(roll.flat(10));
+    expect(attack19.toPMF().mean()).toBeCloseTo(0.5, 4);
+
+    const attack17 = d20.plus(5).ac(25).critOn(17).onHit(roll.flat(10));
+    expect(attack17.toPMF().mean()).toBeCloseTo(0.5, 4);
+  });
+
+  it("a natural 20 still always hits and crits regardless of AC", () => {
+    const attack = d20.plus(0).ac(100).onHit(roll.flat(1));
+    const query = attack.toPMF().query();
+    expect(query.probabilityOf("crit")).toBeCloseTo(0.05, 6);
   });
 });

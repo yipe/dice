@@ -194,7 +194,7 @@ describe("Builder examples integration", () => {
   });
 
   it("should handle a roll with bestOf", () => {
-    expect(roll(4).d6().bestOf(3).toExpression()).toBe("4d6kh3");
+    expect(roll(4).d6().bestOf(3).toExpression()).toBe("4kh3(1d6)");
   });
 
   it("should ignore bestOf if it is not less than count", () => {

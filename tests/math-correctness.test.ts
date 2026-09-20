@@ -386,12 +386,13 @@ describe("Distribution invariants hold across the corpus", () => {
   }
 });
 
-describe("KNOWN LIMITATION: parser crit probability with bonus to-hit dice", () => {
-  // The string parser cannot separate the natural-20 slice once bonus dice are
-  // convolved into the to-hit (the d20 identity is lost), so crit probability
-  // collapses to 1/(20·∏bonusSides). The BUILDER API computes it correctly.
-  // This test locks the correct builder behavior and pins the known parser gap
-  // so any change to either is caught. See CHANGELOG "Known limitations".
+describe("Parser crit probability with bonus to-hit dice", () => {
+  // Previously a KNOWN LIMITATION: the string parser couldn't separate the natural-max slice
+  // once bonus dice were convolved into the to-hit total (the d20 identity was lost), so a
+  // plain `crit` clause's probability collapsed to 1/(20*prod(bonusSides)) instead of 1/20. Now
+  // fixed for a flat (no advantage/disadvantage) base die with a plain `crit` clause by tracking
+  // the base die's natural-max contribution separately through the `+`/`-`/`AC` chain -- see
+  // parser.ts's "Track a flat ... base check die" comment.
   it("builder computes crit = 0.05 with a +1d4 (bless) to-hit", () => {
     const b = d20
       .plus(5)
@@ -407,11 +408,36 @@ describe("KNOWN LIMITATION: parser crit probability with bonus to-hit dice", () 
     expect(q.probAtLeastOne("crit")).toBeCloseTo(0.05, 9);
   });
 
-  it("parser WITH bonus to-hit dice is currently wrong (pinned)", () => {
-    // KNOWN BUG: should be 0.05 but the parser returns 1/80 = 0.0125.
-    // Pinned so the discrepancy is tracked; update when the parser is fixed.
+  it("parser WITH bonus to-hit dice (plain crit, flat check) now matches the builder", () => {
     const q = parse("(d20 + 5 + 1d4 AC 15) * (1d8 + 3) crit (2d8 + 3)").query();
-    expect(q.probAtLeastOne("crit")).toBeCloseTo(0.0125, 6);
+    expect(q.probAtLeastOne("crit")).toBeCloseTo(0.05, 9);
+  });
+
+  it("parser WITH two bonus to-hit dice (plain crit, flat check) also matches", () => {
+    const q = parse(
+      "(d20 + 5 + 1d4 + 1d6 AC 15) * (1d8 + 3) crit (2d8 + 3)"
+    ).query();
+    expect(q.probAtLeastOne("crit")).toBeCloseTo(0.05, 9);
+  });
+
+  it("KNOWN LIMITATION: xcrit (expanded crit range) with bonus to-hit dice is still wrong (pinned)", () => {
+    // The tracked base-die path only covers a plain `crit` (natural-max only); `xcrit` needs its
+    // own AC check per natural face in the expanded range, which the tracked path doesn't
+    // attempt. Falls back to the legacy maxFace peel, still wrong with bonus dice.
+    const q = parse(
+      "(d20 + 5 + 1d4 AC 15) * (1d8 + 3) xcrit2 (2d8 + 3)"
+    ).query();
+    expect(q.probAtLeastOne("crit")).not.toBeCloseTo(0.1, 2);
+  });
+
+  it("KNOWN LIMITATION: advantage with bonus to-hit dice is still wrong (pinned)", () => {
+    // Tracking only covers a bare flat base die; advantage ("d20 > d20") isn't a single additive
+    // `+`/`-` chain from one base die, so it invalidates tracking and falls back to the legacy
+    // maxFace peel.
+    const q = parse(
+      "(d20 > d20 + 5 + 1d4 AC 15) * (1d8 + 3) crit (2d8 + 3)"
+    ).query();
+    expect(q.probAtLeastOne("crit")).not.toBeCloseTo(0.0975, 3);
   });
 });
 
