@@ -4,8 +4,7 @@ import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { pmfFromRollBuilder } from "./ast";
-import { d20RollPMF } from "./d20";
+import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import type { DCBuilder } from "./dc";
 import { ParsedRollBuilder, type RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
@@ -124,11 +123,9 @@ function resolveProbabilities(check: DCBuilder): {
 } {
   const saveBonus = check.modifier;
   const dc = check.saveDC;
-  const d20Type = check.rollType;
-  const baseReroll = check.baseReroll;
-  // TODO later check if base reroll is not 0 or 1.
+  const eps = 0;
 
-  const die = d20RollPMF(d20Type, baseReroll > 0);
+  const die = resolveRootD20(check);
   const faceP = new Map<number, number>();
   for (const [r, bin] of die) {
     const pr = bin.p;
@@ -136,7 +133,6 @@ function resolveProbabilities(check: DCBuilder): {
   }
 
   // Now add bonus dice to the PMF (bless, bane, bardic, etc)
-  const eps = 0;
   const bonusDicePMFs = check.getBonusDicePMFs(check, eps);
   const bonusPMF =
     bonusDicePMFs.length > 0
@@ -144,9 +140,7 @@ function resolveProbabilities(check: DCBuilder): {
       : PMF.zero(eps);
 
   let pSuccess = 0;
-  for (let r = 1; r <= 20; r++) {
-    const pr = faceP.get(r);
-    if (!pr) continue;
+  for (const [r, pr] of faceP) {
     const need = dc - saveBonus - r;
     pSuccess += pr * bonusPMF.tailProbGE(need);
   }

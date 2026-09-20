@@ -12,12 +12,25 @@ import type {
   SumNode,
 } from "./nodes";
 import type { RollBuilder } from "./roll";
-import type { RollConfig } from "./types";
+import type { RollConfig, RollType } from "./types";
 
 // For now, default to 0 epsilon. Later we can tighten to EPS.
 const defaultEps = 0;
 
 const singleDiePMFCache = new LRUCache<string, PMF>(1000);
+
+export function dieNodeFromConfig(cfg: RollConfig): DieNode {
+  return {
+    type: "die",
+    sides: cfg.sides,
+    reroll: cfg.reroll > 0 ? cfg.reroll : undefined,
+    minimum: cfg.minimum > 0 ? cfg.minimum : undefined,
+    explode:
+      cfg.explode && Number.isFinite(cfg.explode) && cfg.explode > 0
+        ? cfg.explode
+        : undefined,
+  };
+}
 
 export function astFromRollConfigs(
   configs: readonly RollConfig[]
@@ -36,16 +49,17 @@ export function astFromRollConfigs(
 
     if ((cfg.sides || 0) <= 0) continue;
 
-    const die: DieNode = {
-      type: "die",
-      sides: cfg.sides,
-      reroll: cfg.reroll > 0 ? cfg.reroll : undefined,
-      minimum: cfg.minimum > 0 ? cfg.minimum : undefined,
-      explode:
-        cfg.explode && Number.isFinite(cfg.explode) && cfg.explode > 0
-          ? cfg.explode
-          : undefined,
-    };
+    // `bestOf(k)` ("roll N, keep the highest k") is exactly `keep = {total: N, count: k, mode:
+    // "highest"}` over the same die -- fold it into an equivalent synthetic `keep` up front so it
+    // reuses the keep-DP branch below instead of being silently ignored (the die count alone,
+    // with no keep applied, previously determined the PMF -- e.g. `5d10.bestOf(3)` resolved as
+    // plain 5d10 despite `toExpression()` correctly rendering "5d10kh3").
+    const effectiveKeep =
+      !cfg.keep && cfg.bestOf > 0 && cfg.bestOf < count
+        ? { total: count, count: Math.floor(cfg.bestOf), mode: "highest" as const }
+        : cfg.keep;
+
+    const die: DieNode = dieNodeFromConfig(cfg);
 
     let node: ExpressionNode = die;
 
@@ -66,13 +80,13 @@ export function astFromRollConfigs(
       appliedRollType = true;
     }
 
-    if (cfg.rollType === "flat" && cfg.keep && cfg.keep.total > 0) {
+    if (cfg.rollType === "flat" && effectiveKeep && effectiveKeep.total > 0) {
       const baseCount = Math.max(1, Math.floor(Math.abs(count || 1)));
-      const trials = Math.max(1, Math.floor(cfg.keep.total));
-      const k = Math.max(0, Math.floor(cfg.keep.count));
+      const trials = Math.max(1, Math.floor(effectiveKeep.total));
+      const k = Math.max(0, Math.floor(effectiveKeep.count));
 
       // For keep-highest of 1, always treat as trials-of-sums: max over trial sums
-      if (k === 1 && cfg.keep.mode === "highest") {
+      if (k === 1 && effectiveKeep.mode === "highest") {
         const perTrial: SumNode = {
           type: "sum",
           count: baseCount,
@@ -92,7 +106,7 @@ export function astFromRollConfigs(
         const base: SumNode = { type: "sum", count: trials, child: node };
         node = {
           type: "keep",
-          mode: cfg.keep.mode,
+          mode: effectiveKeep.mode,
           count: k,
           child: base,
         } as KeepNode;
@@ -113,7 +127,7 @@ export function astFromRollConfigs(
           };
           node = {
             type: "keep",
-            mode: cfg.keep.mode,
+            mode: effectiveKeep.mode,
             count: k,
             child: trialPool,
           } as KeepNode;
@@ -201,8 +215,8 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
 
       case "d20Roll": {
         const childDie = findDie(node.child);
-        const rerollOne = !!childDie && (childDie.reroll || 0) >= 1;
-        return d20RollPMF(node.rollType, rerollOne);
+        if (!childDie) return d20RollPMF(node.rollType, false);
+        return resolveD20Roll(childDie, node.rollType);
       }
 
       case "half": {
@@ -239,7 +253,76 @@ export function pmfFromRollBuilder(
   return resolve(ast, eps);
 }
 
-function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
+const d20RollLiftCache = new LRUCache<string, PMF>(500);
+
+/**
+ * Resolve a d20-shaped die (honoring reroll/minimum/explode via {@link resolveSingleDie}) then
+ * lift it into advantage/disadvantage/elven accuracy. Each of the 2 or 3 rolls compared is an
+ * independent draw from that SAME resolved marginal — so a Halfling Lucky reroll or a
+ * Trance-of-Order floor applies per-die, matching RAW (you reroll/floor each d20 you roll, not
+ * just a single "representative" one). This generalizes {@link d20RollPMF}, which only ever
+ * modeled the plain-uniform-plus-reroll-1 case; callers that resolve a die with no minimum/
+ * explode/deeper reroll get bit-identical results to `d20RollPMF` (verified: the reroll-only
+ * formula below reduces to the same closed form).
+ *
+ * Deliberately ignores any caller-facing output-precision `eps` (matching `d20RollPMF`'s own
+ * contract): this builds the FOUNDATIONAL check-die distribution, where every face carries real
+ * probability mass (e.g. 1/20 per face on a flat d20) — pruning it against an output-rounding
+ * epsilon (some callers request eps as coarse as 0.1 purely to round the FINAL hit/miss/crit
+ * mixture) would silently delete real faces instead of real noise. Always resolves at the
+ * library's near-zero {@link defaultEps} internally; only the mixture built on top of this
+ * result should be pruned against the caller's requested eps.
+ */
+export function resolveD20Roll(die: DieNode, rollType: RollType | undefined): PMF {
+  const base = resolveSingleDie(die, defaultEps);
+  const type = rollType || "flat";
+  if (type === "flat") return base;
+
+  const cacheKey = `${getASTSignature(die)}|${type}`;
+  const cached = d20RollLiftCache.get(cacheKey);
+  if (cached) return cached;
+
+  const support = [...base.support()].sort((a, b) => a - b);
+  const out = new Map<number, number>();
+  let cum = 0;
+  let prevLifted = 0;
+  for (const k of support) {
+    cum += base.pAt(k);
+    // advantage: best of 2 (F^2); elven accuracy: best of 3 (F^3); disadvantage: worst of 2
+    // (1-(1-F)^2). `type` can't be "flat" here — that returns above before the cache lookup.
+    const curLifted =
+      type === "advantage"
+        ? cum * cum
+        : type === "elven accuracy"
+          ? cum * cum * cum
+          : 1 - (1 - cum) * (1 - cum);
+    const pk = curLifted - prevLifted;
+    if (pk > 0) out.set(k, pk);
+    prevLifted = curLifted;
+  }
+  const result = PMF.fromMap(out, defaultEps);
+  d20RollLiftCache.set(cacheKey, result);
+  return result;
+}
+
+/**
+ * Resolve a check builder's root die (the to-hit/save d20, or whatever die it wraps), honoring
+ * that die's reroll/minimum/explode, then lift by its `rollType`. The single entry point every
+ * attack/save check builder ({@link ACBuilder}, {@link AttackBuilder}, {@link AlwaysHitBuilder},
+ * {@link AlwaysCritBuilder}, `DCBuilder`, save `resolveProbabilities`) should use instead of
+ * reaching for `d20RollPMF(rollType, baseReroll > 0)` directly — that 2-argument summary silently
+ * drops `minimum`/`explode` on the root config.
+ */
+export function resolveRootD20(check: RollBuilder): PMF {
+  const rootConfig = check.getRootDieConfig();
+  const rollType = check.rollType;
+  if (!rootConfig || !(rootConfig.sides > 0)) {
+    return d20RollPMF(rollType, check.baseReroll > 0);
+  }
+  return resolveD20Roll(dieNodeFromConfig(rootConfig), rollType);
+}
+
+export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
   const signature = getASTSignature(die);
   const cacheKey = `${signature}_${eps}`;
 
@@ -272,39 +355,38 @@ function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
   const minV = Math.max(0, Math.floor(die.minimum || 0));
   if (minV > 0) pmf = pmf.mapDamage((v) => Math.max(v, minV));
 
-  // Exploding dice (finite) on max face only
+  // Exploding dice (finite, capped at `times` additional dice) on max face only.
   const explode = die.explode;
   if (explode && Number.isFinite(explode) && explode > 0) {
     const times = Math.floor(explode);
     const maxFace = s;
 
-    // Split pmf into non-max and max
+    // Split pmf into a max-face slice and a non-max slice. `PMF.fromMap` always normalizes to
+    // mass 1 (divides by its own sum), so `nonMaxPMF` is already the correct conditional "given
+    // the roll wasn't max, what was it" distribution — exactly the shape `PMF.branch` requires
+    // for its failure argument. It must NOT be rescaled again afterward: `PMF.branch` weights
+    // each branch's bins by (p, 1-p) directly, so a `nonMaxPMF` still holding raw mass (1-pMax)
+    // would contribute (1-pMax)^2 instead of (1-pMax) to the result — the source of the
+    // previously measured 0.861 total mass on `d6.explode(1)`.
     const nonMax = new Map<number, number>();
     const pMax = pmf.pAt(maxFace);
     for (const v of pmf.support()) {
       if (v !== maxFace) nonMax.set(v, pmf.pAt(v));
     }
-    let nonMaxPMF = PMF.fromMap(nonMax, eps);
-    if (Math.abs(nonMaxPMF.mass() - (1 - pMax)) > eps) {
-      // keep raw mass composition
-      nonMaxPMF = nonMaxPMF.scaleMass(1 - pMax);
-    }
+    const nonMaxPMF = PMF.fromMap(nonMax, eps);
 
-    // TODO - explosions
-    // Additional roll distribution equals original pmf without explosions applied again.
-    // For simplicity we treat cascaded explosions as adding uniform max-only triggers.
-    // Compute sum of up to `times` additional rolls conditioned on each explosion hit.
-    let tail = PMF.delta(0, eps);
-    const addOnce = pmf;
-    for (let t = 1; t <= times; t++) {
-      tail = tail.convolve(addOnce, eps);
+    // Capped geometric chain, built bottom-up. `chain` holds the distribution of "one more die
+    // roll, with `remaining` further explosions still allowed if THAT roll is also max" for
+    // `remaining` running from 0 (a final roll that can't chain further, however it lands) up to
+    // `times - 1`. Each step wraps the previous chain in one more branch: on a max roll (prob
+    // pMax) add another maxFace and recurse into the shorter chain; otherwise stop at a non-max
+    // value. This reduces to exactly `explode(1)`'s "maxFace + one more untouched die" for
+    // `times === 1`, and never lets more than `times` extra dice enter the total.
+    let chain = pmf; // remaining = 0: an unconstrained extra die, chains no further either way
+    for (let remaining = 1; remaining <= times - 1; remaining++) {
+      chain = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
     }
-    // Mix: with prob (1 - pMax) take nonMax, with prob pMax take maxFace + tail
-    const exploded = PMF.branch(
-      tail.mapDamage((v) => v + maxFace),
-      nonMaxPMF,
-      pMax
-    );
+    const exploded = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
     pmf = exploded;
   }
 

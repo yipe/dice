@@ -1,6 +1,6 @@
 import { PMF } from "../pmf/pmf";
 import { AttackBuilder } from "./attack";
-import { d20RollPMF } from "./d20";
+import { resolveRootD20 } from "./ast";
 import { AlwaysCritBuilder, RollBuilder } from "./roll";
 
 export interface AttackConfig {
@@ -76,11 +76,7 @@ export class ACBuilder extends RollBuilder {
 
   override toPMF(eps: number = 0): PMF {
     const ac = this.attackConfig.ac;
-
-    const rollType = this.rollType;
-    const rerollOne = this.baseReroll > 0;
-    const d20 = d20RollPMF(rollType, rerollOne);
-
+    const d20 = resolveRootD20(this);
     const staticMod = this.modifier;
     const bonusPMFs = this.getBonusDicePMFs(this, eps);
 

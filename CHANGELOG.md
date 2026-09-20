@@ -5,6 +5,86 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0]
+
+Correctness pass across the attack-resolution and expression-serialization paths, found by an
+independent math review of the shipped 0.9.0 package (brute-force + Monte Carlo verification
+against every number below). Several of these are silent wrong-number bugs, not crashes — read
+the Breaking section if you have tests or saved output pinned to the old (wrong) values.
+
+### Fixed
+
+- **Attack resolution silently dropped `minimum`/`explode` on the to-hit d20.** `ACBuilder`,
+  `AttackBuilder`, `AlwaysHitBuilder`, `AlwaysCritBuilder`, `DCBuilder`, and the save resolver all
+  rebuilt the d20 from a 2-argument `(rollType, rerollOne)` summary instead of resolving the
+  actual die, so a floored d20 (e.g. Clockwork Soul's Trance of Order, `minimum(10)`) was a
+  complete no-op in the damage math — only the rendered expression string (`10>d20`) was correct.
+  Measured: `+9` vs AC 18 with a floor of 10 gave DPR 7.55 instead of the correct 12.35 (should
+  never miss). New shared `resolveRootD20`/`resolveD20Roll` (`src/builder/ast.ts`) resolve the
+  real `DieNode` and lift by roll type on top of it.
+- **Expanded crit range (`critOn`/Champion 19-20 etc.) credited a crit without checking AC.** A
+  natural roll inside the expanded range but below `critThreshold`'s implied "always hits" case
+  (only a true natural 20 auto-hits under RAW) still needs to beat AC. Measured: `critOn(19)` vs
+  an AC only a natural 20 could reach gave 2x the correct DPR; `critOn(17)` gave 4x.
+- **Exploding dice (`explode(k)`) lost ~14% of total probability mass and modeled the wrong
+  chain.** `resolveSingleDie` rescaled the non-max branch a second time after it was already
+  correctly proportioned (`d6.explode(1)` had mass 0.861, not 1), and modeled `k` additional
+  explosions as exactly `k` extra dice instead of a chain capped at `k`. Both fixed; `d6.explode(1)`
+  now has mass 1 and mean 4.0833 (was 3.667).
+- **`RollBuilder.toExpression()` didn't round-trip through `parse()` for `reroll(k>=2)` or
+  `keepHighest`/`keepLowest`.** `reroll(2)` rendered as chained `reroll 1 reroll 2` clauses, which
+  the parser reads as two SEQUENTIAL reroll passes rather than "reroll faces 1-2 once" — now
+  emits the grammar's set-based `reroll d{k}` form. `roll(N, dS).keepHighest(N, k)` rendered its
+  inner die multiplied by the full count (`4kh3(4d6)` — "keep 3 of four 4d6 sums") instead of the
+  per-die pool the builder actually computes (`4kh3(1d6)` — "keep 3 of four individual d6s"), a
+  ~3.7x round-trip error.
+- **Parser `crit` probability collapsed with bonus to-hit dice** (e.g. Bless, `d20 + 5 + 1d4`) —
+  fixed for a flat (no advantage/disadvantage) base die with a plain `crit` clause: `d20 + 5 + 1d4
+  AC 15 crit ...` now reports crit probability 0.05, not 0.0125. Scope: the parser now tracks a
+  flat base die's natural-max contribution separately through its `+`/`-`/`AC` chain (see
+  `parser.ts`'s "Track a flat ... base check die" comment) instead of peeling the combined
+  expression's single highest total. `xcrit` (an expanded range) and advantage/disadvantage/elven
+  accuracy on the base die remain a known limitation below — the builder API is unaffected by any
+  of this and was always correct.
+- **`minimum(k)` stored `k + 1`.** `minimum(1)` floored at 2, `minimum(2)` at 3, etc. Now stores
+  the requested floor directly: `minimum(3)` floors at 3 (see Breaking).
+- **`ScaleRollBuilder.toExpression()` (vulnerability/resistance scaling) emitted a broken
+  round-trip.** `scaleResult(2)` rendered as `2 * (inner)`; `*` in this grammar is
+  `conditionalApply` ("if nonzero, take the right side"), not multiplication — `**` is. The
+  re-parsed expression silently dropped the ×2 entirely. Now emits `**`.
+- **`doubleDice()`/`scaleDice()` silently stripped `Half`/`Scale`/`MaxOf`/composite-sum
+  wrappers**, since none of them overrode `scaleDice()` and the base implementation resolves
+  through `create()`, which downgrades to a plain `RollBuilder`. A resisted/vulnerable/composite
+  hit payload's automatic crit-doubling (`hitEffect.copy().doubleDice()`) silently lost its
+  resistance/vulnerability/mixed-type structure. All four wrapper classes now override
+  `scaleDice()` to preserve their own transform.
+- **`bestOf(k)` ("roll N, keep the highest k") was ignored by every PMF path** despite
+  `toExpression()` correctly rendering it as `NdSkh{k}` — `astFromRollConfigs` never read
+  `cfg.bestOf`, so the PMF was plain `NdS`. Now folded into the same keep-DP machinery
+  `keepHighest()` uses.
+- **`PMF.power()`'s cache key was content-blind** (identifier only, unlike `convolve()`'s
+  fingerprinted key) — `X.mapDamage(f).power(n)` and `X.mapDamage(g).power(n)` could collide on
+  the same key and silently return each other's cached result, since `mapDamage` keeps the
+  parent's identifier regardless of the mapping function. Now includes `fingerprint()`.
+- **`PMF.quantile()` ignored total mass**, comparing a raw running probability sum against `p`
+  instead of `p * mass()` — a sub-unit-mass PMF (e.g. after `scaleMass()`) returned `max()` for
+  any `p` the raw sum couldn't reach, instead of the true quantile. `DiceQuery.percentiles()` was
+  unaffected (it normalizes independently).
+
+### Breaking
+
+- **`RollBuilder.minimum(k)` now floors at `k`, not `k + 1`.** Any code (or saved expression
+  string) built against the old off-by-one must add 1 to its argument to keep the same floor:
+  `minimum(1)` → `minimum(2)` for a floor of 2, etc.
+- **`RollBuilder.toExpression()` output changed** for `reroll(k >= 2)`, `keepHighest`/`keepLowest`
+  where the die count equals the trial count, and `scaleResult`/vulnerability scaling. All three
+  were previously wrong round-trips (see Fixed) — any code diffing/pinning the exact string needs
+  updating, not just re-parsing.
+- **`toExpression()` on an exploding die (`explode(k) > 0`) now throws** instead of silently
+  rendering a plain (non-exploding) die that re-parses to a materially different distribution.
+  The string grammar has no explode syntax; use the builder's own `.toPMF()`/`.pmf` instead of
+  round-tripping through `toExpression()`/`parse()` for an exploding roll.
+
 ## [0.9.0]
 
 Adds `Turn`: attacks plus conditional damage riders, resolved to one exact joint
@@ -358,11 +438,12 @@ Every fix is verified against an independent brute-force enumeration (see
 These are real but require API/architecture decisions, so they are documented
 and pinned by tests rather than changed blindly:
 
-- **Parser crit probability with bonus to-hit dice is wrong.** With bonus dice in
-  the to-hit (e.g. Bless, `d20 + 5 + 1d4`), the string parser collapses crit to
-  `1/(20·∏bonusSides)` (and the DPR is off by a few %), because the natural-20
-  slice can't be separated after the bonus dice are convolved. **The builder API
-  computes it correctly** — use `d20.plus(..).plus(bonusDie).ac(..).onCrit(..)`.
+- **Parser crit probability with bonus to-hit dice — narrowed, not fully closed.** Fixed in
+  0.10.0 for the common case (a flat base die, plain `crit`, no advantage/disadvantage). Still
+  wrong for `xcrit` (an expanded crit range needs its own AC check per natural face) and for
+  advantage/disadvantage/elven accuracy on the base die (not a single additive `+`/`-` chain from
+  one base die) — both fall back to the old peel-based approximation. **The builder API computes
+  all of these correctly** — use `d20.plus(..).plus(bonusDie).ac(..).onCrit(..)`.
 - **Multi-attack conditional damage `avg` is size-biased.** The `avg` returned by
   `damageStatsFrom()` (single label), `outcomeDamageRanges()` and
   `snapshot().damageRange` aggregates the combined PMF's `count` (an *expected

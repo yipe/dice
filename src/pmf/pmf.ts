@@ -416,10 +416,15 @@ export class PMF {
   }
 
   private getPowerCacheKey(n: number, eps: number): string {
+    // Includes fingerprint() (mass|binCount|faceSum), matching convolve()'s cache key: the
+    // identifier alone is not content-unique. `mapDamage`/`scaleDamage`, `normalize()`, and
+    // `compact()` all keep the PARENT's identifier while producing a numerically different PMF
+    // (e.g. `X.mapDamage(f).power(2)` and `X.mapDamage(g).power(2)` would otherwise collide on
+    // the same key `map(X)+map(X)@eps` and silently return each other's cached result).
     const id = this.identifier;
     let key = `${id}`;
     for (let i = 1; i < n; i++) key += `+${id}`;
-    return `${key}@${eps}`;
+    return `${key}@${eps}|${this.fingerprint()}`;
   }
 
   /**
@@ -1158,11 +1163,13 @@ export class PMF {
   /** Quantile / inverse CDF for p in [0,1]. Returns smallest x with CDF ≥ p. */
   quantile(p: number): number {
     if (this.map.size === 0) return 0;
+    const totalMass = this.mass();
+    if (totalMass <= 0) return 0;
     const s = this.support().sort((a, b) => a - b);
     let acc = 0;
     for (const x of s) {
       acc += this.pAt(x);
-      if (acc >= p) return x;
+      if (acc / totalMass >= p) return x;
     }
     return s[s.length - 1];
   }

@@ -1,7 +1,6 @@
 import { LRUCache } from "../common/lru-cache";
 import { PMF } from "../pmf/pmf";
-import { pmfFromRollBuilder } from "./ast";
-import { d20RollPMF } from "./d20";
+import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { RollBuilder } from "./roll";
 import { SaveBuilder } from "./save";
 
@@ -96,9 +95,7 @@ export class DCBuilder extends RollBuilder {
     }
 
     const saveDC = this.saveDC;
-    const rollType = this.rollType;
-    const rerollOne = this.baseReroll > 0;
-    const d20 = d20RollPMF(rollType, rerollOne);
+    const d20 = resolveRootD20(this);
     const staticMod = this.modifier;
     const bonusDicePMFs = this.getBonusDiceConfigs().map((cfg) =>
       pmfFromRollBuilder(RollBuilder.fromConfigs([cfg]), eps)
