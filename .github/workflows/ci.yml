@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   test:
+    name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
