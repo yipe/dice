@@ -106,6 +106,18 @@ function combineDiceWithNormalization(
   return { newNorm: currentNorm * normValue, updatedResult: finalResult };
 }
 
+/**
+ * Face-wise histogram difference. NOT the same as {@link Dice.subtract}, which convolves VALUES
+ * (`a - b` as numbers); this subtracts raw face COUNTS, used to isolate "everything except this
+ * natural-die-value's contribution" out of an already-convolved to-hit total.
+ */
+function subtractCounts(a: Dice, b: Dice): Dice {
+  const result = new Dice();
+  for (const [key, value] of a.getFaceEntries()) result.increment(key, value);
+  for (const [key, value] of b.getFaceEntries()) result.increment(key, -value);
+  return result;
+}
+
 function parseExpression(arr: string[], n: number): Dice {
   const result = (() => {
     const res = parseArgument(arr, n);
@@ -115,19 +127,59 @@ function parseExpression(arr: string[], n: number): Dice {
   let op = parseOperation(arr);
   let finalResult = result;
 
+  // Track a flat (no advantage/disadvantage/reroll) base check die's natural-max face
+  // separately from whatever bonus-to-hit dice and modifiers get added to it, so a later plain
+  // `crit` clause -- possibly in an OUTER parseExpression call, once this AC-checked
+  // sub-expression has already collapsed to one Dice -- can recover the exact "natural max, any
+  // bonus roll" slice instead of peeling the combined expression's single highest TOTAL, which
+  // undercounts crit mass whenever bonus dice are present (e.g. Bless: "d20 + 5 + 1d4" reported
+  // a crit probability of 1/(20*4) instead of 1/20).
+  //
+  // Scoped narrowly and deliberately: only a bare flat `dN` base die with no reroll, combined
+  // solely via `+`/`-`, terminated by a numeric `AC`/`DC` target. Anything else --
+  // advantage/disadvantage/elven accuracy on the base die, halfling reroll, a dynamic
+  // (dice-valued) AC target, or `xcrit` (an expanded crit RANGE, which needs its own AC check
+  // per natural face) -- invalidates tracking and falls back to the legacy peel-based behavior,
+  // which remains correct with no bonus dice and is the same known-imperfect approximation
+  // otherwise. See CHANGELOG.
+  let baseDieMeta =
+    result.privateData?.checkDie && !result.privateData.checkDie.rerollOne
+      ? result.privateData.checkDie
+      : undefined;
+  let bonusOnly = Dice.scalar(0);
+
   while (op != null) {
     const arg = !op.unary ? parseArgument(arr, n) : finalResult;
 
+    let acAlreadyApplied = false;
+    if (baseDieMeta) {
+      if (op === Dice.prototype.addNonZero) {
+        bonusOnly = bonusOnly.add(arg);
+      } else if (op === Dice.prototype.subtract) {
+        bonusOnly = bonusOnly.subtract(arg);
+      } else if (op === Dice.prototype.ac && typeof arg === "number") {
+        // Isolate the natural-max face's contribution BEFORE gating, so the crit clause can use
+        // it directly (see below) -- but AC-gate it exactly like every other natural value (no
+        // RAW "natural 20 always hits" exception here: that would change this checked total's
+        // hit/miss math, not just crit attribution, and several tests pin the parser's existing
+        // "AC is a pure numeric threshold, no natural-face exceptions" behavior, e.g. an
+        // unreachably high AC yields zero mass even on a natural max). Splitting into two pieces
+        // and re-gating each is mathematically identical to gating the whole, since `.ac()` acts
+        // per-face independently.
+        const natMaxSlice = bonusOnly.add(baseDieMeta.sides);
+        const restSlice = subtractCounts(finalResult, natMaxSlice);
+        const gatedNatMaxSlice = natMaxSlice.ac(arg);
+        finalResult = restSlice.ac(arg).combine(gatedNatMaxSlice);
+        finalResult.privateData.checkDie = baseDieMeta;
+        finalResult.privateData.natMaxCritSlice = gatedNatMaxSlice;
+        acAlreadyApplied = true;
+        baseDieMeta = undefined;
+      } else {
+        baseDieMeta = undefined;
+      }
+    }
+
     // Handle crit (e.g. xcrit, crit)
-    //
-    // KNOWN LIMITATION: this peels the maximum FACE of the (already convolved)
-    // to-hit distribution to represent the natural 20. That is correct only when
-    // the to-hit has no bonus dice. With bonus dice in the to-hit (e.g. Bless,
-    // "d20 + 5 + 1d4"), a natural 20 is "d20 == 20 with any bonus", whose mass is
-    // smeared across several total values that also contain non-crit mass, so the
-    // d20 identity is lost and the crit slice collapses to 1/(20·∏bonusSides).
-    // Use the builder API (d20.plus(...).plus(bonusDie).ac(...).onCrit(...)) for
-    // a correct crit probability with bonus to-hit dice. See CHANGELOG.
     let crit: Dice | undefined;
     let critNorm = 1;
     if (arr[0] === "x" || arr[0] === "c") {
@@ -139,12 +191,28 @@ function parseExpression(arr: string[], n: number): Dice {
       assertToken(arr, "t");
 
       const count = isXcrit ? parseNumber(arr, n) : 1;
+      const trackedCritSlice = finalResult.privateData?.natMaxCritSlice;
 
-      crit = new Dice();
-      for (let i = 0; i < count; i++) {
-        const max = finalResult.maxFace();
-        crit.setFace(max, finalResult.get(max));
-        finalResult = finalResult.deleteFace(max);
+      if (count === 1 && trackedCritSlice) {
+        // Exact path: trackedCritSlice already isolates "natural max, any bonus roll" (see the
+        // AC-tracking block above), independent of how many bonus-to-hit dice sides would
+        // otherwise smear that mass across several total values.
+        crit = trackedCritSlice;
+        finalResult = subtractCounts(finalResult, trackedCritSlice);
+      } else {
+        // KNOWN LIMITATION (xcrit, or no tracked base die -- advantage/disadvantage/elven
+        // accuracy, halfling reroll, or bonus dice mixed into a non-flat check): peels the
+        // maximum FACE of the already-convolved to-hit distribution. Correct only when the
+        // to-hit has no bonus dice, since bonus dice otherwise smear a natural-max roll's mass
+        // across several total values that also contain non-crit mass. Use the builder API
+        // (d20.plus(...).plus(bonusDie).ac(...).onCrit(...)) for a correct crit probability with
+        // bonus to-hit dice in these cases. See CHANGELOG.
+        crit = new Dice();
+        for (let i = 0; i < count; i++) {
+          const max = finalResult.maxFace();
+          crit.setFace(max, finalResult.get(max));
+          finalResult = finalResult.deleteFace(max);
+        }
       }
 
       critNorm = crit.total();
@@ -216,7 +284,9 @@ function parseExpression(arr: string[], n: number): Dice {
 
     let norm = finalResult.total();
 
-    finalResult = op.call(finalResult, arg);
+    if (!acAlreadyApplied) {
+      finalResult = op.call(finalResult, arg);
+    }
     norm = norm ? finalResult.total() / norm : 1;
 
     // Combine dice with normalization
@@ -473,6 +543,7 @@ function parseDice(s: string[], n: number): Dice | undefined {
     result = result.reroll(1);
   }
 
+  result.privateData.checkDie = { sides, rerollOne };
   return result;
 }
 

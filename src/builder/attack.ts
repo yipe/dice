@@ -5,8 +5,7 @@ import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import type { ACBuilder } from "./ac";
-import { pmfFromRollBuilder } from "./ast";
-import { d20RollPMF } from "./d20";
+import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
@@ -132,11 +131,8 @@ export class AttackBuilder implements CheckBuilder {
     check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     eps: number = 0
   ): { pSuccess: number; pHit: number; pCrit: number; pMiss: number } {
-    const rollType = check.rollType;
-    const rerollOne = check.baseReroll > 0;
-
     const critThreshold = check.critThreshold;
-    const d20 = d20RollPMF(rollType, rerollOne);
+    const d20 = resolveRootD20(check);
 
     if (check instanceof AlwaysCritBuilder) {
       // If fromAlwaysHit is true, everything is a crit (no misses)
@@ -214,17 +210,22 @@ export class AttackBuilder implements CheckBuilder {
         continue;
       }
 
-      // Handle crit
-      if (r >= critThreshold) {
+      // A natural 20 always hits and always crits (RAW), independent of AC or critThreshold.
+      if (r === 20) {
         pcrit += pr;
         continue;
       }
 
-      // Handle normal hit/miss
+      // Handle normal hit/miss, and an expanded crit range (critThreshold < 20): a non-natural-20
+      // roll in the crit range still has to beat AC to hit at all -- it is not an auto-hit.
       const need = ac - staticMod - r;
       const pBonusHit = bonusPMF.tailProbGE(need);
 
-      phit += pr * pBonusHit;
+      if (r >= critThreshold) {
+        pcrit += pr * pBonusHit;
+      } else {
+        phit += pr * pBonusHit;
+      }
       pmiss += pr * (1 - pBonusHit);
     }
 

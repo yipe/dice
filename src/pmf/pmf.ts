@@ -416,10 +416,16 @@ export class PMF {
   }
 
   private getPowerCacheKey(n: number, eps: number): string {
+    // Includes fingerprint() (per-bin probability/count/attr content), matching convolve()'s
+    // cache key: the identifier alone is not content-unique. `mapDamage`/`scaleDamage`,
+    // `normalize()`, and `compact()` all keep the PARENT's identifier while producing a
+    // numerically different PMF
+    // (e.g. `X.mapDamage(f).power(2)` and `X.mapDamage(g).power(2)` would otherwise collide on
+    // the same key `map(X)+map(X)@eps` and silently return each other's cached result).
     const id = this.identifier;
     let key = `${id}`;
     for (let i = 1; i < n; i++) key += `+${id}`;
-    return `${key}@${eps}`;
+    return `${key}@${eps}|${this.fingerprint()}`;
   }
 
   /**
@@ -855,16 +861,35 @@ export class PMF {
   }
 
   /**
-   * A small content fingerprint (mass + bin count + face sum) so convolution
-   * cache keys change if the underlying numbers do. Memoized because a PMF is
-   * immutable once constructed — this avoids re-summing every key on each
-   * convolve() call (including cache hits).
+   * A content fingerprint of every bin (probability, per-label `count`, per-label `attr`) plus
+   * the `normalized` flag, so convolution/power cache keys change whenever the underlying
+   * numbers do. Mass/bin-count/face-sum alone are not content-unique: `mapDamage` variants can
+   * keep the same identifier, support, mass, and face sum while differing in per-bin
+   * probabilities or in the `count`/`attr` channels `convolve()`/`power()` actually propagate --
+   * that previously let `power()` return one PMF's cached result for a different PMF. Memoized
+   * because a PMF is immutable once constructed -- this avoids re-deriving the key on every
+   * convolve()/power() call (including cache hits). Bin order is sorted by damage value (and
+   * label keys sorted within each bin) so two equal-content PMFs built via different code paths
+   * fingerprint identically regardless of Map insertion order.
    */
   fingerprint(): string {
     if (this._fingerprint === undefined) {
-      let faceSum = 0;
-      for (const k of this.map.keys()) faceSum += k;
-      this._fingerprint = `${this.mass().toFixed(12)}|${this.map.size}|${faceSum}`;
+      const bins = [...this.map.entries()].sort((a, b) => a[0] - b[0]);
+      const parts: string[] = [];
+      for (const [damageValue, bin] of bins) {
+        const countStr = Object.keys(bin.count)
+          .sort()
+          .map((k) => `${k}:${bin.count[k]}`)
+          .join(",");
+        const attrStr = bin.attr
+          ? Object.keys(bin.attr)
+              .sort()
+              .map((k) => `${k}:${(bin.attr as OutcomeLabelMap)[k]}`)
+              .join(",")
+          : "";
+        parts.push(`${damageValue}:${bin.p}[${countStr}]{${attrStr}}`);
+      }
+      this._fingerprint = `${this.normalized ? 1 : 0}|${parts.join(";")}`;
     }
     return this._fingerprint;
   }
@@ -1158,11 +1183,13 @@ export class PMF {
   /** Quantile / inverse CDF for p in [0,1]. Returns smallest x with CDF ≥ p. */
   quantile(p: number): number {
     if (this.map.size === 0) return 0;
+    const totalMass = this.mass();
+    if (totalMass <= 0) return 0;
     const s = this.support().sort((a, b) => a - b);
     let acc = 0;
     for (const x of s) {
       acc += this.pAt(x);
-      if (acc >= p) return x;
+      if (acc / totalMass >= p) return x;
     }
     return s[s.length - 1];
   }
