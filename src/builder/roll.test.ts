@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { d10, d20, d4, d6, d8, roll } from "../builder";
 import { parse } from "../parser/parser";
 import { builderPMFCache } from "./factory";
-import { HalfRollBuilder, RollBuilder } from "./roll";
+import { HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
 import type { RollConfig } from "./types";
 export const testCases: {
   label: string;
@@ -23,17 +23,17 @@ export const testCases: {
   {
     label: "Reroll with multiple dice",
     config: { count: 2, sides: 6, reroll: 2 },
-    expected: "2(d6 reroll 1 reroll 2)",
+    expected: "2(d6 reroll d2)",
   },
   {
     label: "Reroll with minimum",
     config: { sides: 4, reroll: 2, minimum: 2 },
-    expected: "1(2>(d4 reroll 2 reroll 1))",
+    expected: "1(2>(d4 reroll d2))",
   },
   {
     label: "Reroll with minimum and multiple dice",
     config: { count: 2, sides: 4, reroll: 2, minimum: 2 },
-    expected: "2(2>(d4 reroll 2 reroll 1))",
+    expected: "2(2>(d4 reroll d2))",
   },
   //   { label: 'Exploding dice (finite)', config: { count: 2, sides: 6, explode: 3 }, expected: '2(d6^3)' },
   //   { label: 'Exploding dice (infinite)', config: { sides: 8, explode: Infinity }, expected: 'd8^^' },
@@ -109,7 +109,7 @@ describe("RollBuilder", () => {
   it("should create basic dice with config", () => {
     const greatsword = roll(2).d(6).plus(5).reroll(2);
 
-    expect(greatsword.toExpression()).toEqual("2(d6 reroll 1 reroll 2) + 5");
+    expect(greatsword.toExpression()).toEqual("2(d6 reroll d2) + 5");
   });
 
   it("should handle simple reroll", () => {
@@ -123,7 +123,7 @@ describe("RollBuilder", () => {
   it("should handle harder reroll", () => {
     const attack = d4.reroll(2);
 
-    expect(attack.toExpression()).toEqual("d4 reroll 1 reroll 2"); // legacy parser behavior
+    expect(attack.toExpression()).toEqual("d4 reroll d2");
     expect(attack.toPMF()).toBeDefined();
     expect(attack.toPMF()?.mean()).toBeCloseTo(3, 5);
     expect(attack.toPMF()?.min()).toBeCloseTo(1, 5);
@@ -149,7 +149,7 @@ describe("RollBuilder", () => {
 
     expect(crazyChain.toExpression()).toEqual(paladinSmite.toExpression());
     expect(crazyChain.toExpression()).toEqual(
-      "2(d6 reroll 1 reroll 2) + 3d8 + 5"
+      "2(d6 reroll d2) + 3d8 + 5"
     );
   });
 
@@ -298,21 +298,43 @@ describe("RollBuilder", () => {
   describe("RollBuilder Edge Cases", () => {
     it("should handle bestOf() method", () => {
       const builder = roll(4).d6().bestOf(2);
-      expect(builder.toExpression()).toBe("4d6kh2");
+      expect(builder.toExpression()).toBe("4kh2(1d6)");
       expect(builder.toPMF()).toBeDefined();
-      // bestOf is not yet implemented in the expression parser, so we just verify it doesn't crash
+      expect(builder.toPMF()?.mean()).toBeCloseTo(9.344135802469136, 5);
+      // round-trips through the parser (unlike the old `4d6kh2` postfix form, which is
+      // unparseable -- `parseKeep` requires a following `Dice` argument)
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(
+        builder.toPMF()!.mean(),
+        5
+      );
+    });
+
+    it("should handle bestOf(1) as max of individual dice, not max of pool sums", () => {
+      // bestOf(1) synthesizes an internal `keep = {total: count, count: 1, mode: "highest"}`.
+      // The keep-highest-of-1 branch in astFromRollConfigs previously always built "max over
+      // trial sums" (max of N sums of N dice each), which for a synthesized bestOf incorrectly
+      // multiplied the die count into each trial -- e.g. bestOf(1) of 4d6 resolved as "max of
+      // four 4d6 sums" instead of "max of four individual d6 rolls".
+      const builder = roll(4).d6().bestOf(1);
+      expect(builder.toExpression()).toBe("4kh1(1d6)");
+      // Brute force over all 6^4 = 1296 outcomes of max(a, b, c, d) for iid d6.
+      expect(builder.toPMF()?.mean()).toBeCloseTo(5.244598765432099, 10);
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(
+        5.244598765432099,
+        10
+      );
     });
 
     it("should handle keepHighest() method", () => {
       const builder = roll(5).d6().keepHighest(5, 3);
-      expect(builder.toExpression()).toBe("5kh3(5d6)");
+      expect(builder.toExpression()).toBe("5kh3(1d6)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(13.43017, 5);
     });
 
     it("should handle keepLowest() method", () => {
       const builder = roll(4).d8().keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(4d8)");
+      expect(builder.toExpression()).toBe("4kl2(1d8)");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(5.841796875, 5);
     });
@@ -336,7 +358,7 @@ describe("RollBuilder", () => {
 
     it("should handle complex keepHighest scenario", () => {
       const builder = roll(6).d8().plus(2).keepHighest(6, 4);
-      expect(builder.toExpression()).toBe("6kh4(6d8) + 2");
+      expect(builder.toExpression()).toBe("6kh4(1d8) + 2");
       expect(builder.toPMF()).toBeDefined();
       expect(builder.toPMF()?.mean()).toBeCloseTo(24.5086, 1);
     });
@@ -414,9 +436,12 @@ describe("RollBuilder", () => {
 
     it("should handle bestOf() with modifiers", () => {
       const builder = roll(5).d10().bestOf(3).plus(4);
-      expect(builder.toExpression()).toBe("5d10kh3 + 4");
+      expect(builder.toExpression()).toBe("5kh3(1d10) + 4");
       expect(builder.toPMF()).toBeDefined();
-      expect(builder.toPMF()?.mean()).toBeCloseTo(31.5, 1);
+      // E[top 3 of five d10] + 4 = 21.45825 + 4 (order-statistic sum, cross-checked against
+      // E[X(5)]+E[X(4)]+E[X(3)] for iid d10 order statistics)
+      expect(builder.toPMF()?.mean()).toBeCloseTo(25.45825, 5);
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(25.45825, 5);
     });
 
     it("should handle keepHighest() with advantage", () => {
@@ -696,7 +721,7 @@ describe("RollBuilder", () => {
         const pmf = rollBuilder.toPMF();
         // Mean should be higher than 3.5 since we're setting minimum to 2
         expect(pmf.mean()).toBeGreaterThan(3.5);
-        expect(pmf.min()).toBe(3); // minimum(2) means 2>d6, so min is 3
+        expect(pmf.min()).toBe(2); // minimum(2) floors at 2
         expect(pmf.max()).toBe(6);
       });
 
@@ -705,8 +730,61 @@ describe("RollBuilder", () => {
         const pmf = rollBuilder.toPMF();
         // Mean should be higher than minimum 2
         expect(pmf.mean()).toBeGreaterThan(4.0);
-        expect(pmf.min()).toBe(5); // minimum(4) means 4>d6, so min is 5
+        expect(pmf.min()).toBe(4); // minimum(4) floors at 4
         expect(pmf.max()).toBe(6);
+      });
+    });
+
+    describe("Exploding Dice Mathematics", () => {
+      // Hand-enumerated ground truth for "roll s-sided die, on max reroll and add, capped at k
+      // extra dice": brute-force the full depth-k decision tree rather than trust any closed form.
+      function bruteForceExplode(sides: number, times: number): { mean: number; mass: number } {
+        let mean = 0;
+        let mass = 0;
+        const walk = (depth: number, acc: number, p: number) => {
+          for (let v = 1; v <= sides; v++) {
+            const pv = p / sides;
+            if (v === sides && depth < times) {
+              walk(depth + 1, acc + v, pv);
+            } else {
+              mean += (acc + v) * pv;
+              mass += pv;
+            }
+          }
+        };
+        walk(0, 0, 1);
+        return { mean, mass };
+      }
+
+      it("d6 explode(1) has total mass 1 and matches the hand-enumerated mean (not the old 0.861/3.667 bug)", () => {
+        const pmf = new RollBuilder(1).d6().explode(1).toPMF();
+        const expected = bruteForceExplode(6, 1);
+        expect(pmf.mass()).toBeCloseTo(expected.mass, 10);
+        expect(pmf.mass()).toBeCloseTo(1, 10);
+        expect(pmf.mean()).toBeCloseTo(expected.mean, 10);
+        expect(pmf.mean()).toBeCloseTo(4.0833333333, 8);
+      });
+
+      it("d6 explode(2) caps the chain at 2 extra dice, not exactly 2 extra dice", () => {
+        const pmf = new RollBuilder(1).d6().explode(2).toPMF();
+        const expected = bruteForceExplode(6, 2);
+        expect(pmf.mass()).toBeCloseTo(1, 10);
+        expect(pmf.mean()).toBeCloseTo(expected.mean, 10);
+        expect(pmf.mean()).toBeCloseTo(4.1805555556, 8);
+      });
+
+      it("d8 explode(3) matches the hand-enumerated mean", () => {
+        const pmf = new RollBuilder(1).d8().explode(3).toPMF();
+        const expected = bruteForceExplode(8, 3);
+        expect(pmf.mass()).toBeCloseTo(1, 10);
+        expect(pmf.mean()).toBeCloseTo(expected.mean, 10);
+        expect(pmf.mean()).toBeCloseTo(5.1416015625, 8);
+      });
+
+      it("toExpression() throws on an exploding die instead of silently dropping the explode and re-parsing to a wrong distribution (regression)", () => {
+        expect(() => new RollBuilder(1).d6().explode(1).toExpression()).toThrow(
+          /cannot represent an exploding die/
+        );
       });
     });
 
@@ -749,7 +827,7 @@ describe("RollBuilder", () => {
         const pmf = rollBuilder.toPMF();
         // Mean should be higher than 3d6 + 5 due to reroll and minimum
         expect(pmf.mean()).toBeGreaterThan(15.5); // 3d6 + 5 mean
-        expect(pmf.min()).toBe(14); // 3 * 3 + 5 (minimum 2 means 2>d6, so min is 3)
+        expect(pmf.min()).toBe(11); // 3 * 2 + 5 (minimum(2) floors at 2)
         expect(pmf.max()).toBe(23); // 3 * 6 + 5
       });
 
@@ -833,6 +911,32 @@ describe("RollBuilder", () => {
       // Order might vary based on sorting, but counts should be correct
       expect(builder.toExpression()).toContain("6d8");
       expect(builder.toExpression()).toContain("4d6");
+    });
+
+    it("preserves a Half wrapper instead of silently collapsing to plain doubled dice (regression)", () => {
+      const halved = roll(1, 8).plus(3).half();
+      const doubled = halved.copy().doubleDice();
+      // E[floor((2d8+3)/2)] = 368/64, NOT E[2d8+3] = 20 (which is what the old bug returned by
+      // stripping the // 2 transform entirely).
+      expect(doubled.pmf.mean()).toBeCloseTo(368 / 64, 8);
+    });
+
+    it("preserves a Scale wrapper instead of silently collapsing to plain doubled dice (regression)", () => {
+      const vuln = roll(1, d6).scaleResult(2);
+      const doubled = vuln.copy().doubleDice();
+      // vuln is 2 * (1d6), mean 7; doubled should be 2 * (2d6), mean 14 -- NOT plain 2d6 (mean 7,
+      // the old bug's result from stripping the x2 scale entirely).
+      expect(doubled.pmf.mean()).toBeCloseTo(14, 8);
+    });
+
+    it("preserves a CompositeSumRollBuilder's per-part wrappers instead of collapsing to mean 0 (regression)", () => {
+      const base = roll(1, d6);
+      const resisted = roll(1, 8).half();
+      const composite = sumRolls([base, resisted]);
+      const doubled = composite.copy().doubleDice();
+      // The old bug: CompositeSumRollBuilder.getSubRollConfigs() returns [], so scaleDice's
+      // base-class create()-based implementation produced a PMF of mean 0.
+      expect(doubled.pmf.mean()).toBeCloseTo(11.25, 8); // 2d6 (7) + floor(2d8/2) (4.25)
     });
   });
 
@@ -1078,6 +1182,51 @@ describe("RollBuilder", () => {
       const critMean = critOnly.toPMF().mean();
 
       expect(critMean).toBeGreaterThan(hitMean);
+    });
+  });
+
+  describe("toExpression() round-trips through parse() (regression for the GWF/reroll(2) and keep-pool bugs)", () => {
+    it("reroll(k) for every k re-parses to the SAME mean as the builder's own PMF", () => {
+      for (const [sides, k] of [
+        [6, 1],
+        [6, 2],
+        [6, 3],
+        [4, 3],
+        [8, 4],
+      ] as const) {
+        const builder = new RollBuilder(1)[`d${sides}` as "d6"]().reroll(k);
+        const parsed = parse(builder.toExpression());
+        expect(parsed.mean()).toBeCloseTo(builder.toPMF().mean(), 10);
+      }
+    });
+
+    it("GWF-shaped 2d6.reroll(2) round-trips to the exact 25/3 mean, not the old chained-reroll 8.6", () => {
+      const builder = roll(2, d6).reroll(2);
+      const parsed = parse(builder.toExpression());
+      expect(builder.toPMF().mean()).toBeCloseTo(25 / 3, 10);
+      expect(parsed.mean()).toBeCloseTo(25 / 3, 10);
+    });
+
+    it("keepHighest(N,N,K) (pool of N individual dice) re-parses to the correct per-die pool mean, not the old 4x-inflated 4d6-per-trial reading", () => {
+      const builder = roll(4, d6).keepHighest(4, 3);
+      const parsed = parse(builder.toExpression());
+      expect(builder.toPMF().mean()).toBeCloseTo(12.2446, 3);
+      expect(parsed.mean()).toBeCloseTo(builder.toPMF().mean(), 10);
+    });
+
+    it("keepLowest(N,N,K) (pool of N individual dice) re-parses correctly", () => {
+      const builder = roll(4, d8).keepLowest(4, 2);
+      const parsed = parse(builder.toExpression());
+      expect(parsed.mean()).toBeCloseTo(builder.toPMF().mean(), 10);
+    });
+
+    it("keepHighest(1,N) where the trial count coincidentally equals the die count still re-parses as a sum-of-trials pool, not a per-die pool", () => {
+      // roll(3, d6).keepHighest(3, 1): baseCount (3) equals trials (3), which would trigger the
+      // per-die collapse for K != 1 -- but K == 1 with mode "highest" always keeps its per-trial
+      // sum, so this must round-trip as "max of three 3d6 sums", not "max of 3 individual d6".
+      const builder = roll(3, d6).keepHighest(3, 1);
+      const parsed = parse(builder.toExpression());
+      expect(parsed.mean()).toBeCloseTo(builder.toPMF().mean(), 10);
     });
   });
 });

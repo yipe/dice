@@ -28,6 +28,17 @@ export interface DicePrivateData {
   except?: Dice | Record<string, never>;
   /** Keep-highest/lowest selector applied when a die is multiplied out. */
   keep?: (values: number[]) => number;
+  /** Set on a freshly parsed flat `dN`/`hdN` atom: its own face count and whether it rerolls a
+   * natural 1 once (Halfling Luck). Read by {@link parseExpression} in parser.ts to recover a
+   * base check die's natural-max identity after it has been convolved with bonus to-hit dice
+   * and modifiers, for a correct plain-`crit` probability. See parser.ts's "Track a flat ...
+   * base check die" comment. */
+  checkDie?: { sides: number; rerollOne: boolean };
+  /** Set on the result of a tracked AC gate (see parser.ts): the exact "natural max, any bonus
+   * roll" sub-distribution, already isolated from the rest of the to-hit total. A plain `crit`
+   * clause reads this directly instead of peeling the combined expression's single highest
+   * face, which is wrong whenever bonus dice are present. */
+  natMaxCritSlice?: Dice;
 }
 
 /**

@@ -530,7 +530,7 @@ describe("SaveBuilder with bonus dice", () => {
       .saveHalf();
 
     expect(builder.toExpression()).toBe(
-      "(d20 + 5 + 1d4 DC 15) * (2(d8 reroll 1 reroll 2) + 1) save half"
+      "(d20 + 5 + 1d4 DC 15) * (2(d8 reroll d2) + 1) save half"
     );
 
     const pmf = builder.resolve().pmf;

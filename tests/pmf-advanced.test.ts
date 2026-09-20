@@ -98,6 +98,59 @@ describe("PMF Advanced Operations", () => {
       expect(power2squared.max()).toBe(power4.max());
       expect(power2squared.mass()).toBeCloseTo(power4.mass(), 10);
     });
+
+    it("does not collide across mapDamage variants that share an identifier but differ in content (regression)", () => {
+      // mapDamage keeps the PARENT's identifier regardless of the mapping function, so
+      // `d6.mapDamage(f)` and `d6.mapDamage(g)` produce the SAME identifier `map(<d6-id>)` for
+      // two numerically different PMFs. power()'s cache key must not collide on that alone.
+      const identity = d6.mapDamage((v) => v);
+      const scaled = d6.mapDamage((v) => v * 100);
+      const powIdentity = identity.power(2);
+      const powScaled = scaled.power(2);
+      expect(powScaled.mean()).toBeCloseTo(2 * scaled.mean(), 6);
+      expect(powIdentity.mean()).not.toBeCloseTo(powScaled.mean(), 1);
+    });
+
+    it("fingerprint() distinguishes same-identifier PMFs with identical mass/bin-count/face-sum but different per-bin probabilities (regression)", () => {
+      // The old fingerprint was `mass|binCount|faceSum` -- content-blind to the actual
+      // probabilities. Two PMFs sharing an identifier (as mapDamage variants do) with the same
+      // support {1,2,3,4}, mass 1, and face sum 10 but different per-bin probabilities produced
+      // the SAME fingerprint, so power() could return the first cached result for the second.
+      const sameId = "shared-identifier";
+      const uniform4 = new PMF(
+        new Map<number, Bin>([
+          [1, { p: 0.25, count: {} }],
+          [2, { p: 0.25, count: {} }],
+          [3, { p: 0.25, count: {} }],
+          [4, { p: 0.25, count: {} }],
+        ]),
+        EPS,
+        true,
+        sameId
+      );
+      const skewed4 = new PMF(
+        new Map<number, Bin>([
+          [1, { p: 0.7, count: {} }],
+          [2, { p: 0.1, count: {} }],
+          [3, { p: 0.1, count: {} }],
+          [4, { p: 0.1, count: {} }],
+        ]),
+        EPS,
+        true,
+        sameId
+      );
+
+      expect(uniform4.mass()).toBeCloseTo(skewed4.mass(), 12);
+      expect(uniform4.map.size).toBe(skewed4.map.size);
+      expect(uniform4.fingerprint()).not.toBe(skewed4.fingerprint());
+
+      const powUniform = uniform4.power(2);
+      const powSkewed = skewed4.power(2);
+      expect(powUniform).not.toBe(powSkewed);
+      expect(powUniform.mean()).toBeCloseTo(2 * uniform4.mean(), 10);
+      expect(powSkewed.mean()).toBeCloseTo(2 * skewed4.mean(), 10);
+      expect(powUniform.mean()).not.toBeCloseTo(powSkewed.mean(), 1);
+    });
   });
 
   describe("replicate", () => {
@@ -527,6 +580,15 @@ describe("PMF Advanced Operations", () => {
       it("should return 0 for empty PMF", () => {
         const empty = PMF.empty();
         expect(empty.quantile(0.5)).toBe(0);
+      });
+
+      it("normalizes against total mass instead of raw probability sums (regression)", () => {
+        // d6 scaled to mass 0.5 (raw probs 1/12 each) -- quantile(0.5) must still return the true
+        // median (3), not fall through to max() because the raw running sum never reaches 0.5.
+        const half = d6.scaleMass(0.5);
+        expect(half.mass()).toBeCloseTo(0.5, 10);
+        expect(half.quantile(0.5)).toBe(3);
+        expect(half.quantile(1)).toBe(6);
       });
     });
   });

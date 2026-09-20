@@ -5,11 +5,19 @@ import { LRUCache } from "../common/lru-cache";
 import { parse } from "../parser/parser";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { astFromRollConfigs, pmfFromRollBuilder } from "./ast";
+import { astFromRollConfigs, pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { AttackBuilder } from "./attack";
-import { d20RollPMF } from "./d20";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
+
+/** Validates a `scaleDice`/`doubleDice` multiplier: must be a positive integer. Shared by
+ * `RollBuilder.scaleDice` and every wrapper subclass's override (Half/Scale/MaxOf/Composite). */
+function validateScaleInt(scale: number): number {
+  const scaleInt = Math.floor(scale);
+  if (scaleInt !== scale) throw new Error("Scale must be an integer");
+  if (scaleInt <= 0) throw new Error("Scale must be > 0");
+  return scaleInt;
+}
 
 /**
  * Plain-roll PMF cache, the sibling of {@link attackPMFCache}. `toPMF()` re-runs the whole AST convolution
@@ -296,7 +304,8 @@ export class RollBuilder {
     return this.create(newConfigs);
   }
 
-  /** Apply per-die minimum value (min > 0). */
+  /** Apply per-die minimum value (floors each die roll at `val`, e.g. `minimum(3)` treats a 1 or
+   * 2 as a 3 -- the 2024 Great Weapon Fighting style). */
   minimum(val: number | undefined): RollBuilder {
     if (val !== undefined && isNaN(val))
       throw new Error("Invalid NaN value for minimum");
@@ -305,7 +314,7 @@ export class RollBuilder {
     if (val < 0) throw new Error("Minimum value must be >= 0");
 
     const newConfigs = this.getSubRollConfigs();
-    newConfigs[newConfigs.length - 1].minimum = val + 1;
+    newConfigs[newConfigs.length - 1].minimum = val;
     return this.create(newConfigs);
   }
 
@@ -419,9 +428,7 @@ export class RollBuilder {
   }
 
   scaleDice(scale: number): RollBuilder {
-    const scaleInt = Math.floor(scale);
-    if (scaleInt !== scale) throw new Error("Scale must be an integer");
-    if (scaleInt <= 0) throw new Error("Scale must be > 0");
+    const scaleInt = validateScaleInt(scale);
 
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
@@ -602,18 +609,34 @@ export class RollBuilder {
   ): string {
     if (!config.sides || config.sides <= 0) return "";
 
+    // The string grammar has no explode token at all (see parser.ts/dice.ts) -- there is no
+    // representable syntax that round-trips an exploding die's distribution. Silently rendering
+    // a plain (non-exploding) die here would re-parse to a materially different, WRONG
+    // distribution with no indication anything was lost. Fail loudly instead.
+    if (config.explode && Number.isFinite(config.explode) && config.explode > 0) {
+      throw new Error(
+        `toExpression() cannot represent an exploding die (d${config.sides} explode(${config.explode})): the string grammar has no explode syntax. Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
+      );
+    }
+
     let baseDie = `d${config.sides}`;
+
+    // A reroll(k) config means "reroll faces 1..k once, must keep" (see resolveSingleDie) — a
+    // THRESHOLD, not a literal face value. The parser's `reroll <n>` for a bare number n rerolls
+    // ONLY face value n (matches k=1, where the threshold and the literal face coincide); for
+    // k>=2 the threshold must be expressed as `reroll d{k}`, using a k-sided die's face SET
+    // {1..k} as the reroll operator's argument — chaining `reroll 1 reroll 2 ... reroll k` as
+    // separate clauses re-parses as k SEQUENTIAL reroll passes, a different (and wrong)
+    // distribution. `rerollClause` is shared by every placement below (with/without minimum,
+    // with/without explode) since the clause's own content never depends on where it sits.
+    const rerollClause = config.reroll > 0 ? (config.reroll === 1 ? " reroll 1" : ` reroll d${config.reroll}`) : "";
 
     if (config.reroll > 0) {
       if (config.minimum > 0 && config.explode > 0) {
         // Complex single roll case: minimum + explode + reroll
         // Apply reroll after minimum is applied
-      } else if (config.minimum > 0) {
-        // When there's a minimum but no explode, use descending order and apply before minimum
-        for (let i = config.reroll; i >= 1; i--) baseDie += ` reroll ${i}`;
       } else {
-        // When there's no minimum, use ascending order
-        for (let i = 1; i <= config.reroll; i++) baseDie += ` reroll ${i}`;
+        baseDie += rerollClause;
       }
     }
 
@@ -624,9 +647,7 @@ export class RollBuilder {
         baseDie = `${config.minimum}>${baseDie}`;
       }
       if (config.reroll > 0 && config.explode > 0) {
-        for (let i = 1; i <= config.reroll; i++) {
-          baseDie += ` reroll ${i}`;
-        }
+        baseDie += rerollClause;
       }
     }
 
@@ -647,11 +668,27 @@ export class RollBuilder {
       case "flat":
         if (config.keep) {
           const mode = config.keep.mode === "highest" ? "kh" : "kl";
+
+          // The inner expression must match astFromRollConfigs' own per-trial shape (see
+          // resolve()'s "keep" case, which reads it back out as `node.child.child`), not just
+          // echo `config.count`. astFromRollConfigs collapses to "N individual dice, keep top K"
+          // (a bare per-trial die) exactly when the die count equals the trial count (`baseCount
+          // === trials`) -- UNLESS it's the kh1 case (count 1, highest), which always keeps its
+          // per-trial die multiplied by baseCount even when baseCount happens to equal trials
+          // (`3kh1` on 3d6-per-trial means "max of three 3d6 sums", not "max of 3 individual
+          // d6"). Getting this wrong previously serialized `roll(4,d6).keepHighest(4,3)` as
+          // `4kh3(4d6)` ("keep 3 of four 4d6 sums") instead of the correct `4kh3(1d6)` ("keep 3
+          // of four individual d6 rolls") -- a ~3.7x overstatement on re-parse.
+          const baseCount = Math.max(1, Math.floor(Math.abs(config.count || 1)));
+          const trials = Math.max(1, Math.floor(config.keep.total));
+          const isMaxOfShape = config.keep.count === 1 && config.keep.mode === "highest";
+          const innerCount = trials === baseCount && !isMaxOfShape ? 1 : baseCount;
+
           const baseDieExpression =
             this.configToSingleExpressionWithoutModifier(
               {
                 ...config,
-                count: config.count,
+                count: innerCount,
                 modifier: 0,
                 rollType: "flat",
                 keep: undefined,
@@ -697,7 +734,19 @@ export class RollBuilder {
           }
         }
         if (config.bestOf && config.count && config.bestOf < config.count) {
-          mainExpression += `kh${config.bestOf}`;
+          const pool = Math.max(1, Math.floor(Math.abs(config.count)));
+          const baseDieExpression = this.configToSingleExpressionWithoutModifier(
+            {
+              ...config,
+              count: 1,
+              modifier: 0,
+              bestOf: 0,
+              keep: undefined,
+              rollType: "flat",
+            },
+            false
+          );
+          mainExpression = `${pool}kh${Math.floor(config.bestOf)}(${baseDieExpression})`;
         }
         break;
     }
@@ -833,6 +882,13 @@ export class HalfRollBuilder extends RollBuilder {
     return pmfFromRollBuilder(this, eps);
   }
 
+  // Scale the dice, keep the same // 2 (half) transform applied on top -- delegating to the
+  // base class's `create()`-based scaleDice would drop the halving entirely, e.g. a doubled-dice
+  // crit on a resisted hit payload silently losing the resistance.
+  override scaleDice(scale: number): RollBuilder {
+    return new HalfRollBuilder(this.innerRoll.scaleDice(scale));
+  }
+
   copy(): HalfRollBuilder {
     return new HalfRollBuilder(this.innerRoll.copy());
   }
@@ -871,9 +927,21 @@ export class ScaleRollBuilder extends RollBuilder {
 
   toExpression(): string {
     const inner = this.innerRoll.toExpression();
-    if (this.denominator === 1) return `${this.numerator} * (${inner})`;
-    if (this.numerator === 1) return `(${inner}) // ${this.denominator}`;
-    return `(${inner}) * ${this.numerator} // ${this.denominator}`;
+    const denominator = this.denominator === 0 ? 1 : this.denominator;
+    if (denominator === 1) return `${this.numerator} ** (${inner})`;
+    // The grammar has only floor (`//`) and ceil (`/`) division; there is no round-half token.
+    if (this.rounding === "round") {
+      throw new Error(
+        `toExpression() cannot represent scaleResult(${this.numerator}, ${this.denominator}, "round"): the string grammar has only floor (//) and ceil (/) division. Use the builder's own PMF (.toPMF()/.pmf) instead.`
+      );
+    }
+    const div = this.rounding === "ceil" ? "/" : "//";
+    // `*` in this grammar is `conditionalApply` (an attack-gate operator: "if the left side is
+    // nonzero, take the right side"), NOT multiplication -- `**` is. A scale of e.g. `2/1`
+    // (vulnerability) previously rendered as `2 * (inner)`, which re-parsed as "if 2 (always
+    // nonzero) then take `inner`", silently dropping the multiplier entirely on round-trip.
+    if (this.numerator === 1) return `(${inner}) ${div} ${denominator}`;
+    return `(${inner}) ** ${this.numerator} ${div} ${denominator}`;
   }
 
   toAST(): ExpressionNode {
@@ -888,6 +956,18 @@ export class ScaleRollBuilder extends RollBuilder {
 
   toPMF(eps: number = 0): PMF {
     return pmfFromRollBuilder(this, eps);
+  }
+
+  // Scale the dice, keep the same numerator/denominator/rounding transform applied on top --
+  // delegating to the base class's `create()`-based scaleDice would drop the scale entirely,
+  // e.g. a doubled-dice crit on a vulnerable hit payload silently losing the vulnerability.
+  override scaleDice(scale: number): RollBuilder {
+    return new ScaleRollBuilder(
+      this.innerRoll.scaleDice(scale),
+      this.numerator,
+      this.denominator,
+      this.rounding
+    );
   }
 
   copy(): ScaleRollBuilder {
@@ -983,6 +1063,19 @@ export class MaxOfRollBuilder extends RollBuilder {
     return pmfFromRollBuilder(this, eps);
   }
 
+  // Scale the dice INSIDE each trial (e.g. maxOf(2, 1d12) -> maxOf(2, 2d12)), keeping the same
+  // trial count -- delegating to the base class's `create()`-based scaleDice would collapse
+  // straight to plain dice, losing the "take the highest of N trials" semantics entirely.
+  override scaleDice(scale: number): RollBuilder {
+    const scaleInt = validateScaleInt(scale);
+    return new MaxOfRollBuilder(
+      this.innerRoll.scaleDice(scaleInt),
+      this.count,
+      this.diceCount ? this.diceCount * scaleInt : undefined,
+      this.diceSides
+    );
+  }
+
   copy(): MaxOfRollBuilder {
     return new MaxOfRollBuilder(this.innerRoll.copy(), this.count);
   }
@@ -1048,9 +1141,7 @@ export class AlwaysHitBuilder extends RollBuilder {
   }
 
   override toPMF(): PMF {
-    const rollType = this.rollType;
-    const rerollOne = this.baseReroll > 0;
-    return d20RollPMF(rollType, rerollOne);
+    return resolveRootD20(this);
   }
 
   override copy(): AlwaysHitBuilder {
@@ -1122,9 +1213,7 @@ export class AlwaysCritBuilder extends RollBuilder {
   }
 
   override toPMF(): PMF {
-    const rollType = this.rollType;
-    const rerollOne = this.baseReroll > 0;
-    return d20RollPMF(rollType, rerollOne);
+    return resolveRootD20(this);
   }
 
   override copy(): AlwaysCritBuilder {
@@ -1395,6 +1484,18 @@ class CompositeSumRollBuilder extends RollBuilder {
 
   override toPMF(eps: number = 0): PMF {
     return pmfFromRollBuilder(this, eps);
+  }
+
+  // Scaling a composite (mixed damage types, e.g. base + resisted) must scale each PART's own
+  // dice while preserving its own half/scale wrapper -- delegating to the base class's
+  // `create()`-based scaleDice would lose every part's transform, collapsing straight to plain
+  // dice. This is what auto-crit doubling (attack.ts's `hitEffect.copy().doubleDice()`) relies
+  // on for a mixed-resistance hit payload.
+  override scaleDice(scale: number): RollBuilder {
+    validateScaleInt(scale);
+    return new CompositeSumRollBuilder(
+      this.parts.map((p) => p.scaleDice(scale))
+    );
   }
 
   override copy(): CompositeSumRollBuilder {
