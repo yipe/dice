@@ -172,7 +172,7 @@ export const doubledD8ExprExpected = "2d8 + 5";
  * Roll a set of dice and take the highest N dice rolls.
  */
 export const bestOfExample = roll(4, d6).bestOf(3);
-export const bestOfExampleExprExpected = "4d6kh3";
+export const bestOfExampleExprExpected = "4kh3(1d6)";
 
 // ------------------------------
 // Multiplying dice rolls

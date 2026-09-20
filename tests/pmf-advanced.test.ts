@@ -110,6 +110,47 @@ describe("PMF Advanced Operations", () => {
       expect(powScaled.mean()).toBeCloseTo(2 * scaled.mean(), 6);
       expect(powIdentity.mean()).not.toBeCloseTo(powScaled.mean(), 1);
     });
+
+    it("fingerprint() distinguishes same-identifier PMFs with identical mass/bin-count/face-sum but different per-bin probabilities (regression)", () => {
+      // The old fingerprint was `mass|binCount|faceSum` -- content-blind to the actual
+      // probabilities. Two PMFs sharing an identifier (as mapDamage variants do) with the same
+      // support {1,2,3,4}, mass 1, and face sum 10 but different per-bin probabilities produced
+      // the SAME fingerprint, so power() could return the first cached result for the second.
+      const sameId = "shared-identifier";
+      const uniform4 = new PMF(
+        new Map<number, Bin>([
+          [1, { p: 0.25, count: {} }],
+          [2, { p: 0.25, count: {} }],
+          [3, { p: 0.25, count: {} }],
+          [4, { p: 0.25, count: {} }],
+        ]),
+        EPS,
+        true,
+        sameId
+      );
+      const skewed4 = new PMF(
+        new Map<number, Bin>([
+          [1, { p: 0.7, count: {} }],
+          [2, { p: 0.1, count: {} }],
+          [3, { p: 0.1, count: {} }],
+          [4, { p: 0.1, count: {} }],
+        ]),
+        EPS,
+        true,
+        sameId
+      );
+
+      expect(uniform4.mass()).toBeCloseTo(skewed4.mass(), 12);
+      expect(uniform4.map.size).toBe(skewed4.map.size);
+      expect(uniform4.fingerprint()).not.toBe(skewed4.fingerprint());
+
+      const powUniform = uniform4.power(2);
+      const powSkewed = skewed4.power(2);
+      expect(powUniform).not.toBe(powSkewed);
+      expect(powUniform.mean()).toBeCloseTo(2 * uniform4.mean(), 10);
+      expect(powSkewed.mean()).toBeCloseTo(2 * skewed4.mean(), 10);
+      expect(powUniform.mean()).not.toBeCloseTo(powSkewed.mean(), 1);
+    });
   });
 
   describe("replicate", () => {

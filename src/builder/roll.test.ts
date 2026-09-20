@@ -298,9 +298,31 @@ describe("RollBuilder", () => {
   describe("RollBuilder Edge Cases", () => {
     it("should handle bestOf() method", () => {
       const builder = roll(4).d6().bestOf(2);
-      expect(builder.toExpression()).toBe("4d6kh2");
+      expect(builder.toExpression()).toBe("4kh2(1d6)");
       expect(builder.toPMF()).toBeDefined();
-      // bestOf is not yet implemented in the expression parser, so we just verify it doesn't crash
+      expect(builder.toPMF()?.mean()).toBeCloseTo(9.344135802469136, 5);
+      // round-trips through the parser (unlike the old `4d6kh2` postfix form, which is
+      // unparseable -- `parseKeep` requires a following `Dice` argument)
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(
+        builder.toPMF()!.mean(),
+        5
+      );
+    });
+
+    it("should handle bestOf(1) as max of individual dice, not max of pool sums", () => {
+      // bestOf(1) synthesizes an internal `keep = {total: count, count: 1, mode: "highest"}`.
+      // The keep-highest-of-1 branch in astFromRollConfigs previously always built "max over
+      // trial sums" (max of N sums of N dice each), which for a synthesized bestOf incorrectly
+      // multiplied the die count into each trial -- e.g. bestOf(1) of 4d6 resolved as "max of
+      // four 4d6 sums" instead of "max of four individual d6 rolls".
+      const builder = roll(4).d6().bestOf(1);
+      expect(builder.toExpression()).toBe("4kh1(1d6)");
+      // Brute force over all 6^4 = 1296 outcomes of max(a, b, c, d) for iid d6.
+      expect(builder.toPMF()?.mean()).toBeCloseTo(5.244598765432099, 10);
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(
+        5.244598765432099,
+        10
+      );
     });
 
     it("should handle keepHighest() method", () => {
@@ -414,11 +436,12 @@ describe("RollBuilder", () => {
 
     it("should handle bestOf() with modifiers", () => {
       const builder = roll(5).d10().bestOf(3).plus(4);
-      expect(builder.toExpression()).toBe("5d10kh3 + 4");
+      expect(builder.toExpression()).toBe("5kh3(1d10) + 4");
       expect(builder.toPMF()).toBeDefined();
       // E[top 3 of five d10] + 4 = 21.45825 + 4 (order-statistic sum, cross-checked against
       // E[X(5)]+E[X(4)]+E[X(3)] for iid d10 order statistics)
       expect(builder.toPMF()?.mean()).toBeCloseTo(25.45825, 5);
+      expect(parse(builder.toExpression()).mean()).toBeCloseTo(25.45825, 5);
     });
 
     it("should handle keepHighest() with advantage", () => {

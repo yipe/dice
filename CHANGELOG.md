@@ -51,21 +51,32 @@ the Breaking section if you have tests or saved output pinned to the old (wrong)
 - **`ScaleRollBuilder.toExpression()` (vulnerability/resistance scaling) emitted a broken
   round-trip.** `scaleResult(2)` rendered as `2 * (inner)`; `*` in this grammar is
   `conditionalApply` ("if nonzero, take the right side"), not multiplication — `**` is. The
-  re-parsed expression silently dropped the ×2 entirely. Now emits `**`.
+  re-parsed expression silently dropped the ×2 entirely. Now emits `**`. It also always emitted
+  floor division (`//`) regardless of the configured rounding mode, so `scaleResult(n, d, "ceil")`
+  silently re-parsed with the wrong (floor) distribution; now emits `/` (ceil) for `"ceil"` and
+  throws for `"round"`, which the grammar has no token for. A zero denominator is normalized to 1
+  before rendering, matching the AST path.
 - **`doubleDice()`/`scaleDice()` silently stripped `Half`/`Scale`/`MaxOf`/composite-sum
   wrappers**, since none of them overrode `scaleDice()` and the base implementation resolves
   through `create()`, which downgrades to a plain `RollBuilder`. A resisted/vulnerable/composite
   hit payload's automatic crit-doubling (`hitEffect.copy().doubleDice()`) silently lost its
   resistance/vulnerability/mixed-type structure. All four wrapper classes now override
   `scaleDice()` to preserve their own transform.
-- **`bestOf(k)` ("roll N, keep the highest k") was ignored by every PMF path** despite
-  `toExpression()` correctly rendering it as `NdSkh{k}` — `astFromRollConfigs` never read
-  `cfg.bestOf`, so the PMF was plain `NdS`. Now folded into the same keep-DP machinery
-  `keepHighest()` uses.
-- **`PMF.power()`'s cache key was content-blind** (identifier only, unlike `convolve()`'s
-  fingerprinted key) — `X.mapDamage(f).power(n)` and `X.mapDamage(g).power(n)` could collide on
-  the same key and silently return each other's cached result, since `mapDamage` keeps the
-  parent's identifier regardless of the mapping function. Now includes `fingerprint()`.
+- **`bestOf(k)` ("roll N, keep the highest k") was ignored by every PMF path**, and its
+  `toExpression()` output did not round-trip. `astFromRollConfigs` never read `cfg.bestOf`, so the
+  PMF was plain `NdS`; `toExpression()` rendered `NdSkh{k}`, a postfix form `parseKeep` cannot
+  parse (`Expected Dice after keep modifier`). Now folded into the same keep-DP machinery
+  `keepHighest()` uses, serialized as the parseable prefix form `NkhK(1dS)`, and — for `k === 1` —
+  no longer mis-synthesized as "max of N sums of N dice" instead of "max of N individual dice"
+  (`bestOf(1)` on `4d6` is `max(d6, d6, d6, d6)`, not `max(4d6, 4d6, 4d6, 4d6)`).
+- **`PMF.power()`'s cache key was content-blind**, both at the `power()` layer (identifier only,
+  unlike `convolve()`'s fingerprinted key — `X.mapDamage(f).power(n)` and `X.mapDamage(g).power(n)`
+  could collide since `mapDamage` keeps the parent's identifier regardless of the mapping
+  function) and inside `fingerprint()` itself, which only hashed mass, bin count, and the sum of
+  bin values — two `mapDamage` variants sharing that identifier could also share every one of
+  those three numbers while differing in per-bin probabilities. `power()` now includes
+  `fingerprint()`, and `fingerprint()` now hashes every bin's probability plus its `count`/`attr`
+  labels (`convolve()` preserves both) and the `normalized` flag.
 - **`PMF.quantile()` ignored total mass**, comparing a raw running probability sum against `p`
   instead of `p * mass()` — a sub-unit-mass PMF (e.g. after `scaleMass()`) returned `max()` for
   any `p` the raw sum couldn't reach, instead of the true quantile. `DiceQuery.percentiles()` was
@@ -77,9 +88,9 @@ the Breaking section if you have tests or saved output pinned to the old (wrong)
   string) built against the old off-by-one must add 1 to its argument to keep the same floor:
   `minimum(1)` → `minimum(2)` for a floor of 2, etc.
 - **`RollBuilder.toExpression()` output changed** for `reroll(k >= 2)`, `keepHighest`/`keepLowest`
-  where the die count equals the trial count, and `scaleResult`/vulnerability scaling. All three
-  were previously wrong round-trips (see Fixed) — any code diffing/pinning the exact string needs
-  updating, not just re-parsing.
+  where the die count equals the trial count, `bestOf(k)`, and `scaleResult`/vulnerability
+  scaling. All were previously wrong (or, for `bestOf`, unparseable) round-trips (see Fixed) —
+  any code diffing/pinning the exact string needs updating, not just re-parsing.
 - **`toExpression()` on an exploding die (`explode(k) > 0`) now throws** instead of silently
   rendering a plain (non-exploding) die that re-parses to a materially different distribution.
   The string grammar has no explode syntax; use the builder's own `.toPMF()`/`.pmf` instead of

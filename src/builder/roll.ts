@@ -734,7 +734,19 @@ export class RollBuilder {
           }
         }
         if (config.bestOf && config.count && config.bestOf < config.count) {
-          mainExpression += `kh${config.bestOf}`;
+          const pool = Math.max(1, Math.floor(Math.abs(config.count)));
+          const baseDieExpression = this.configToSingleExpressionWithoutModifier(
+            {
+              ...config,
+              count: 1,
+              modifier: 0,
+              bestOf: 0,
+              keep: undefined,
+              rollType: "flat",
+            },
+            false
+          );
+          mainExpression = `${pool}kh${Math.floor(config.bestOf)}(${baseDieExpression})`;
         }
         break;
     }
@@ -915,13 +927,21 @@ export class ScaleRollBuilder extends RollBuilder {
 
   toExpression(): string {
     const inner = this.innerRoll.toExpression();
+    const denominator = this.denominator === 0 ? 1 : this.denominator;
+    if (denominator === 1) return `${this.numerator} ** (${inner})`;
+    // The grammar has only floor (`//`) and ceil (`/`) division; there is no round-half token.
+    if (this.rounding === "round") {
+      throw new Error(
+        `toExpression() cannot represent scaleResult(${this.numerator}, ${this.denominator}, "round"): the string grammar has only floor (//) and ceil (/) division. Use the builder's own PMF (.toPMF()/.pmf) instead.`
+      );
+    }
+    const div = this.rounding === "ceil" ? "/" : "//";
     // `*` in this grammar is `conditionalApply` (an attack-gate operator: "if the left side is
     // nonzero, take the right side"), NOT multiplication -- `**` is. A scale of e.g. `2/1`
     // (vulnerability) previously rendered as `2 * (inner)`, which re-parsed as "if 2 (always
     // nonzero) then take `inner`", silently dropping the multiplier entirely on round-trip.
-    if (this.denominator === 1) return `${this.numerator} ** (${inner})`;
-    if (this.numerator === 1) return `(${inner}) // ${this.denominator}`;
-    return `(${inner}) ** ${this.numerator} // ${this.denominator}`;
+    if (this.numerator === 1) return `(${inner}) ${div} ${denominator}`;
+    return `(${inner}) ** ${this.numerator} ${div} ${denominator}`;
   }
 
   toAST(): ExpressionNode {

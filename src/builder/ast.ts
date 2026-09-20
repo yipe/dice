@@ -54,10 +54,11 @@ export function astFromRollConfigs(
     // reuses the keep-DP branch below instead of being silently ignored (the die count alone,
     // with no keep applied, previously determined the PMF -- e.g. `5d10.bestOf(3)` resolved as
     // plain 5d10 despite `toExpression()` correctly rendering "5d10kh3").
-    const effectiveKeep =
-      !cfg.keep && cfg.bestOf > 0 && cfg.bestOf < count
-        ? { total: count, count: Math.floor(cfg.bestOf), mode: "highest" as const }
-        : cfg.keep;
+    const isSynthesizedBestOf =
+      !cfg.keep && cfg.bestOf > 0 && cfg.bestOf < count;
+    const effectiveKeep = isSynthesizedBestOf
+      ? { total: count, count: Math.floor(cfg.bestOf), mode: "highest" as const }
+      : cfg.keep;
 
     const die: DieNode = dieNodeFromConfig(cfg);
 
@@ -86,7 +87,9 @@ export function astFromRollConfigs(
       const k = Math.max(0, Math.floor(effectiveKeep.count));
 
       // For keep-highest of 1, always treat as trials-of-sums: max over trial sums
-      if (k === 1 && effectiveKeep.mode === "highest") {
+      // A synthesized `bestOf` trial is a SINGLE die, never `baseCount` dice, so it must not
+      // take the maxOf-of-sums shape.
+      if (k === 1 && effectiveKeep.mode === "highest" && !isSynthesizedBestOf) {
         const perTrial: SumNode = {
           type: "sum",
           count: baseCount,

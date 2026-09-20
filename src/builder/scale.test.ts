@@ -68,6 +68,20 @@ describe("scaleResult / ScaleRollBuilder", () => {
     // ceil(1..6 / 2) => 1,1,2,2,3,3 => mean 2
     expect(mean(d6().scaleResult(1, 2, "ceil").pmf)).toBeCloseTo(2, 10);
   });
+
+  it("regression: toExpression() preserves the ceil rounding mode on round-trip -- it previously always emitted `//` (floor) regardless of the configured mode, so `scaleResult(1, 2, \"ceil\")` silently re-parsed with the wrong (floor) distribution", () => {
+    const ceilScale = d6().scaleResult(1, 2, "ceil");
+    expect(ceilScale.toExpression()).toBe("(1d6) / 2");
+    expect(mean(parse(ceilScale.toExpression()))).toBeCloseTo(
+      mean(ceilScale.pmf),
+      10
+    );
+  });
+
+  it("regression: toExpression() throws for \"round\" rounding -- the string grammar has only floor (//) and ceil (/) division, no round-half token", () => {
+    const roundScale = d6().scaleResult(1, 2, "round");
+    expect(() => roundScale.toExpression()).toThrow(/round/);
+  });
 });
 
 describe("sumRolls", () => {
