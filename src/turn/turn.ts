@@ -1,7 +1,7 @@
 import { EPS } from "../common/types";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
-import type { Step, TurnPlan } from "./plan";
+import type { SourceSlices, Step, TurnPlan } from "./plan";
 import { buildPlan } from "./plan";
 import type { StepOutcome } from "./state";
 import {
@@ -9,6 +9,7 @@ import {
   CRIT_BIT,
   FIRST_CRIT,
   FIRST_NONE,
+  MATCH_BIT,
   MISS_BIT,
   START_CODE,
 } from "./state";
@@ -25,7 +26,34 @@ import { TurnSpecError } from "./types";
 /** Which payload a rider uses when it fires, or `null` when it doesn't fire. */
 type FireMode = "hit" | "crit" | null;
 
-const OUTCOMES: readonly StepOutcome[] = ["hit", "crit", "miss"];
+/** One outcome draw a step's walk convolves in: which group-state outcome it
+ * advances, whether it counts as a dice-match, and the sub-mass PMF itself. */
+type Draw = { outcome: StepOutcome; matched: boolean; slice: PMF };
+
+/**
+ * The outcome draws for one step. Match-split branches (`hitMatch`/`critMatch`)
+ * expand hit and/or crit into two draws each — five total at most — ONLY when
+ * this source is actually match-sliced (a `dice-match` trigger named it); every
+ * other turn walks the same three draws it always did, so turns with no
+ * `dice-match` trigger anywhere pay zero extra cost.
+ */
+function stepDraws(slices: SourceSlices): Draw[] {
+  const draws: Draw[] = [];
+  if (slices.hitMatch) {
+    draws.push({ outcome: "hit", matched: true, slice: slices.hitMatch });
+    draws.push({ outcome: "hit", matched: false, slice: slices.hitNoMatch as PMF });
+  } else {
+    draws.push({ outcome: "hit", matched: false, slice: slices.hit });
+  }
+  if (slices.critMatch) {
+    draws.push({ outcome: "crit", matched: true, slice: slices.critMatch });
+    draws.push({ outcome: "crit", matched: false, slice: slices.critNoMatch as PMF });
+  } else {
+    draws.push({ outcome: "crit", matched: false, slice: slices.crit });
+  }
+  draws.push({ outcome: "miss", matched: false, slice: slices.miss });
+  return draws;
+}
 
 /**
  * Decide whether `step` fires in state `codes`, and in which mode.
@@ -58,11 +86,17 @@ function fireMode(
       return (code & CRIT_BIT) !== 0 ? "crit" : null;
     case "any-miss":
       return (code & MISS_BIT) !== 0 ? "hit" : null;
+    case "dice-match":
+      // An attack-shaped rider (the only kind a `dice-match` trigger can fire —
+      // it always has `step.slices`, never `step.damage`) ignores the returned
+      // mode entirely; "hit" is just the truthy sentinel meaning "fires".
+      return (code & MATCH_BIT) !== 0 ? "hit" : null;
     default:
       // `every-hit` never becomes a step — it is folded into its sources' slices.
       return null;
   }
 }
+
 
 /**
  * A turn of attacks plus conditional damage riders, resolved to one **exact**
@@ -234,6 +268,25 @@ export class Turn {
   }
 
   /**
+   * Fires once if any of `of`'s named sources' own damage dice matched (showed a
+   * duplicate value) on hit or crit — Chromatic Orb's bounce. Unlike the other
+   * `onX` triggers, `of` is required: "the dice matched" has no coherent meaning
+   * defaulted across every declared attack. Each named source must expose a
+   * dice-match descriptor (an `AttackBuilder`-shaped source does); naming one
+   * that doesn't is a `TurnSpecError("no-dice-descriptor", ...)`.
+   *
+   * Most callers want {@link bounce} instead of calling this directly — it
+   * builds the whole depth-capped chain of attack-shaped riders.
+   */
+  onDiceMatch(
+    of: readonly string[],
+    damage: RiderDamage,
+    options: Omit<RiderOptions, "of"> = {}
+  ): Turn {
+    return this.rider({ ...options, damage, on: "dice-match", of });
+  }
+
+  /**
    * The exact joint distribution: mass 1, outcome-labelled. Resolved once and
    * cached.
    *
@@ -324,16 +377,30 @@ export class Turn {
     plan.steps.forEach((step, stepIndex) => {
       const next = new Map<string, State>();
 
+      // Groups with no reader at a LATER step are dead weight in the key: once
+      // the walk passes a group's last reader, its specific code can no longer
+      // change any future decision, so two states differing only in a dead
+      // group's code are behaviorally identical from here on. Filtering them
+      // out (recomputed per step, since "later" shifts as the walk advances)
+      // is what actually kept a long `dice-match` chain's state count from
+      // blowing up — a group read by exactly one downstream step (the common
+      // `bounce()` shape) would otherwise keep splitting states for every
+      // subsequent step even though nothing ever reads it again.
+      const liveGroups: number[] = [];
+      for (let g = 0; g < plan.groupCount; g++) {
+        if (plan.groupLastReadStep[g] > stepIndex) liveGroups.push(g);
+      }
+
       const merge = (state: State): void => {
         // Whether each rider fired is part of the state: two paths that agree on
-        // group codes but disagree on a rider's firing must not merge, or a
-        // `not-fired` rider downstream would see an ill-defined predicate.
-        //
-        // Only the fired/not-fired bit belongs in the key, though — nothing
-        // reads the mode back, and keying on it would split otherwise identical
-        // states and multiply the convolutions for no change in the result.
+        // group codes but disagree on a rider's firing must not merge — both
+        // `not-fired` downstream AND the final `fireMass` collapse (every rider
+        // step, not just `not-fired` targets) read `state.fired` per rider, so
+        // every rider step's bit must stay in the key.
+        let codesKey = "";
+        for (const g of liveGroups) codesKey += String.fromCharCode(state.codes[g]);
         const key =
-          String.fromCharCode(...state.codes) +
+          codesKey +
           "\u0001" +
           state.fired.map((mode) => (mode === null ? "-" : "+")).join("");
         const existing = next.get(key);
@@ -365,14 +432,13 @@ export class Turn {
           continue;
         }
 
-        for (const outcome of OUTCOMES) {
-          const slice = step.slices[outcome];
+        for (const { outcome, matched, slice } of stepDraws(step.slices)) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
 
           const codes = [...state.codes];
           for (const group of step.updates) {
-            codes[group] = advance(codes[group], outcome);
+            codes[group] = advance(codes[group], outcome, matched);
           }
           merge({
             codes,
@@ -445,4 +511,38 @@ export function turn(
     { attacks: Array.isArray(attacks) ? attacks : [attacks as Attack] },
     eps
   );
+}
+
+/**
+ * `bounce({ source, max })` — sugar for a depth-capped chain of attack-shaped
+ * `dice-match` riders, so no caller hand-writes the chain by hand: beam 1 is
+ * `source` itself as the turn's only declared attack; beam `i + 1` (for
+ * `i = 1..max`) is `source` again, as a rider fired only when beam `i`'s own
+ * dice matched. Every beam shares `source`'s exact profile (same to-hit, same
+ * damage dice) — the natural reading of "the orb leaps to a new target, same
+ * damage profile, and repeats."
+ *
+ * `max` is required and MUST be a non-negative integer: match probability alone
+ * does not terminate the recursion (Chromatic Orb bounces are not literally
+ * unbounded — DMs cap them by fiat or table size — and something has to).
+ *
+ * Each beam after the first is its own {@link MAX_TRIGGER_GROUPS}-counted trigger
+ * group (`of: [<previous beam's id>]` is a distinct source set every time), so
+ * `max` is effectively capped at the turn's remaining group budget — a chain
+ * asking for more throws `TurnSpecError("too-many-groups", ...)` the same way
+ * any other over-budget turn would, not a silent truncation.
+ */
+export function bounce({ source, max }: { source: Source; max: number }): Turn {
+  if (!Number.isInteger(max) || max < 0) {
+    throw new RangeError(`bounce({ max }) needs a non-negative integer, got ${max}.`);
+  }
+
+  let result = turn(source);
+  let previousId = result.attackIds[0];
+  for (let i = 0; i < max; i++) {
+    const riderId = `bounce ${i + 1}`;
+    result = result.onDiceMatch([previousId], source, { id: riderId });
+    previousId = riderId;
+  }
+  return result;
 }

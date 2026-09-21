@@ -27,6 +27,9 @@ export type SumNode = {
   type: "sum";
   count: number;
   child: ExpressionNode;
+  // Pool-wide exploding-dice budget shared across the whole `count`-die pool (see
+  // `RollConfig.explodePoolBudget`). Undefined/0 = no pool-wide explosion.
+  explodePoolBudget?: number;
 };
 
 export type AddNode = {

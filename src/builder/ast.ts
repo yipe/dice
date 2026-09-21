@@ -82,6 +82,11 @@ export function astFromRollConfigs(
     }
 
     if (cfg.rollType === "flat" && effectiveKeep && effectiveKeep.total > 0) {
+      if (cfg.explodePoolBudget > 0) {
+        throw new Error(
+          "explodePool() cannot be combined with keep()/bestOf() on the same config — the match/keep pool is ambiguous once dice can be added mid-resolution. Use explodePool() on a plain (non-keep) pool."
+        );
+      }
       const baseCount = Math.max(1, Math.floor(Math.abs(count || 1)));
       const trials = Math.max(1, Math.floor(effectiveKeep.total));
       const k = Math.max(0, Math.floor(effectiveKeep.count));
@@ -138,7 +143,17 @@ export function astFromRollConfigs(
       }
     } else {
       const c = appliedRollType ? 1 : Math.max(1, count || 1);
-      node = { type: "sum", count: c, child: node } as SumNode;
+      if (cfg.explodePoolBudget > 0 && appliedRollType) {
+        throw new Error(
+          "explodePool() cannot be combined with advantage/disadvantage/elven-accuracy on the same config — pool-wide explosion is for damage dice pools, not d20 rolls."
+        );
+      }
+      node = {
+        type: "sum",
+        count: c,
+        child: node,
+        explodePoolBudget: cfg.explodePoolBudget > 0 ? cfg.explodePoolBudget : undefined,
+      } as SumNode;
     }
 
     children.push({ node, sign });
@@ -177,6 +192,13 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
         const base = resolve(node.child, eps);
         const n = Math.max(0, Math.floor(node.count));
         if (n === 0) return PMF.delta(0, eps);
+        if (node.explodePoolBudget && Number.isFinite(node.explodePoolBudget) && node.explodePoolBudget > 0) {
+          const die = findDie(node.child);
+          if (!die) {
+            throw new Error("explodePool() requires the pool's child to be a plain die.");
+          }
+          return resolveExplodingPool(base, die.sides, n, Math.floor(node.explodePoolBudget), eps);
+        }
         if (n === 1) return base;
         return base.power(n, eps);
       }
@@ -395,6 +417,55 @@ export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
 
   singleDiePMFCache.set(cacheKey, pmf);
   return pmf;
+}
+
+/**
+ * Resolve a pool of `count` i.i.d. dice sharing ONE pool-wide exploding-dice budget: at most
+ * `budget` extra dice may be added in total across the whole pool, as opposed to per-die
+ * `explode()` (each of the `count` dice individually allowed its own extra dice). `diePMF` is
+ * the already-resolved single-die marginal (post reroll/minimum, no per-die explode — the two
+ * mechanisms are mutually exclusive by construction).
+ *
+ * DP over `(pending dice, budget remaining)`, resolving one arbitrary pending die per step:
+ *   f(p, b) = (non-max faces) ⊗ f(p-1, b)                      -- this die didn't explode
+ *           + (max face)      ⊗ (b > 0 ? f(p, b-1) : f(p-1, b)) -- did explode; spends 1 budget,
+ *                                                                   pending count stays p because
+ *                                                                   the extra die takes its place
+ *   f(0, b) = δ₀ ;  f(p, 0) = diePMF.power(p)
+ * Acyclic: every recursive call strictly decreases `p + b`, so memoizing on that pair terminates.
+ */
+function resolveExplodingPool(
+  diePMF: PMF,
+  maxFace: number,
+  count: number,
+  budget: number,
+  eps: number
+): PMF {
+  const pMax = diePMF.pAt(maxFace);
+  const nonMax = new Map<number, number>();
+  for (const v of diePMF.support()) {
+    if (v !== maxFace) nonMax.set(v, diePMF.pAt(v));
+  }
+  const nonMaxPMF = PMF.fromMap(nonMax, eps);
+
+  const memo = new Map<string, PMF>();
+  const f = (p: number, b: number): PMF => {
+    if (p === 0) return PMF.delta(0, eps);
+    if (b === 0) return diePMF.power(p, eps);
+
+    const key = `${p},${b}`;
+    const cached = memo.get(key);
+    if (cached) return cached;
+
+    const maxBranch = f(p, b - 1).mapDamage((v) => v + maxFace);
+    const nonMaxBranch = nonMaxPMF.convolve(f(p - 1, b), eps);
+    const result = PMF.branch(maxBranch, nonMaxBranch, pMax);
+
+    memo.set(key, result);
+    return result;
+  };
+
+  return f(count, budget);
 }
 
 // Getters
@@ -662,7 +733,7 @@ export function getASTSignature(node: ExpressionNode): string {
       return `d{${parts.join(",")}}`;
     }
     case "sum":
-      return `sum{c:${node.count},ch:${getASTSignature(node.child)}}`;
+      return `sum{c:${node.count},b:${node.explodePoolBudget || 0},ch:${getASTSignature(node.child)}}`;
     case "d20Roll":
       return `d20{t:${node.rollType},ch:${getASTSignature(node.child)}}`;
     case "keep":
