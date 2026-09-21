@@ -28,6 +28,10 @@ export type RollConfig = {
   modifier: number;
   reroll: number; // Reroll threshold k (k >= 0). Implements one-pass, reroll-once, must-keep on faces {1..k}.
   explode: number;
+  // Pool-wide exploding-dice budget: at most this many extra dice may be added to the WHOLE
+  // pool (shared across all dice in it), as opposed to `explode`'s per-die cap. Mutually
+  // exclusive with `explode` on the same config — see `RollBuilder.explodePool()`.
+  explodePoolBudget: number;
   minimum: number;
   bestOf: number;
   keep: { total: number; count: number; mode: KeepMode } | undefined;

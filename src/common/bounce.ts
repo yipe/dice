@@ -22,6 +22,41 @@ export interface BounceOddsOptions {
   rerollDamageDice?: number;
 }
 
+/**
+ * Exact per-face probability marginal for a single die, honoring threshold `reroll(k)` and
+ * `minimum(v)` — the SAME two transforms `resolveSingleDie` (`builder/ast.ts`) applies, in the
+ * same order (reroll, then minimum-floor), so a caller building `weights` for
+ * `jointSumAndMatch`/`explodingPoolMatchProbability` gets face weights consistent with the pool's
+ * actual resolved PMF. Returns a 1-indexed array (`weights[v - 1] = P(shows v)`, `1 <= v <= faces`);
+ * a face collapsed onto by `minimum` carries its collapsed neighbors' mass, and a face below
+ * `minimum` carries zero.
+ */
+export function faceWeights(faces: number, minimum = 0, reroll = 0): number[] {
+  const f = Math.max(0, Math.floor(faces));
+  if (f <= 0) return [];
+
+  let weights = new Array<number>(f).fill(1 / f);
+
+  const r = Math.max(0, Math.min(Math.floor(reroll), f));
+  if (r > 0) {
+    const rerollMass = r / f;
+    const uniformReroll = rerollMass / f;
+    weights = weights.map((_, i) => (i < r ? 0 : 1 / f) + uniformReroll);
+  }
+
+  const minV = Math.max(0, Math.floor(minimum));
+  if (minV > 1) {
+    const collapsed = new Array<number>(f).fill(0);
+    for (let v = 1; v <= f; v++) {
+      const target = Math.min(f, Math.max(v, minV));
+      collapsed[target - 1] += weights[v - 1];
+    }
+    weights = collapsed;
+  }
+
+  return weights;
+}
+
 /** Binomial coefficient C(n, k), 0 for out-of-range k. */
 function binom(n: number, k: number): number {
   if (k < 0 || k > n) return 0;
@@ -119,4 +154,201 @@ export function calculateBounceOdds(
   );
 
   return Math.min(1, pMatchFirst + pNoMatchFirst * pMatchAfterReroll);
+}
+
+/**
+ * Exact joint P(sum ∧ match), K = 2 hardcoded (per design: every shipped 5e bounce mechanic is
+ * "two or more" — see `CHROMATIC_ORB.md`). `K > 2` (a face with multiplicity ≥ K) is a harder
+ * combinatorial problem with no consumer; a `match` parameter whose only legal value is 2 would
+ * advertise a generality this DP does not have, so it is not offered.
+ *
+ * `weights` is the resolved single-die marginal's per-face probabilities, 1-indexed
+ * (`weights[v - 1] = P(one die shows v)`) — NOT assumed uniform, so `minimum`/threshold `reroll`
+ * (which collapse or reweight faces) compose correctly. Dice are i.i.d. and homogeneous (same
+ * `weights` for all of them): a mixed-face-size pool (e.g. 2d6 + 1d4) is a genuinely different,
+ * harder problem (dice are no longer exchangeable) with no consumer here.
+ */
+
+/** Exact P(sum = s) for `dice` i.i.d. dice sharing `weights`, as a sum -> mass map. */
+export function diceSumDistribution(dice: number, weights: readonly number[]): Map<number, number> {
+  let dist = new Map<number, number>([[0, 1]]);
+  for (let die = 0; die < dice; die++) {
+    const next = new Map<number, number>();
+    for (const [sum, mass] of dist) {
+      for (let face = 1; face <= weights.length; face++) {
+        const w = weights[face - 1] ?? 0;
+        if (w <= 0) continue;
+        const s = sum + face;
+        next.set(s, (next.get(s) ?? 0) + mass * w);
+      }
+    }
+    dist = next;
+  }
+  return dist;
+}
+
+/**
+ * Exact P(sum = s ∧ all `dice` values distinct), via the elementary-symmetric DP over faces:
+ * `dp[c+1][s+f] += dp[c][s] · w_f`, each face used at most once (0/1 knapsack over faces, tracking
+ * both count and sum). `P(sum = s ∧ all distinct) = dice! · dp[dice][s]` — `dp[dice][s]` sums over
+ * unordered subsets of `dice` distinct faces; multiplying by `dice!` accounts for every way to
+ * assign that subset to the `dice` labeled dice.
+ */
+function sumAllDistinctDistribution(dice: number, weights: readonly number[]): Map<number, number> {
+  const faceCount = weights.length;
+  let dp = new Map<number, Map<number, number>>([[0, new Map([[0, 1]])]]);
+
+  for (let face = 1; face <= faceCount; face++) {
+    const w = weights[face - 1] ?? 0;
+    const next = new Map<number, Map<number, number>>();
+    for (const [count, sumMap] of dp) next.set(count, new Map(sumMap));
+
+    if (w > 0) {
+      for (const [count, sumMap] of dp) {
+        const nextCount = count + 1;
+        if (nextCount > dice) continue;
+        const target = next.get(nextCount) ?? new Map<number, number>();
+        for (const [sum, mass] of sumMap) {
+          const s = sum + face;
+          target.set(s, (target.get(s) ?? 0) + mass * w);
+        }
+        next.set(nextCount, target);
+      }
+    }
+    dp = next;
+  }
+
+  let factorial = 1;
+  for (let i = 2; i <= dice; i++) factorial *= i;
+
+  const chosen = dp.get(dice) ?? new Map<number, number>();
+  const result = new Map<number, number>();
+  for (const [sum, mass] of chosen) result.set(sum, mass * factorial);
+  return result;
+}
+
+/**
+ * Exact joint P(sum = s ∧ match) for `dice` i.i.d. dice sharing `weights`
+ * (`P(sum ∧ match) = P(sum) − P(sum ∧ all distinct)`). Returns a sum -> mass map; sums with zero
+ * match mass are omitted. `dice <= 1` returns an empty map (no match possible).
+ */
+export function jointSumAndMatch(dice: number, weights: readonly number[]): Map<number, number> {
+  if (dice <= 1) return new Map();
+
+  const total = diceSumDistribution(dice, weights);
+  const distinct = sumAllDistinctDistribution(dice, weights);
+
+  const result = new Map<number, number>();
+  for (const [sum, mass] of total) {
+    const matchMass = Math.max(0, mass - (distinct.get(sum) ?? 0));
+    if (matchMass > 0) result.set(sum, matchMass);
+  }
+  return result;
+}
+
+/**
+ * The joint distribution over `(m, k)` — `m` dice landing on the pool's max face, `k` on anything
+ * else — realized by the SAME `(pending, budget)` walk as the pool-wide exploding-dice DP
+ * (`resolveExplodingPool` in `builder/ast.ts`): one traversal serves both the sum (there) and this
+ * match composition (here), rather than each needing its own. `pMax` is the max face's probability
+ * under the single die's resolved marginal.
+ */
+function explodingPoolMkDistribution(
+  pMax: number,
+  count: number,
+  budget: number
+): Map<string, number> {
+  const binomial = (n: number, p: number): number[] => {
+    const result = new Array<number>(n + 1).fill(0);
+    result[0] = 1;
+    for (let trial = 0; trial < n; trial++) {
+      const next = new Array<number>(n + 1).fill(0);
+      for (let successes = 0; successes <= trial; successes++) {
+        const mass = result[successes];
+        if (mass <= 0) continue;
+        next[successes] += mass * (1 - p);
+        next[successes + 1] += mass * p;
+      }
+      for (let i = 0; i <= n; i++) result[i] = next[i];
+    }
+    return result;
+  };
+
+  const memo = new Map<string, Map<string, number>>();
+  const f = (pending: number, remainingBudget: number): Map<string, number> => {
+    if (pending === 0) return new Map([["0,0", 1]]);
+    if (remainingBudget === 0) {
+      const binom = binomial(pending, pMax);
+      const result = new Map<string, number>();
+      for (let m = 0; m <= pending; m++) {
+        const mass = binom[m];
+        if (mass > 0) result.set(`${m},${pending - m}`, mass);
+      }
+      return result;
+    }
+
+    const key = `${pending},${remainingBudget}`;
+    const cached = memo.get(key);
+    if (cached) return cached;
+
+    const result = new Map<string, number>();
+    const accumulate = (mk: string, mass: number): void => {
+      result.set(mk, (result.get(mk) ?? 0) + mass);
+    };
+
+    for (const [mk, mass] of f(pending, remainingBudget - 1)) {
+      const [m, k] = mk.split(",").map(Number);
+      accumulate(`${m + 1},${k}`, mass * pMax);
+    }
+    for (const [mk, mass] of f(pending - 1, remainingBudget)) {
+      const [m, k] = mk.split(",").map(Number);
+      accumulate(`${m},${k + 1}`, mass * (1 - pMax));
+    }
+
+    memo.set(key, result);
+    return result;
+  };
+
+  return f(count, budget);
+}
+
+/**
+ * P(match) for a pool sharing ONE pool-wide exploding-dice budget (see
+ * `RollBuilder.explodePool()`). The plain `jointSumAndMatch`/`calculateBounceOdds` formulas assume
+ * `dice` i.i.d. dice — false for an exploded pool, since conditioning on a realized size already
+ * reveals some die rolled max. Exploiting that max is the only exploding face: condition on `m`
+ * (dice showing max) and `k` (dice showing anything else) —
+ *
+ * `m ≥ 2` → match is certain (two dice already share the max face).
+ * `m ≤ 1` → match iff the `k` non-max dice collide among themselves, uniform over `faces - 1`
+ *           non-max faces (they cannot collide with the max face, so the two parts separate).
+ *
+ * `pMax` and `faces` describe the single (non-exploding-budget) die's resolved marginal —
+ * `pMax = weights[faces - 1]`.
+ */
+export function explodingPoolMatchProbability(
+  pMax: number,
+  faces: number,
+  count: number,
+  budget: number
+): number {
+  if (count <= 1) return 0;
+
+  const mkDistribution = explodingPoolMkDistribution(pMax, count, budget);
+  const nonMaxFaces = Math.max(1, faces - 1);
+
+  let pMatchTotal = 0;
+  for (const [mk, weight] of mkDistribution) {
+    const [m, k] = mk.split(",").map(Number);
+    if (m >= 2) {
+      pMatchTotal += weight;
+      continue;
+    }
+    let pAllDistinctAmongNonMax = 1;
+    for (let i = 0; i < k; i++) {
+      pAllDistinctAmongNonMax *= (nonMaxFaces - i) / nonMaxFaces;
+    }
+    pMatchTotal += weight * (1 - Math.max(0, pAllDistinctAmongNonMax));
+  }
+  return Math.min(1, Math.max(0, pMatchTotal));
 }
