@@ -34,7 +34,7 @@ export type StepOutcome = "hit" | "crit" | "miss";
 export function advance(code: number, outcome: StepOutcome, matched = false): number {
   if (outcome === "miss") return code | MISS_BIT;
 
-  const first = code >> 2;
+  const first = (code >> 2) & 0b11;
   const withCrit = outcome === "crit" ? code | CRIT_BIT : code;
   const withMatch = matched ? withCrit | MATCH_BIT : withCrit;
   if (first !== FIRST_NONE) return withMatch;

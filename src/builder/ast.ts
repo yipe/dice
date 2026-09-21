@@ -446,6 +446,13 @@ function resolveExplodingPool(
   for (const v of diePMF.support()) {
     if (v !== maxFace) nonMax.set(v, diePMF.pAt(v));
   }
+  // Every face is the max face (a 1-sided die, or `minimum` at/above `sides`): no roll can be
+  // non-max, so every one of the `count` dice AND every one of the `budget` explosions it
+  // triggers shows max — the pool is deterministically `count + budget` max faces. Must be
+  // checked before `PMF.fromMap(nonMax, ...)`, which throws on an empty map.
+  if (nonMax.size === 0) {
+    return PMF.delta((count + budget) * maxFace, eps);
+  }
   const nonMaxPMF = PMF.fromMap(nonMax, eps);
 
   const memo = new Map<string, PMF>();

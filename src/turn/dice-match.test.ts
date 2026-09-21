@@ -59,32 +59,26 @@ describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds",
     expect(hit).toBeNull();
   });
 
-  it("a single die can never match", () => {
+  it("a single die is a supported source with zero match probability, not a missing descriptor", () => {
     const attack = d20.plus(5).ac(17).onHit(roll(1, d8));
     const { hit, crit } = attack.diceMatchInfo();
-    // Hit pool is 1 die (can't match); crit pool auto-doubles to 2 dice (can).
-    expect(hit).toBeNull();
+    // Hit pool is 1 die: supported, but can never match — non-null, empty map.
+    expect(hit).not.toBeNull();
+    expect(hit!.matchProbabilityByDamage.size).toBe(0);
+    // Crit pool auto-doubles to 2 dice: can match.
     expect(crit).not.toBeNull();
+    expect(crit!.matchProbabilityByDamage.size).toBeGreaterThan(0);
   });
 });
 
 describe("dice-match trigger — validation", () => {
-  it("naming a bare PMF source is a no-dice-descriptor TurnSpecError", () => {
-    const attack = chromaticOrb(3);
-    expect(() =>
-      turn(attack).onDiceMatch(["attack 1"], chromaticOrb(3)).rider({
-        damage: chromaticOrb(3),
-        on: "dice-match",
-        of: ["nonexistent"],
-      })
-    ).toThrow(TurnSpecError);
-  });
-
-  it("naming a keep()-pool source is a no-dice-descriptor TurnSpecError", () => {
-    const ambiguous = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3));
-    expect(() => turn(ambiguous).onDiceMatch(["attack 1"], chromaticOrb(3))).toThrow(TurnSpecError);
+  it("naming a bare PMF source (no diceMatchInfo() capability) is a no-dice-descriptor TurnSpecError", () => {
+    // An outcome-labelled PMF, but a bare PMF has no diceMatchInfo() capability at all — distinct
+    // from a supported source that simply can't match (e.g. a single die), which must NOT throw.
+    const barePMF = chromaticOrb(3).toPMF();
+    expect(() => turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3))).toThrow(TurnSpecError);
     try {
-      turn(ambiguous).onDiceMatch(["attack 1"], chromaticOrb(3));
+      turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3));
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(TurnSpecError);
@@ -92,9 +86,40 @@ describe("dice-match trigger — validation", () => {
     }
   });
 
+  it("a one-die hit pool with a matchable auto-doubled crit pool does NOT throw (regression: null used to mean both 'unsupported' and 'can't match')", () => {
+    const attack = d20.plus(5).ac(17).onHit(roll(1, d8));
+    expect(() => turn(attack).onDiceMatch(["attack 1"], chromaticOrb(3)).mean()).not.toThrow();
+  });
+
   it("a turn with no dice-match trigger never computes match info (no thrown error, no slicing)", () => {
     const t = turn(chromaticOrb(3)).onFirstHit(roll(1, d8));
     expect(() => t.mean()).not.toThrow();
+  });
+});
+
+describe("dice-match trigger — MATCH_BIT sharing a group with a first-hit trigger (regression)", () => {
+  it("a first-hit rider still fires in crit mode when its group also matched", () => {
+    // Deterministic: every landed attack crits (alwaysHits().alwaysCrits()), so `first` is ALWAYS
+    // FIRST_CRIT once the attack lands, independent of whether the dice also matched. Sharing the
+    // group with a `dice-match` rider sets MATCH_BIT (bit 4) on the SAME code whenever a match also
+    // occurs — bit 4 must not corrupt the `first` field's `code >> 2` decode (bits 2-3). Buggy
+    // decode: a matched crit reads `first` as non-FIRST_CRIT and fires the first-hit rider in the
+    // WRONG (undoubled) mode.
+    const attack = d20.alwaysHits().alwaysCrits().onHit(roll(3, d8));
+    const pMatch = calculateBounceOdds(6, 8); // crit doubles 3d8 -> 6d8
+
+    const t = turn(attack)
+      .onFirstHit(roll(1, 4), { of: ["attack 1"] }) // crit-doubles to 2d4 (mean 5) on a crit
+      .onDiceMatch(["attack 1"], roll(1, 1), { id: "match-marker" }); // deterministic +1 when matched
+
+    // attack mean(6d8)=27 + firstHit ALWAYS crit-mode mean(2d4)=5 + match-marker fires w.p. pMatch
+    const expectedMean = 27 + 5 + pMatch * 1;
+    expect(t.mean()).toBeCloseTo(expectedMean, 9);
+
+    // The buggy decode instead read a matched crit as non-crit, undercounting toward
+    // 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch — a materially different, WRONG total.
+    const buggyMean = 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch * 1;
+    expect(t.mean()).not.toBeCloseTo(buggyMean, 2);
   });
 });
 

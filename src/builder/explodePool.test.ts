@@ -59,4 +59,22 @@ describe("RollBuilder.explodePool() — pool-wide exploding-dice budget", () => 
     expect(pmf.mean()).toBeCloseTo(5.1416015625, 10);
     expect(pmf.mass()).toBeCloseTo(1, 10);
   });
+
+  // A degenerate die where every face is the max (a 1-sided die, or `minimum` collapsing every
+  // face at/above `sides`) used to throw building the empty non-max PMF eagerly, before the DP
+  // ever ran. Every one of `count` dice AND every explosion it triggers must show max: the pool
+  // is deterministically `count + budget` max faces.
+  it("a degenerate one-sided die pool does not throw and is deterministic (count + budget) * maxFace", () => {
+    const pmf = roll(2, 1).explodePool(1).toPMF();
+    expect(pmf.mean()).toBeCloseTo(3, 10); // (2 + 1) * 1
+    expect(pmf.mass()).toBeCloseTo(1, 12);
+    expect(pmf.support()).toEqual([3]);
+  });
+
+  it("minimum() collapsing every face onto the max does not throw", () => {
+    const pmf = roll(2, d8).minimum(8).explodePool(1).toPMF();
+    expect(pmf.mean()).toBeCloseTo(24, 10); // (2 + 1) * 8
+    expect(pmf.mass()).toBeCloseTo(1, 12);
+    expect(pmf.support()).toEqual([24]);
+  });
 });

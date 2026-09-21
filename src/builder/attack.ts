@@ -342,7 +342,13 @@ export class AttackBuilder implements CheckBuilder {
     const config = diceConfigs[0];
     if (config.keep || config.bestOf > 0) return null;
     if (config.explodePoolBudget > 0) return null;
-    if (config.count <= 1) return null;
+
+    // A single die is a SUPPORTED source that can simply never match — `null` is reserved for
+    // "no descriptor available at all" (parsed/pooled/keep/bestOf/exploding). Conflating the two
+    // previously made a valid 1-die hit pool with an auto-doubled 2-die crit pool (which CAN
+    // match) throw `no-dice-descriptor` on the hit branch alone. An empty map still answers every
+    // `matchProbabilityByDamage.get(d) ?? 0` lookup with the correct zero.
+    if (config.count <= 1) return { matchProbabilityByDamage: new Map() };
 
     const weights = faceWeights(config.sides, config.minimum, config.reroll);
     const totalDist = diceSumDistribution(config.count, weights);

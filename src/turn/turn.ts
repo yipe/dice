@@ -76,7 +76,7 @@ function fireMode(
   }
 
   const code = codes[step.reads];
-  const first = code >> 2;
+  const first = (code >> 2) & 0b11;
 
   switch (trigger.on) {
     case "first-hit":
@@ -467,7 +467,7 @@ export class Turn {
       }
       // `every-hit` riders have no step: they fired iff something landed.
       for (const [id, group] of plan.perHitGroups) {
-        if (state.codes[group] >> 2 !== FIRST_NONE) {
+        if (((state.codes[group] >> 2) & 0b11) !== FIRST_NONE) {
           fireMass.set(id, (fireMass.get(id) as number) + mass);
         }
       }
