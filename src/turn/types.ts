@@ -1,4 +1,7 @@
+import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
 import type { PMF } from "../pmf/pmf";
+
+export type { DiceMatchInfo, HasDiceMatchInfo };
 
 /**
  * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
@@ -19,16 +22,24 @@ export type AttackTriggerOn =
  * - `any-crit` — at least one source crit. Always fires in crit mode (Divine Smite).
  * - `any-miss` — at least one source missed. The reroll gate (Unerring Accuracy, Lucky).
  * - `every-hit` — once per landing source, in that hit's mode (Hunter's Mark, Hex, Rage).
+ * - `dice-match` — at least one named source's own damage dice showed a duplicate
+ *   value on hit or crit (Chromatic Orb's bounce). `of` is REQUIRED — unlike the
+ *   other attack triggers, "every declared attack" has no coherent single meaning
+ *   for "the dice matched", so there is no default. Each named source must expose
+ *   a {@link HasDiceMatchInfo} descriptor (an `AttackBuilder`-shaped source does);
+ *   naming one that doesn't (a bare `PMF`, a `keep`/`bestOf` pool, a string-parsed
+ *   expression) is a `TurnSpecError`, not a silent "never matches".
  * - `not-fired` — the named rider did **not** fire ("flurry of blows if I didn't smite").
  *
- * For the attack triggers `of` is a list of attack ids and defaults to every
- * declared attack, which is what most riders mean. For `not-fired` it is the
- * single required id of the rider being negated — negating a set of riders has
- * no unambiguous meaning, so the type does not offer it.
+ * For the attack triggers besides `dice-match`, `of` is a list of attack ids and
+ * defaults to every declared attack, which is what most riders mean. For
+ * `not-fired` it is the single required id of the rider being negated — negating
+ * a set of riders has no unambiguous meaning, so the type does not offer it.
  */
 export type Trigger =
   | { on: AttackTriggerOn; of?: readonly string[] }
-  | { on: "not-fired"; of: string };
+  | { on: "not-fired"; of: string }
+  | { on: "dice-match"; of: readonly string[] };
 
 /** Anything that can produce a PMF: `RollBuilder`, `AttackBuilder`, `SaveBuilder`, or a `PMF`. */
 export interface ToPMF {
@@ -90,7 +101,8 @@ export type TurnSpecErrorCode =
   | "cycle"
   | "not-an-attack"
   | "unused-crit-damage"
-  | "too-many-groups";
+  | "too-many-groups"
+  | "no-dice-descriptor";
 
 /**
  * A malformed turn. `code` is a stable contract: consumer UIs map it to their own
@@ -112,9 +124,19 @@ export class TurnSpecError extends Error {
  * How many distinct `of` sets a single turn may track.
  *
  * Each group multiplies the state space, so the cap is a cost ceiling rather
- * than a modelling limit. Measured on four attacks with two riders per group:
- * 2.1ms for one group, 3.1 for two, 5.9 for three, 23.5 for four — roughly 4x
- * per group. Real builds use one or two (the goliath rogue/monk/paladin uses
- * one), so four leaves plenty of room while keeping an AC sweep viable.
+ * than a modelling limit. Measured on four attacks with two riders per group
+ * (every group fed by multiple independent sources — the expensive, dense
+ * case): 2.1ms for one group, 3.1 for two, 5.9 for three, 23.5 for four —
+ * roughly 4x per group. A `bounce()` chain is the opposite case — each group
+ * is fed by exactly ONE step, and the chain is strictly sequential (group N+1
+ * only ever reads a nonzero state once group N has already resolved), so its
+ * reachable state space grows close to linearly rather than combinatorially;
+ * see `dice-match.test.ts`'s latency measurement.
+ *
+ * 9, not 4: Chromatic Orb's `effectCountScaling: 'spell_level_plus_one'` needs
+ * up to `1 + 9 = 10` beams at a 9th-level slot — 9 additional bounces beyond
+ * the first. A non-bounce turn tracking 9 independent dense groups would be
+ * the pathological case the latency table above warns about; real builds use
+ * one or two (the goliath rogue/monk/paladin uses one).
  */
-export const MAX_TRIGGER_GROUPS = 4;
+export const MAX_TRIGGER_GROUPS = 9;

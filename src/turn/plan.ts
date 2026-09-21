@@ -1,4 +1,5 @@
 import { EPS } from "../common/types";
+import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
 import { PMF } from "../pmf/pmf";
 import type {
   Attack,
@@ -34,6 +35,35 @@ export interface TurnPlan {
    * rather than becoming steps, so they have no step index.
    */
   perHitGroups: ReadonlyMap<string, number>;
+  /**
+   * The LAST step index (in final walk order) that reads each group, by group
+   * index — `steps.length` for a group `perHitGroups` still needs at the final
+   * collapse. Once the walk passes a group's last reader, its specific code
+   * stops discriminating any future decision, so `Turn.resolve`'s `merge` stops
+   * keying on it past that point — the dominant cost fix for a long `dice-match`
+   * chain (a group read by exactly one downstream step, the common shape, would
+   * otherwise keep splitting states for every step after that single read).
+   */
+  groupLastReadStep: readonly number[];
+}
+
+/**
+ * Outcome-labelled sub-mass PMFs for one source, masses summing to 1.
+ *
+ * `hitMatch`/`hitNoMatch`/`critMatch`/`critNoMatch` are non-null only when this
+ * source is referenced by a `dice-match` trigger's `of` — computing the exact
+ * per-damage match split costs a DP walk, so it is opt-in per source rather than
+ * always paid. When present, `hitMatch.add(hitNoMatch) === hit` (and similarly for
+ * crit) up to floating-point mass.
+ */
+export interface SourceSlices {
+  hit: PMF;
+  crit: PMF;
+  miss: PMF;
+  hitMatch: PMF | null;
+  hitNoMatch: PMF | null;
+  critMatch: PMF | null;
+  critNoMatch: PMF | null;
 }
 
 /**
@@ -45,8 +75,7 @@ export interface Step {
   id: string;
   /** Declared attacks always fire; riders consult their trigger. */
   trigger: Trigger | null;
-  /** Outcome-labelled sub-mass PMFs, masses summing to 1. */
-  slices: { hit: PMF; crit: PMF; miss: PMF } | null;
+  slices: SourceSlices | null;
   /** Pure-damage payloads, mass 1 each. */
   damage: { hit: PMF; crit: PMF } | null;
   /** Group indices this step's outcome advances. */
@@ -57,11 +86,14 @@ export interface Step {
   negates: number;
 }
 
-const IS_HIT_TRIGGER: Record<string, true> = {
+/** Trigger kinds that read a group's accumulated state (as opposed to `not-fired`,
+ * which reads another rider's fire/not-fire bit directly). */
+const READS_GROUP: Record<string, true> = {
   "first-hit": true,
   "any-crit": true,
   "any-miss": true,
   "every-hit": true,
+  "dice-match": true,
 };
 
 function toPMF(
@@ -127,11 +159,32 @@ function critPMF(rider: Rider, base: PMF, eps: number): PMF {
   return PMF.convolveMany(doubled, eps);
 }
 
+/** Duck-typed lookup of a `Damage` source's `dice-match` descriptor. Absence
+ * (a bare `PMF`, or a `ToPMF` that does not implement {@link HasDiceMatchInfo})
+ * is a defined "no match info" state — `{ hit: null, crit: null }` — not a crash. */
+function diceMatchInfoOf(
+  source: Damage,
+  eps: number
+): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
+  const capable = source as Partial<HasDiceMatchInfo>;
+  if (typeof capable.diceMatchInfo === "function") {
+    return capable.diceMatchInfo(eps);
+  }
+  return { hit: null, crit: null };
+}
+
 /**
  * Split a source into hit / crit / miss sub-mass PMFs, or return null when the
  * PMF carries no outcome labels (a plain damage roll is not an attack).
+ *
+ * `matchInfo` — when supplied — further splits the hit and/or crit sub-mass by
+ * exact per-damage match probability (see {@link SourceSlices}). Only requested
+ * for sources a `dice-match` trigger actually names.
  */
-function sliceSource(pmf: PMF): { hit: PMF; crit: PMF; miss: PMF } | null {
+function sliceSource(
+  pmf: PMF,
+  matchInfo?: { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } | null
+): SourceSlices | null {
   const labels = pmf.outcomes();
   if (!labels.includes("hit") && !labels.includes("crit")) return null;
 
@@ -139,13 +192,31 @@ function sliceSource(pmf: PMF): { hit: PMF; crit: PMF; miss: PMF } | null {
     .filter((label) => labels.includes(label))
     .map((label) => pmf.filterOutcome(label));
 
-  return {
-    hit: labels.includes("hit") ? pmf.filterOutcome("hit") : PMF.emptyMass(),
-    crit: labels.includes("crit") ? pmf.filterOutcome("crit") : PMF.emptyMass(),
-    miss: missParts.length
-      ? missParts.reduce((all, part) => all.add(part))
-      : PMF.emptyMass(),
-  };
+  const hit = labels.includes("hit") ? pmf.filterOutcome("hit") : PMF.emptyMass();
+  const crit = labels.includes("crit") ? pmf.filterOutcome("crit") : PMF.emptyMass();
+  const miss = missParts.length
+    ? missParts.reduce((all, part) => all.add(part))
+    : PMF.emptyMass();
+
+  let hitMatch: PMF | null = null;
+  let hitNoMatch: PMF | null = null;
+  let critMatch: PMF | null = null;
+  let critNoMatch: PMF | null = null;
+
+  if (matchInfo?.hit) {
+    const info = matchInfo.hit;
+    const [m, nm] = hit.splitByFactor((d) => info.matchProbabilityByDamage.get(d) ?? 0);
+    hitMatch = m;
+    hitNoMatch = nm;
+  }
+  if (matchInfo?.crit) {
+    const info = matchInfo.crit;
+    const [m, nm] = crit.splitByFactor((d) => info.matchProbabilityByDamage.get(d) ?? 0);
+    critMatch = m;
+    critNoMatch = nm;
+  }
+
+  return { hit, crit, miss, hitMatch, hitNoMatch, critMatch, critNoMatch };
 }
 
 export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
@@ -153,10 +224,22 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     throw new TurnSpecError(code, id, message);
   };
 
+  const riders = spec.riders ?? [];
+
+  // A raw pre-scan (before validation/ordering) for which source ids a `dice-match`
+  // trigger names — computing an exact match split costs a DP walk, so it is only
+  // ever done for sources that actually need it.
+  const matchNeededSourceIds = new Set<string>();
+  for (const rider of riders) {
+    if (rider.on === "dice-match") {
+      for (const sourceId of rider.of) matchNeededSourceIds.add(sourceId);
+    }
+  }
+
   // --- attacks -------------------------------------------------------------
   const attackIds: string[] = [];
   const attackPMFs: PMF[] = [];
-  const attackSlices: ({ hit: PMF; crit: PMF; miss: PMF } | null)[] = [];
+  const attackSlices: (SourceSlices | null)[] = [];
 
   spec.attacks.forEach((entry: Attack, index) => {
     const named = entry as { id?: string; source?: Damage };
@@ -165,13 +248,14 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const id = hasWrapper ? (named.id as string) : `attack ${index + 1}`;
     const source = hasWrapper ? (named.source as Damage) : (entry as Damage);
     const pmf = toPMF(source, eps, id);
+    const matchInfo = matchNeededSourceIds.has(id)
+      ? diceMatchInfoOf(source, eps)
+      : null;
 
     attackIds.push(id);
     attackPMFs.push(pmf);
-    attackSlices.push(sliceSource(pmf));
+    attackSlices.push(sliceSource(pmf, matchInfo));
   });
-
-  const riders = spec.riders ?? [];
 
   // --- ids -----------------------------------------------------------------
   const riderIds = riders.map((rider, index) => rider.id ?? `rider ${index + 1}`);
@@ -183,6 +267,24 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
   const attackIndexById = new Map(attackIds.map((id, index) => [id, index]));
   const riderIndexById = new Map(riderIds.map((id, index) => [id, index]));
+
+  /** Throws `no-dice-descriptor` if `sourceId`'s hit/crit branches (whichever
+   * exist) lack the match info a `dice-match` trigger on `riderId` needs. */
+  const checkMatchable = (
+    riderId: string,
+    sourceId: string,
+    slices: SourceSlices
+  ): void => {
+    const missingHit = slices.hit.mass() > 0 && slices.hitMatch === null;
+    const missingCrit = slices.crit.mass() > 0 && slices.critMatch === null;
+    if (missingHit || missingCrit) {
+      fail(
+        "no-dice-descriptor",
+        sourceId,
+        `Rider "${riderId}" reads "${sourceId}" for "dice-match", but "${sourceId}" has no dice descriptor to match against — a bare PMF, a string-parsed expression, or a keep()/bestOf() pool (ambiguous "the dice" under crit doubling) cannot be matched.`
+      );
+    }
+  };
 
   // --- references ----------------------------------------------------------
   // `of` lists for hit triggers, defaulted to every declared attack.
@@ -216,7 +318,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     // instead of consuming a second slot and tripping `too-many-groups` on a
     // turn that is really tracking one source set. Repeats are otherwise
     // harmless: advancing a group twice for one outcome is idempotent.
-    const of = [...new Set(rider.of ?? attackIds)];
+    const of = [...new Set(rider.on === "dice-match" ? rider.of : (rider.of ?? attackIds))];
     if (of.length === 0) {
       fail("unknown-id", id, `Rider "${id}" has no sources.`);
     }
@@ -240,10 +342,16 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           `Rider "${id}" triggers on "${sourceId}", an every-hit rider. Those are folded into their own sources rather than resolved separately, so they cannot be triggered on — point at the attacks instead.`
         );
       }
+      const damageSource = isAttack ? undefined : riders[riderIndex as number].damage;
+      const singleDamageSource: Damage | undefined =
+        damageSource !== undefined && !Array.isArray(damageSource) ? (damageSource as Damage) : undefined;
       const slices = isAttack
         ? attackSlices[attackIndexById.get(sourceId) as number]
         : sliceSource(
-            toPMF(riders[riderIndex as number].damage, eps, sourceId)
+            toPMF(damageSource as Damage | readonly Damage[], eps, sourceId),
+            matchNeededSourceIds.has(sourceId) && singleDamageSource !== undefined
+              ? diceMatchInfoOf(singleDamageSource, eps)
+              : null
           );
       if (!slices) {
         fail(
@@ -251,6 +359,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           sourceId,
           `Rider "${id}" triggers on "${sourceId}", which has no hit/crit outcomes.`
         );
+      } else if (rider.on === "dice-match") {
+        checkMatchable(id, sourceId, slices);
       }
     }
     return [...of];
@@ -308,7 +418,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const perHitGroups = new Map<string, number>();
   for (const index of order) {
     const rider = riders[index];
-    if (!IS_HIT_TRIGGER[rider.on]) continue;
+    if (!READS_GROUP[rider.on]) continue;
     const group = groupOf(sourceIdsByRider[index]);
     readsByRider.set(index, group);
     if (rider.on === "every-hit") perHitGroups.set(riderIds[index], group);
@@ -339,30 +449,41 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     }
   });
 
-  const withPerHit = (
-    slices: { hit: PMF; crit: PMF; miss: PMF },
-    id: string
-  ): { hit: PMF; crit: PMF; miss: PMF } => {
+  const withPerHit = (slices: SourceSlices, id: string): SourceSlices => {
     const payloads = perHitBySource.get(id);
     if (!payloads) return slices;
     let hit = slices.hit;
     let crit = slices.crit;
+    let hitMatch = slices.hitMatch;
+    let hitNoMatch = slices.hitNoMatch;
+    let critMatch = slices.critMatch;
+    let critNoMatch = slices.critNoMatch;
     for (const payload of payloads) {
       hit = hit.convolve(payload.hit, eps, true);
       crit = crit.convolve(payload.crit, eps, true);
+      if (hitMatch) hitMatch = hitMatch.convolve(payload.hit, eps, true);
+      if (hitNoMatch) hitNoMatch = hitNoMatch.convolve(payload.hit, eps, true);
+      if (critMatch) critMatch = critMatch.convolve(payload.crit, eps, true);
+      if (critNoMatch) critNoMatch = critNoMatch.convolve(payload.crit, eps, true);
     }
-    return { hit, crit, miss: slices.miss };
+    return { hit, crit, miss: slices.miss, hitMatch, hitNoMatch, critMatch, critNoMatch };
+  };
+
+  const emptySlices: SourceSlices = {
+    hit: PMF.emptyMass(),
+    crit: PMF.emptyMass(),
+    miss: PMF.emptyMass(),
+    hitMatch: null,
+    hitNoMatch: null,
+    critMatch: null,
+    critNoMatch: null,
   };
 
   const steps: Step[] = attackIds.map((id, index) => ({
     id,
     trigger: null,
     slices: withPerHit(
-      attackSlices[index] ?? {
-        hit: attackPMFs[index],
-        crit: PMF.emptyMass(),
-        miss: PMF.emptyMass(),
-      },
+      attackSlices[index] ?? { ...emptySlices, hit: attackPMFs[index] },
       id
     ),
     damage: null,
@@ -380,7 +501,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
     const id = riderIds[index];
     const hit = toPMF(rider.damage, eps, id);
-    const slices = sliceSource(hit);
+    const singleRiderDamage: Damage | undefined = !Array.isArray(rider.damage) ? (rider.damage as Damage) : undefined;
+    const matchInfo =
+      matchNeededSourceIds.has(id) && singleRiderDamage !== undefined
+        ? diceMatchInfoOf(singleRiderDamage, eps)
+        : null;
+    const slices = sliceSource(hit, matchInfo);
     if (slices && rider.critDamage !== undefined) {
       // An attack-shaped rider rolls its own d20 and crits on its own terms —
       // a bonus attack triggered by a crit does not deal doubled dice — so
@@ -415,6 +541,24 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     riderSteps.set(id, steps.length - 1);
   }
 
+  // The LAST step index (in final walk order) that reads each group. Once the walk has passed
+  // that step, the group's specific code stops discriminating any future decision — a group read
+  // by exactly one downstream step (the common `dice-match` chain shape: group N is read only by
+  // step N+1) becomes dead weight in the merge key for every step after that read. This was the
+  // dominant cost in a long `bounce()` chain (measured: fixing it turned 1.8s at a 9-deep chain
+  // into ~40ms). `perHitGroups` groups are read only at the very end (after every step, for
+  // `every-hit` fire probability), so they stay live through the whole walk — `steps.length`
+  // sentinel.
+  const groupLastReadStep = new Array<number>(groupSources.length).fill(-1);
+  steps.forEach((step, stepIndex) => {
+    if (step.reads !== -1) {
+      groupLastReadStep[step.reads] = Math.max(groupLastReadStep[step.reads], stepIndex);
+    }
+  });
+  for (const group of perHitGroups.values()) {
+    groupLastReadStep[group] = steps.length;
+  }
+
   return {
     steps,
     groupCount: groupSources.length,
@@ -423,5 +567,6 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     riderIds,
     riderSteps,
     perHitGroups,
+    groupLastReadStep,
   };
 }

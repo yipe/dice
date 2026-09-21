@@ -42,6 +42,7 @@ export const defaultConfig: RollConfig = {
   modifier: 0,
   reroll: 0,
   explode: 0,
+  explodePoolBudget: 0,
   minimum: 0,
   bestOf: 0,
   keep: undefined,
@@ -55,6 +56,7 @@ const rollConfigsEqual = (a: RollConfig, b: RollConfig) => {
     a.modifier === b.modifier &&
     a.reroll === b.reroll &&
     a.explode === b.explode &&
+    a.explodePoolBudget === b.explodePoolBudget &&
     a.minimum === b.minimum &&
     a.bestOf === b.bestOf &&
     a.keep === b.keep &&
@@ -66,6 +68,7 @@ const configComplexityScore = (config: RollConfig) => {
   return (
     (config.reroll > 0 ? 1 : 0) +
     (config.explode > 0 ? 1 : 0) +
+    (config.explodePoolBudget > 0 ? 1 : 0) +
     (config.minimum > 0 ? 1 : 0) +
     (config.bestOf > 0 ? 1 : 0) +
     (config.keep !== undefined ? 1 : 0) +
@@ -298,9 +301,36 @@ export class RollBuilder {
     if (count === undefined) return this;
     if (count === 0) return this;
     if (count < 0) throw new Error("Explode count must be >= 0");
+    if (this.lastConfig.explodePoolBudget > 0) {
+      throw new Error(
+        "Cannot set explode() on a config that already has a pool-wide explodePool() budget — the two exploding-dice semantics (per-die vs pool-wide) are mutually exclusive on one config."
+      );
+    }
 
     const newConfigs = this.getSubRollConfigs();
     newConfigs[newConfigs.length - 1].explode = count;
+    return this.create(newConfigs);
+  }
+
+  /**
+   * Set a pool-wide exploding-dice budget: at most `budget` extra dice may be added across the
+   * WHOLE pool (shared), as opposed to {@link explode}'s per-die cap (`n` dice each individually
+   * allowed up to `explode(k)` extra dice). `budget` must be a finite non-negative integer —
+   * unlike `explode()`, `Infinity` is not accepted (it would make the pool-wide DP non-terminating).
+   */
+  explodePool(budget: number): RollBuilder {
+    if (isNaN(budget)) throw new Error("Invalid NaN value for explodePool budget");
+    if (!Number.isFinite(budget)) throw new Error("explodePool budget must be finite");
+    if (budget < 0) throw new Error("explodePool budget must be >= 0");
+    if (budget === 0) return this;
+    if (this.lastConfig.explode > 0) {
+      throw new Error(
+        "Cannot set explodePool() on a config that already has a per-die explode() cap — the two exploding-dice semantics (per-die vs pool-wide) are mutually exclusive on one config."
+      );
+    }
+
+    const newConfigs = this.getSubRollConfigs();
+    newConfigs[newConfigs.length - 1].explodePoolBudget = Math.floor(budget);
     return this.create(newConfigs);
   }
 
@@ -616,6 +646,11 @@ export class RollBuilder {
     if (config.explode && Number.isFinite(config.explode) && config.explode > 0) {
       throw new Error(
         `toExpression() cannot represent an exploding die (d${config.sides} explode(${config.explode})): the string grammar has no explode syntax. Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
+      );
+    }
+    if (config.explodePoolBudget && config.explodePoolBudget > 0) {
+      throw new Error(
+        `toExpression() cannot represent a pool-wide exploding-dice budget (d${config.sides} explodePool(${config.explodePoolBudget})): the string grammar has no explode syntax. Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
       );
     }
 
@@ -1309,6 +1344,10 @@ export class PooledRollBuilder extends RollBuilder {
 
   override explode(_count: number | undefined = Infinity): RollBuilder {
     throw new Error("Cannot set explode on a pooled roll.");
+  }
+
+  override explodePool(_budget: number): RollBuilder {
+    throw new Error("Cannot set explodePool on a pooled roll.");
   }
 
   override minimum(_val: number | undefined): RollBuilder {

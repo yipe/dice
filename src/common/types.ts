@@ -14,6 +14,39 @@ export interface Bin {
   attr?: OutcomeLabelMap;
 }
 
+/**
+ * One homogeneous die-type's resolved shape within a damage pool — count of dice, faces per die,
+ * and the per-die `minimum`/threshold-`reroll` that shape its resolved marginal (see
+ * `RollBuilder.getSubRollConfigs()`). The raw material for `dice-match` trigger slicing.
+ */
+export interface DicePoolDescriptor {
+  readonly count: number;
+  readonly faces: number;
+  readonly minimum: number;
+  readonly reroll: number;
+}
+
+/**
+ * Exact P(match | this branch's own final damage value = d) for a resolved hit/crit branch,
+ * keyed by the SAME damage values the branch's PMF uses (post flat `modifier`, post crit
+ * doubling) — so a consumer splits a PMF bin-by-bin with no sum/modifier bookkeeping of its own.
+ */
+export interface DiceMatchInfo {
+  readonly matchProbabilityByDamage: ReadonlyMap<number, number>;
+}
+
+/**
+ * Optional capability of a `dice-match`-eligible damage source (implemented by `AttackBuilder`):
+ * exposes the exact per-branch match-probability breakdown needed to slice its hit/crit PMF into
+ * matched / did-not-match halves. Absence (a bare `PMF`, a plain non-attack `RollBuilder`, or a
+ * `null` branch — `noCrit()`, a parsed/pooled/`keep` source) is a defined "no match slice
+ * available" state, not a crash: naming such a source in a `dice-match` trigger is a
+ * `TurnSpecError`, not a silent zero.
+ */
+export interface HasDiceMatchInfo {
+  diceMatchInfo(eps?: number): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null };
+}
+
 export interface CritConfig {
     critThreshold: number;
 }
