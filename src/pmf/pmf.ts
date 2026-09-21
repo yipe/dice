@@ -803,6 +803,31 @@ export class PMF {
     );
   }
 
+  /**
+   * Splits this PMF into two complementary PMFs by an arbitrary per-damage-value factor in
+   * `[0, 1]` — bin `d`'s mass, `count`, and `attr` split `factor(d)` / `1 - factor(d)` between the
+   * two results (via the same proportional scaling {@link applyHitFrequency} uses, `scaleBin`), so
+   * `a.add(b)` recovers this PMF exactly and both halves stay chart-attributable. Unlike
+   * {@link applyHitFrequency}, mass is NOT redistributed to a miss bin at 0 — each bin stays at its
+   * own damage value in whichever half it lands in. `factor` outside `[0, 1]` is clamped.
+   *
+   * Built for `dice-match` trigger slicing: splitting a hit/crit sub-PMF into "matched" and
+   * "did not match" halves by the exact per-damage-value match probability.
+   */
+  splitByFactor(factor: (damage: number) => number): [PMF, PMF] {
+    const a = new Map<number, Bin>();
+    const b = new Map<number, Bin>();
+    for (const [damage, bin] of this.map) {
+      const f = Math.min(1, Math.max(0, factor(damage)));
+      if (f > 0) a.set(damage, PMF.scaleBin(bin, f));
+      if (f < 1) b.set(damage, PMF.scaleBin(bin, 1 - f));
+    }
+    return [
+      new PMF(a, this.epsilon, false, `split+(${this.identifier})`),
+      new PMF(b, this.epsilon, false, `split-(${this.identifier})`),
+    ];
+  }
+
   scaleMass(factor: number): PMF {
     if (factor === 1) return this;
 

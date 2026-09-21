@@ -5,6 +5,55 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0]
+
+Native pool-wide exploding dice and a `dice-match` bounce trigger, for Sorcerous Burst and
+Chromatic Orb respectively — both previously unmodeled, forcing dprcalc to fake them app-side
+with a scalar-gate approximation (see the app repo's `applyBounceScalingToPMF`). Ground-truthed
+against brute-force enumeration throughout; see `docs/superpowers/specs/2026-09-21-native-bounce-and-explode-design.md`
+in the app repo for the full derivation.
+
+### Added
+
+- **`RollBuilder.explodePool(budget)`** — a pool-wide exploding-dice budget: at most `budget`
+  extra dice total across the whole pool, as opposed to `explode(k)`'s per-die cap (`n` dice each
+  individually allowed `k` extra dice). Resolved as one DP over `(pending dice, budget remaining)`
+  in `builder/ast.ts` — exact, not a simulation. Mutually exclusive with `explode()` on the same
+  config; throws on a pooled roll and from `toExpression()` (the string grammar has no syntax for
+  either exploding-dice mechanic). `2d8.explodePool(1)` has mean 10.0546875 — genuinely different
+  from `2d8.explode(1)`'s per-die 10.125, the discriminating oracle a realized-size-i.i.d.
+  approximation gets wrong.
+- **`{ on: "dice-match" }` `Turn` trigger** — fires when a named source's own damage dice showed a
+  duplicate value on hit or crit (Chromatic Orb's bounce). Exact joint `P(sum ∧ match)` via an
+  elementary-symmetric DP over faces (`common/bounce.ts`'s `jointSumAndMatch`), composed correctly
+  with a pool-wide exploding budget when both apply (`explodingPoolMatchProbability` — conditions
+  on `(m, k)` = dice showing max/non-max rather than applying the plain formula to a realized pool
+  size, which is measurably wrong: `0.179688` exact vs `0.176270` for 2d8 budget 1). The crit
+  branch matches against the REAL doubled pool (fixing a same-class bug the app had lived with:
+  crit-doubled dice were never checked for a match), with `keep()`/`bestOf()` pools and
+  string-parsed sources correctly rejected as `TurnSpecError("no-dice-descriptor", …)` rather than
+  silently guessing. `AttackBuilder.diceMatchInfo()` is the new capability surface
+  (`HasDiceMatchInfo` in `common/types.ts`) that makes this possible without threading builder
+  internals through the (deliberately builder-decoupled) `turn/` layer.
+- **`bounce({ source, max })`** — sugar for a depth-capped chain of attack-shaped `dice-match`
+  riders, so no caller hand-writes the chain. `max` is required (match probability alone does not
+  terminate the recursion).
+- **`PMF.splitByFactor(factor)`** — splits a PMF into two complementary PMFs by an arbitrary
+  per-damage-value factor in `[0, 1]`, preserving `count`/`attr` attribution proportionally in
+  each half (the same scaling `applyHitFrequency` uses). The primitive `dice-match` slicing is
+  built on.
+
+### Fixed
+
+- **`MAX_TRIGGER_GROUPS` raised 4 → 9**, to cover Chromatic Orb's full upcast range (a 9th-level
+  slot needs up to 9 additional bounce beams). Raising it naively would have been a real
+  performance cliff: a 9-deep `bounce()` chain took 1.86s to resolve, because a trigger group
+  stayed in the walk's state-dedup key forever after its one reader consumed it, fragmenting the
+  state space by the number of distinct stopping points in the chain rather than the number of
+  live groups. Fixed by tracking each group's last reader step (`TurnPlan.groupLastReadStep`) and
+  excluding a group from the merge key once nothing downstream can read it — a 9-deep chain now
+  resolves in ~40ms, with bit-identical output.
+
 ## [0.10.0]
 
 Correctness pass across the attack-resolution and expression-serialization paths, found by an

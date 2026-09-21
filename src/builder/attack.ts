@@ -1,5 +1,6 @@
-import type { OutcomeType } from "../common/types";
+import type { DiceMatchInfo, OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import { diceSumDistribution, faceWeights, jointSumAndMatch } from "../common/bounce";
 import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
@@ -296,6 +297,72 @@ export class AttackBuilder implements CheckBuilder {
       miss: missPMF ?? PMF.delta(0, eps),
       weights: { hit: phit, crit: pcrit, miss: pmiss },
     };
+  }
+
+  /**
+   * For `dice-match` trigger slicing (`turn/types.ts`'s `HasDiceMatchInfo`): the exact
+   * per-damage-value match probability for the hit and crit branches, or `null` per branch when no
+   * descriptor is available — a string-parsed effect, a wrapped transform whose PMF isn't fully
+   * captured by its `RollConfig`s (half/scale/maxOf/pooled — `cacheKey()` returns `null` for
+   * exactly these), a `keep`/`bestOf` pool (ambiguous "the dice" under crit doubling), a
+   * pool-wide exploding budget (composition with match not yet threaded through here), a
+   * multi-die-type pool, a single die (can never match), or (crit) `noCrit()`.
+   *
+   * The crit branch is built from the SAME crit-effect selection `resolve()` uses (an explicit
+   * `onCrit` roll, or the hit dice auto-doubled via `copy().doubleDice()`), so its descriptor
+   * reflects the crit branch's REAL doubled pool, not the hit pool re-used blindly.
+   */
+  diceMatchInfo(_eps: number = EPS): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
+    const hit = this.matchInfoForEffect(this.hitEffect);
+
+    let critEffect: RollBuilder | undefined;
+    if (this.critEffect === null) {
+      critEffect = undefined; // noCrit(): no separate crit branch
+    } else if (this.critEffect) {
+      critEffect = this.critEffect;
+    } else if (this.hitEffect instanceof ParsedRollBuilder) {
+      critEffect = undefined; // string-parsed hit: doubleDice() throws, crit folds into hit
+    } else {
+      critEffect = this.hitEffect?.copy().doubleDice();
+    }
+    const crit = this.matchInfoForEffect(critEffect);
+
+    return { hit, crit };
+  }
+
+  private matchInfoForEffect(effect: RollBuilder | undefined): DiceMatchInfo | null {
+    if (!effect || effect instanceof ParsedRollBuilder) return null;
+    // `cacheKey() === null` is exactly the signal this class already uses for "PMF not fully
+    // captured by subRollConfigs" (half/scale/maxOf/pooled/composite) — the same condition that
+    // would make treating getSubRollConfigs() as the branch's real dice pool WRONG here.
+    if (effect.cacheKey() === null) return null;
+
+    const diceConfigs = effect.getSubRollConfigs().filter((c) => c.sides > 0);
+    if (diceConfigs.length !== 1) return null;
+    const config = diceConfigs[0];
+    if (config.keep || config.bestOf > 0) return null;
+    if (config.explodePoolBudget > 0) return null;
+
+    // A single die is a SUPPORTED source that can simply never match — `null` is reserved for
+    // "no descriptor available at all" (parsed/pooled/keep/bestOf/exploding). Conflating the two
+    // previously made a valid 1-die hit pool with an auto-doubled 2-die crit pool (which CAN
+    // match) throw `no-dice-descriptor` on the hit branch alone. An empty map still answers every
+    // `matchProbabilityByDamage.get(d) ?? 0` lookup with the correct zero.
+    if (config.count <= 1) return { matchProbabilityByDamage: new Map() };
+
+    const weights = faceWeights(config.sides, config.minimum, config.reroll);
+    const totalDist = diceSumDistribution(config.count, weights);
+    const joint = jointSumAndMatch(config.count, weights);
+    const modifier = effect.modifier;
+
+    const matchProbabilityByDamage = new Map<number, number>();
+    for (const [sum, totalMass] of totalDist) {
+      if (totalMass <= 0) continue;
+      const matchMass = joint.get(sum) ?? 0;
+      matchProbabilityByDamage.set(sum + modifier, matchMass / totalMass);
+    }
+
+    return { matchProbabilityByDamage };
   }
 
   /**
