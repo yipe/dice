@@ -1,4 +1,3 @@
-import { LRUCache } from "../common/lru-cache";
 import { PMF } from "../pmf/pmf";
 import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { RollBuilder } from "./roll";
@@ -12,7 +11,7 @@ interface SaveConfig {
  * DC-check PMF cache. The two-outcome success/fail PMF is re-derived on every `toPMF()`, and a save-based
  * DPR sweep asks for the SAME check thousands of times. Keyed by {@link DCBuilder.cacheKey} + `eps`.
  */
-const dcPMFCache = new LRUCache<string, PMF>(4000);
+const dcPMFCache = PMF.createCache(4000);
 
 /** Clears the DC-check PMF cache (test/bench seam). */
 export function clearDCCache(): void {

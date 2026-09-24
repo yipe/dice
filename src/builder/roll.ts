@@ -1,12 +1,11 @@
 import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
 import type { DCBuilder } from "./dc";
-import { LRUCache } from "../common/lru-cache";
 import { parse } from "../parser/parser";
 import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionError } from "../parser/scaleDice";
-import type { PMF } from "../pmf/pmf";
+import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { astFromRollConfigs, pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { astFromRollConfigs, clearDieCaches, pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
@@ -57,11 +56,12 @@ function ambiguousScaling(config: RollConfig, scale: number): string | undefined
  * Subclasses that override `toPMF` (Half/Scale/MaxOf/Composite) never reach this — and all of them return a
  * `null` key anyway, so they are uncacheable by the same rule either way.
  */
-const rollPMFCache = new LRUCache<string, PMF>(4000);
+const rollPMFCache = PMF.createCache(4000);
 
-/** Clears the plain-roll PMF cache (test/bench seam; mirrors {@link clearAttackCache}). */
+/** Clears the plain-roll and single-die PMF caches (test/bench seam; mirrors {@link clearAttackCache}). */
 export function clearRollCache(): void {
   rollPMFCache.clear();
+  clearDieCaches();
 }
 
 export const defaultConfig: RollConfig = {

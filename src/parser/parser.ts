@@ -1,7 +1,7 @@
 import { DiceParseError } from "../common/errors";
-import { LRUCache } from "../common/lru-cache";
+import { getCachingEnabled } from "../common/lru-cache";
 import type { OutcomeType } from "../common/types";
-import type { PMF } from "../pmf/pmf";
+import { PMF } from "../pmf/pmf";
 import { Dice } from "./dice";
 import type { CritTrack } from "./dice";
 import { scaleParsedDice, UndoubleableExpressionError } from "./scaleDice";
@@ -26,20 +26,7 @@ const MAX_KEEP_OUTCOMES = 1_000_000;
  * Internal parse cache for PMFs produced from string expressions.
  * Keyed by cleaned expression (spaces stripped, lowercased) and optional `n` value.
  */
-const parseCache = new LRUCache<string, PMF>(1000);
-
-let cachingEnabled = true;
-
-/** Enable or disable the internal parse cache. */
-export function setCachingEnabled(enabled: boolean): void {
-  cachingEnabled = enabled;
-  if (!enabled) clearParserCache();
-}
-
-/** Returns whether the internal parse cache is currently enabled. */
-export function getCachingEnabled(): boolean {
-  return cachingEnabled;
-}
+const parseCache = PMF.createCache(1000);
 
 /** Clears the internal parse cache. */
 export function clearParserCache(): void {
@@ -55,7 +42,7 @@ export function parse(expression: string, n: number = 0): PMF {
   // Check cache first if enabled
   const cleaned = expression.replace(/ /g, "").toLowerCase();
 
-  if (cachingEnabled) {
+  if (getCachingEnabled()) {
     const cacheKey = `${cleaned}:${n}`;
     const cached = parseCache.get(cacheKey);
     if (cached) return cached;
@@ -85,7 +72,7 @@ export function parse(expression: string, n: number = 0): PMF {
 
   // When creating the PMF, do not epsilon prune
   const resultPMF = result.toPMF(-1);
-  if (cachingEnabled) {
+  if (getCachingEnabled()) {
     // Store under the same cleaned key used for the lookup above.
     const cacheKey = `${cleaned}:${n}`;
     parseCache.set(cacheKey, resultPMF);

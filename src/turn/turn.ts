@@ -1,4 +1,3 @@
-import { EPS } from "../common/types";
 import type { Check } from "../builder/types";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
@@ -102,7 +101,7 @@ export class Turn {
    * A rider, substitute or condition with no `of` watches every declared attack:
    * plain data has no chain position to snapshot.
    */
-  static from(spec: TurnSpec, eps: number = EPS): Turn {
+  static from(spec: TurnSpec, eps: number = 0): Turn {
     const riders = spec.riders ?? [];
     const substitutes = spec.substitutes ?? [];
     const conditions = spec.conditions ?? [];
@@ -799,7 +798,7 @@ export class Turn {
  */
 export function turn(
   attacks: Attack | readonly Attack[] = [],
-  eps: number = EPS
+  eps: number = 0
 ): Turn {
   return Turn.from(
     { attacks: Array.isArray(attacks) ? attacks : [attacks as Attack] },
