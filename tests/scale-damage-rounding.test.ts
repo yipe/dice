@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { d, roll } from "../src/builder";
-import { PMF } from "../src/index";
+import { DiceQuery, PMF } from "../src/index";
 
 type Mode = "floor" | "ceil" | "round";
 
@@ -87,5 +87,19 @@ describe("scaleDamage with an integer ratio", () => {
     const pmf = roll(1, d(6)).toPMF();
     expect(pmf.scaleDamage(0.5).support()).toEqual([0, 1, 2, 3]);
     expect(pmf.scaleDamage(1.5, "round").support()).toEqual([2, 3, 5, 6, 8, 9]);
+  });
+});
+
+describe("scaleDamage arguments", () => {
+  it.each([
+    ["a zero denominator", 1, 0],
+    ["an infinite denominator", 1, Infinity],
+    ["a NaN denominator", 1, NaN],
+    ["an infinite factor", Infinity, 1],
+    ["a NaN factor", NaN, 1],
+  ])("throws on %s", (_name, factor, denominator) => {
+    const pmf = roll(2, d(6)).toPMF();
+    expect(() => pmf.scaleDamage(factor, "floor", denominator)).toThrow(RangeError);
+    expect(() => new DiceQuery([pmf]).scaleDamage(factor, "round", denominator)).toThrow(RangeError);
   });
 });

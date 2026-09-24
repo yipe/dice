@@ -47,3 +47,10 @@ describe("roll(N, X) is N independent copies of X", () => {
     expectDist(roll(-2, d6.keepHighest(2, 1)).toPMF(), negate(repeat(bestOfTwoD6, 2)));
   });
 });
+
+describe("a fractional repeat count", () => {
+  it("rolls its whole copies, like a fractional die count rolls its whole dice", () => {
+    expectDist(roll(2.5, d6.keepHighest(2, 1)).toPMF(), repeat(bestOfTwoD6, 2));
+    expectDist(roll(2.5, d6).toPMF(), repeat(u6, 2));
+  });
+});

@@ -1003,6 +1003,12 @@ export class PMF {
     rounding: "floor" | "round" | "ceil" = "floor",
     denominator = 1
   ): PMF {
+    if (!Number.isFinite(factor)) {
+      throw new RangeError(`scaleDamage() factor must be finite, got ${factor}`);
+    }
+    if (!Number.isFinite(denominator) || denominator === 0) {
+      throw new RangeError(`scaleDamage() denominator must be finite and non-zero, got ${denominator}`);
+    }
     const exact = Number.isInteger(factor) && Number.isInteger(denominator);
     return this.mapDamage((damageValue) => {
       if (exact && Number.isInteger(damageValue)) {

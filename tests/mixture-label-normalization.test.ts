@@ -68,3 +68,11 @@ describe("Mixture labels with arbitrary positive weights", () => {
     expect(small.support()).toEqual(unit.support());
   });
 });
+
+describe("Mixture pruning that leaves nothing", () => {
+  it("throws instead of building an empty PMF", () => {
+    const m = new Mixture<"hit">(0.5);
+    m.add("hit", d6());
+    expect(() => m.buildPMF()).toThrow(/removed every outcome/);
+  });
+});

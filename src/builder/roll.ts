@@ -241,7 +241,7 @@ export class RollBuilder {
    */
   protected static repeated(die: RollBuilder, count: number): RollBuilder {
     if (die instanceof TransformedRollBuilder) {
-      const copies = Math.abs(count);
+      const copies = Math.floor(Math.abs(count));
       if (copies === 0) return new RollBuilder(0);
       const total = sumRolls(Array.from({ length: copies }, () => die));
       return count < 0 ? new ScaleRollBuilder(total, -1) : total;
@@ -254,7 +254,8 @@ export class RollBuilder {
     const configs = die.getSubRollConfigs();
     if (configs.length === 0) return new RollBuilder(0);
 
-    const copies = Math.abs(count);
+    // A fractional count rolls its whole copies, as a fractional die count rolls its whole dice.
+    const copies = Math.floor(Math.abs(count));
     const negate = count < 0;
     const repeatedConfigs: RollConfig[] = [];
     for (const config of configs) {

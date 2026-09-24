@@ -4,8 +4,11 @@
 
 let cachingEnabled = true;
 
-/** Every cache constructed with `followsCachingToggle`, so disabling caching can empty them. */
-const toggledCaches = new Set<LRUCache<unknown, unknown>>();
+/**
+ * Bumped each time caching is turned off. A cache created with `followsCachingToggle` empties
+ * itself the next time it is touched after a bump, so no registry holds the caches alive.
+ */
+let cacheGeneration = 0;
 
 /**
  * Enable or disable the library's internal caches: the parse cache, the PMF convolution/power
@@ -15,7 +18,7 @@ const toggledCaches = new Set<LRUCache<unknown, unknown>>();
  */
 export function setCachingEnabled(enabled: boolean): void {
   cachingEnabled = enabled;
-  if (!enabled) for (const cache of toggledCaches) cache.clear();
+  if (!enabled) cacheGeneration++;
 }
 
 /** Returns whether the library's internal caches are currently enabled. */
@@ -28,8 +31,7 @@ export interface LRUCacheOptions<V> {
   onInsert?: (value: V) => void;
   /**
    * Store and return nothing while {@link setCachingEnabled} has turned caching off, and empty
-   * this cache when it does. Meant for module-level caches: the cache stays registered for the
-   * life of the process.
+   * this cache when it does.
    */
   followsCachingToggle?: boolean;
 }
@@ -38,6 +40,7 @@ export class LRUCache<K, V> {
   private cache = new Map<K, V>();
   private readonly onInsert?: (value: V) => void;
   private readonly followsCachingToggle: boolean;
+  private generation = cacheGeneration;
 
   /**
    * @param maxSize Entries kept before the least recently used is evicted. A capacity of 0 or
@@ -49,12 +52,18 @@ export class LRUCache<K, V> {
   ) {
     this.onInsert = options.onInsert;
     this.followsCachingToggle = options.followsCachingToggle ?? false;
-    if (this.followsCachingToggle) {
-      toggledCaches.add(this as LRUCache<unknown, unknown>);
+  }
+
+  /** Drops the entries of a toggle-following cache when caching was turned off since last use. */
+  private sync(): void {
+    if (this.followsCachingToggle && this.generation !== cacheGeneration) {
+      this.cache.clear();
+      this.generation = cacheGeneration;
     }
   }
 
   private get storing(): boolean {
+    this.sync();
     return this.maxSize > 0 && (cachingEnabled || !this.followsCachingToggle);
   }
 
@@ -89,6 +98,7 @@ export class LRUCache<K, V> {
   }
 
   get size(): number {
+    this.sync();
     return this.cache.size;
   }
 
@@ -97,10 +107,12 @@ export class LRUCache<K, V> {
   }
 
   keys(): IterableIterator<K> {
+    this.sync();
     return this.cache.keys();
   }
 
   values(): IterableIterator<V> {
+    this.sync();
     return this.cache.values();
   }
 }

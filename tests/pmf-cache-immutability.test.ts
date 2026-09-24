@@ -111,3 +111,26 @@ describe("setCachingEnabled", () => {
     expect(second.pAt(9)).toBe(first.pAt(9));
   });
 });
+
+describe("caches that follow the caching toggle", () => {
+  afterEach(() => setCachingEnabled(true));
+
+  it("are emptied by turning caching off, even when created before any other cache", () => {
+    const cache = new LRUCache<string, number>(10, { followsCachingToggle: true });
+    cache.set("a", 1);
+    setCachingEnabled(false);
+    setCachingEnabled(true);
+    expect(cache.size).toBe(0);
+    expect(cache.get("a")).toBeUndefined();
+    cache.set("b", 2);
+    expect(cache.get("b")).toBe(2);
+  });
+
+  it("a cache that does not follow the toggle keeps its entries", () => {
+    const cache = new LRUCache<string, number>(10);
+    cache.set("a", 1);
+    setCachingEnabled(false);
+    setCachingEnabled(true);
+    expect(cache.get("a")).toBe(1);
+  });
+});

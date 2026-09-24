@@ -73,6 +73,9 @@ export class Mixture<L extends string = string> {
 
     const threshold = this.eps * grand;
     const kept = [...this.totals].filter(([, m]) => m > 0 && m >= threshold);
+    if (kept.length === 0) {
+      throw new Error(`Mixture: pruning at eps ${this.eps} removed every outcome`);
+    }
     const keptTotal =
       kept.length === this.totals.size ? grand : kahanSum(kept.map(([, m]) => m));
 
