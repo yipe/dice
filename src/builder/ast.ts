@@ -11,7 +11,7 @@ import type {
   MaxOfNode,
   SumNode,
 } from "./nodes";
-import type { RollBuilder } from "./roll";
+import { naturalRollIndex, type RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
 // Default epsilon 0: single-die PMFs resolve without pruning.
@@ -342,20 +342,33 @@ export function resolveD20Roll(die: DieNode, rollType: RollType | undefined): PM
 }
 
 /**
- * Resolve a check builder's root die (the to-hit/save d20, or whatever die it wraps), honoring
- * that die's reroll/minimum/explode, then lift by its `rollType`. The single entry point every
- * attack/save check builder ({@link ACBuilder}, {@link AttackBuilder}, {@link AlwaysHitBuilder},
- * {@link AlwaysCritBuilder}, `DCBuilder`, save `resolveProbabilities`) should use instead of
- * reaching for `d20RollPMF(rollType, baseReroll > 0)` directly — that 2-argument summary silently
- * drops `minimum`/`explode` on the root config.
+ * Resolve a check builder's natural roll (its d20, or with no d20 its largest die: see
+ * {@link naturalRollIndex}), honoring that die's reroll/minimum/explode, then lift by its
+ * `rollType`. The single entry point every attack/save check builder ({@link ACBuilder},
+ * {@link AttackBuilder}, {@link AlwaysHitBuilder}, {@link AlwaysCritBuilder}, `DCBuilder`, save
+ * `resolveProbabilities`) uses for the natural roll; the other dice are bonus dice.
+ *
+ * A check with no die has no natural roll: this returns a certain 0, so its total is its flat
+ * modifier plus any bonus dice and no natural-1/natural-20 rule can apply. A natural roll of more
+ * than one die (`roll(2, d20)`, or two equal top dice like `d20.plus(d20)`) has no single natural
+ * 1 or 20 and throws.
  */
 export function resolveRootD20(check: RollBuilder): PMF {
-  const rootConfig = check.getRootDieConfig();
-  const rollType = check.rollType;
-  if (!rootConfig || !(rootConfig.sides > 0)) {
-    return d20RollPMF(rollType, check.baseReroll > 0);
+  const configs = check.getSubRollConfigs();
+  const rootIdx = naturalRollIndex(configs);
+  if (rootIdx === -1) return PMF.delta(0);
+  const rootConfig = check.getRootDieConfig() ?? configs[rootIdx];
+  const sides = configs[rootIdx].sides;
+  const tied = configs.some(
+    (c, i) => i !== rootIdx && c.sides === sides && c.count > 0 && !c.isSubtraction
+  );
+  if (rootConfig.count !== 1 || tied) {
+    throw new Error(
+      `This check's natural roll is not one die: a check needs exactly one d${sides} for its natural 1 and 20. ` +
+        "Roll it once and add any other dice as bonus dice."
+    );
   }
-  return resolveD20Roll(dieNodeFromConfig(rootConfig), rollType);
+  return resolveD20Roll(dieNodeFromConfig(rootConfig), check.rollType);
 }
 
 export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {

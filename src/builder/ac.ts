@@ -1,7 +1,7 @@
 import { PMF } from "../pmf/pmf";
 import { AttackBuilder } from "./attack";
 import { resolveRootD20 } from "./ast";
-import { AlwaysCritBuilder, RollBuilder } from "./roll";
+import { AlwaysCritBuilder, naturalRollIndex, RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
 export interface AttackConfig {
@@ -17,8 +17,8 @@ export interface AttackConfig {
  * Combines a source's own roll type with granted advantage/disadvantage flags by cancellation —
  * `{advantage, disadvantage}` from any combination of source and grants resolve to `advantage` /
  * `disadvantage` / `flat`. `advantageDice` governs how many dice a NET advantage rolls, whether
- * the advantage came from `rollType` itself or from `flags`. Pure; independently testable against
- * the full 3×2×4 table.
+ * the advantage came from `rollType` itself or from `flags`; an own `elven accuracy` roll type
+ * always rolls three. Pure; independently testable against the full 4×2×4 table.
  */
 export function combine(
   rollType: RollType,
@@ -31,7 +31,7 @@ export function combine(
   const netDisadvantage = ownDisadvantage || flags.disadvantage;
 
   if (netAdvantage && netDisadvantage) return { rollType: "flat", dice: 1 };
-  if (netAdvantage) return { rollType: "advantage", dice: advantageDice };
+  if (netAdvantage) return { rollType: "advantage", dice: rollType === "elven accuracy" ? 3 : advantageDice };
   if (netDisadvantage) return { rollType: "disadvantage", dice: 2 };
   return { rollType: "flat", dice: 1 };
 }
@@ -86,9 +86,8 @@ export class ACBuilder extends RollBuilder {
    */
   private resolvedConfigs(): readonly RollConfig[] {
     const configs = this.getSubRollConfigs();
-    if (configs.length === 0) return configs;
-    const rootIdx = configs.findIndex((c) => c.sides > 0);
-    const idx = rootIdx === -1 ? 0 : rootIdx;
+    const idx = naturalRollIndex(configs);
+    if (idx === -1) return configs;
     // `elven accuracy` (the AST layer's only 3-dice-advantage shape) only ever replaces an
     // already-`advantage` root — never downgrades a config that already reads `elven accuracy`
     // directly (the legacy `withElvenAccuracy()` path stays untouched).
@@ -104,7 +103,8 @@ export class ACBuilder extends RollBuilder {
 
   override getRootDieConfig(): RollConfig | undefined {
     const configs = this.resolvedConfigs();
-    return configs.find((c) => c.sides > 0) || configs[0];
+    const idx = naturalRollIndex(configs);
+    return idx === -1 ? configs[0] : configs[idx];
   }
 
   override cacheKey(): string | null {
@@ -144,6 +144,12 @@ export class ACBuilder extends RollBuilder {
       : expression;
   }
 
+  /**
+   * The raw to-hit PMF: the check's total where it reaches the AC and 0 where it does not, with no
+   * natural-1 miss or natural-20 hit (`d20.plus(20).ac(15).toPMF()` never shows 0, although the
+   * attack misses on a natural 1). The attack outcome — natural rules, crits — comes from
+   * `onHit(...).resolve()`.
+   */
   override toPMF(eps: number = 0): PMF {
     const ac = this.attackConfig.ac;
     const d20 = resolveRootD20(this);
