@@ -138,7 +138,7 @@ describe("String Damage Expressions", () => {
         .plus(10)
         .ac(18)
         .onHit(roll(1).d(6).keepLowest(3, 2).plus(3))
-        .onCrit(roll(2).d(6).keepLowest(3, 2).plus(3));
+        .onCrit(roll(2).d(6).keepLowestAll(3, 2).plus(3));
 
       const stringRes = stringAttack.resolve();
       const builderRes = builderAttack.resolve();

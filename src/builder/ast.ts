@@ -26,16 +26,68 @@ export function clearDieCaches(): void {
 }
 
 export function dieNodeFromConfig(cfg: RollConfig): DieNode {
+  if (cfg.explode !== undefined && !Number.isFinite(cfg.explode)) {
+    throw new Error(
+      `An exploding d${cfg.sides} needs a finite cap, got explode(${cfg.explode}): explode(k) allows at most k extra dice per die.`
+    );
+  }
   return {
     type: "die",
     sides: cfg.sides,
     reroll: cfg.reroll > 0 ? cfg.reroll : undefined,
     minimum: cfg.minimum > 0 ? cfg.minimum : undefined,
-    explode:
-      cfg.explode && Number.isFinite(cfg.explode) && cfg.explode > 0
-        ? cfg.explode
-        : undefined,
+    explode: cfg.explode > 0 ? cfg.explode : undefined,
   };
+}
+
+/**
+ * Thrown for a per-die `keepHighest(T, K)`/`keepLowest(T, K)` on a group of N > 1 dice whose
+ * reading is not unique: "keep K of T rolls of the whole N-dice sum" and "keep K of T single dice"
+ * give different numbers, and nothing in the call says which is meant.
+ */
+export class AmbiguousKeepError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmbiguousKeepError";
+    Object.setPrototypeOf(this, AmbiguousKeepError.prototype);
+  }
+}
+
+type KeepSpec = NonNullable<RollConfig["keep"]>;
+
+/**
+ * How a per-die keep on a group of `count` d`sides` reads:
+ *
+ * - `"dice"`: keep K of T single dice. Used for one die (`d6.keepHighest(3, 2)`), for K >= 2 of
+ *   the group's own N dice (`roll(4, d6).keepHighest(4, 3)`), and for `bestOf(k)`.
+ * - `"trials"`: roll the whole N-dice group T times and keep K of those sums. Used for K = 1:
+ *   `roll(2, d6).keepHighest(2, 1)` is the better of two 2d6, and `keepLowest(T, 1)` with T != N
+ *   is the worse of T rolls of the group.
+ *
+ * Every other shape on N > 1 dice (K >= 2 with T != N, and `keepLowest(N, 1)`, whose single-die
+ * and whole-group readings differ) throws an {@link AmbiguousKeepError} naming both spellings.
+ */
+export function perDieKeepReading(
+  count: number,
+  sides: number,
+  keep: KeepSpec,
+  synthesizedBestOf = false
+): "dice" | "trials" {
+  const n = Math.floor(Math.abs(count));
+  if (n <= 1 || synthesizedBestOf) return "dice";
+  const trials = Math.max(1, Math.floor(keep.total));
+  const k = Math.max(0, Math.floor(keep.count));
+  if (k === 0) return "dice";
+  if (k === 1 && (keep.mode === "highest" || trials !== n)) return "trials";
+  if (k >= 2 && trials === n) return "dice";
+  const verb = keep.mode === "highest" ? "keepHighest" : "keepLowest";
+  const which = keep.mode === "highest" ? "highest" : "lowest";
+  throw new AmbiguousKeepError(
+    `${verb}(${keep.total}, ${keep.count}) on ${n}d${sides} has more than one reading. For the ${which} ` +
+      `${k} of ${trials} rolls of the whole ${n}d${sides}, use roll(${n}, d${sides}).${verb}All(${trials}, ${k}); ` +
+      `for the ${which} ${k} of ${trials} single d${sides}, use roll(1, d${sides}).${verb}(${trials}, ${k}), ` +
+      `adding one such group for each set of dice you mean.`
+  );
 }
 
 export function astFromRollConfigs(
@@ -48,17 +100,15 @@ export function astFromRollConfigs(
 
   for (const cfg of configs) {
     const sign: 1 | -1 = cfg.isSubtraction || cfg.count < 0 ? -1 : 1;
-    const count = Math.abs(cfg.count || 0);
+    const count = Math.floor(Math.abs(cfg.count || 0));
 
     constantSum += cfg.modifier || 0;
 
-    if ((cfg.sides || 0) <= 0) continue;
+    // A group of zero dice rolls nothing; only its flat modifier (added above) remains.
+    if ((cfg.sides || 0) <= 0 || count === 0) continue;
 
-    // `bestOf(k)` ("roll N, keep the highest k") is exactly `keep = {total: N, count: k, mode:
-    // "highest"}` over the same die -- fold it into an equivalent synthetic `keep` up front so it
-    // reuses the keep-DP branch below instead of being silently ignored (the die count alone,
-    // with no keep applied, previously determined the PMF -- e.g. `5d10.bestOf(3)` resolved as
-    // plain 5d10 despite `toExpression()` correctly rendering "5d10kh3").
+    // `bestOf(k)` ("roll N, keep the highest k") is `keep = {total: N, count: k, mode: "highest"}`
+    // over the same die.
     const isSynthesizedBestOf =
       !cfg.keep && cfg.bestOf > 0 && cfg.bestOf < count;
     const effectiveKeep = isSynthesizedBestOf
@@ -67,96 +117,49 @@ export function astFromRollConfigs(
 
     const die: DieNode = dieNodeFromConfig(cfg);
 
-    let node: ExpressionNode = die;
-
-    let appliedRollType = false;
+    let node: ExpressionNode;
     if (cfg.rollType && cfg.rollType !== "flat") {
+      if (cfg.explodePoolBudget > 0) {
+        throw new Error(
+          "explodePool() cannot be combined with advantage/disadvantage/elven-accuracy on the same config — pool-wide explosion is for damage dice pools, not d20 rolls."
+        );
+      }
+      // Each die of the group is rolled with the roll type on its own: `roll(2, d6).withAdvantage()`
+      // is two advantaged d6, the same as `roll(2, d6.withAdvantage())`.
+      let rolled: ExpressionNode;
       if (cfg.sides === 20) {
-        node = {
-          type: "d20Roll",
-          rollType: cfg.rollType,
-          child: node,
-        } as D20RollNode;
+        rolled = { type: "d20Roll", rollType: cfg.rollType, child: die } as D20RollNode;
       } else {
         const n = cfg.rollType === "elven accuracy" ? 3 : 2;
         const mode = cfg.rollType === "disadvantage" ? "lowest" : "highest";
-        const base: SumNode = { type: "sum", count: n, child: node };
-        node = { type: "keep", mode, count: 1, child: base } as KeepNode;
+        const base: SumNode = { type: "sum", count: n, child: die };
+        rolled = { type: "keep", mode, count: 1, child: base } as KeepNode;
       }
-      appliedRollType = true;
-    }
-
-    if (cfg.rollType === "flat" && effectiveKeep && effectiveKeep.total > 0) {
+      node = { type: "sum", count, child: rolled } as SumNode;
+    } else if (effectiveKeep && effectiveKeep.total > 0) {
       if (cfg.explodePoolBudget > 0) {
         throw new Error(
           "explodePool() cannot be combined with keep()/bestOf() on the same config — the match/keep pool is ambiguous once dice can be added mid-resolution. Use explodePool() on a plain (non-keep) pool."
         );
       }
-      const baseCount = Math.max(1, Math.floor(Math.abs(count || 1)));
+      const reading = perDieKeepReading(count, cfg.sides, effectiveKeep, isSynthesizedBestOf);
       const trials = Math.max(1, Math.floor(effectiveKeep.total));
       const k = Math.max(0, Math.floor(effectiveKeep.count));
-
-      // For keep-highest of 1, always treat as trials-of-sums: max over trial sums
-      // A synthesized `bestOf` trial is a SINGLE die, never `baseCount` dice, so it must not
-      // take the maxOf-of-sums shape.
-      if (k === 1 && effectiveKeep.mode === "highest" && !isSynthesizedBestOf) {
-        const perTrial: SumNode = {
-          type: "sum",
-          count: baseCount,
-          child: node,
-        };
-        if (trials === 1) {
-          node = perTrial;
-        } else {
-          node = {
-            type: "maxOf",
-            count: trials,
-            child: perTrial,
-          } as MaxOfNode;
-        }
-      } else if (trials === baseCount) {
-        // Classic pool: keep K of N faces from N iid dice
-        const base: SumNode = { type: "sum", count: trials, child: node };
-        node = {
-          type: "keep",
-          mode: effectiveKeep.mode,
-          count: k,
-          child: base,
-        } as KeepNode;
+      const perTrial: ExpressionNode =
+        reading === "dice" ? die : ({ type: "sum", count, child: die } as SumNode);
+      if (trials === 1 && k >= 1) {
+        node = perTrial;
+      } else if (k === 1 && effectiveKeep.mode === "highest") {
+        node = { type: "maxOf", count: trials, child: perTrial } as MaxOfNode;
       } else {
-        // General trials-of-sums: trials of (baseCount dice sum), keep K trial sums
-        const perTrial: SumNode = {
-          type: "sum",
-          count: baseCount,
-          child: node,
-        };
-        if (trials === 1) {
-          node = perTrial;
-        } else {
-          const trialPool: SumNode = {
-            type: "sum",
-            count: trials,
-            child: perTrial,
-          };
-          node = {
-            type: "keep",
-            mode: effectiveKeep.mode,
-            count: k,
-            child: trialPool,
-          } as KeepNode;
-        }
+        const trialPool: SumNode = { type: "sum", count: trials, child: perTrial };
+        node = { type: "keep", mode: effectiveKeep.mode, count: k, child: trialPool } as KeepNode;
       }
     } else {
-      const c = appliedRollType ? 1 : Math.max(1, count || 1);
-      if (cfg.explodePoolBudget > 0 && appliedRollType) {
-        throw new Error(
-          "explodePool() cannot be combined with advantage/disadvantage/elven-accuracy on the same config — pool-wide explosion is for damage dice pools, not d20 rolls."
-        );
-      }
       node = {
         type: "sum",
-        count: c,
-        child: node,
+        count,
+        child: die,
         explodePoolBudget: cfg.explodePoolBudget > 0 ? cfg.explodePoolBudget : undefined,
       } as SumNode;
     }
@@ -262,6 +265,9 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
         // Compute the maximum of count independent rolls of childPMF
         return computeMaxOfPMF(childPMF, count, eps);
       }
+
+      case "max":
+        return maxOfIndependent(node.children.map((child) => resolve(child, eps)), eps);
 
       case "scale": {
         const childPMF = resolve(node.child, eps);
@@ -386,9 +392,8 @@ export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
   if (minV > 0) pmf = pmf.mapDamage((v) => Math.max(v, minV));
 
   // Exploding dice (finite, capped at `times` additional dice) on max face only.
-  const explode = die.explode;
-  if (explode && Number.isFinite(explode) && explode > 0) {
-    const times = Math.floor(explode);
+  const times = Math.floor(die.explode || 0);
+  if (times > 0) {
     const maxFace = s;
 
     // Split pmf into a max-face slice and a non-max slice. `PMF.fromMap` always normalizes to
@@ -403,21 +408,27 @@ export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
     for (const v of pmf.support()) {
       if (v !== maxFace) nonMax.set(v, pmf.pAt(v));
     }
-    const nonMaxPMF = PMF.fromMap(nonMax, eps);
 
-    // Capped geometric chain, built bottom-up. `chain` holds the distribution of "one more die
-    // roll, with `remaining` further explosions still allowed if THAT roll is also max" for
-    // `remaining` running from 0 (a final roll that can't chain further, however it lands) up to
-    // `times - 1`. Each step wraps the previous chain in one more branch: on a max roll (prob
-    // pMax) add another maxFace and recurse into the shorter chain; otherwise stop at a non-max
-    // value. This reduces to exactly `explode(1)`'s "maxFace + one more untouched die" for
-    // `times === 1`, and never lets more than `times` extra dice enter the total.
-    let chain = pmf; // remaining = 0: an unconstrained extra die, chains no further either way
-    for (let remaining = 1; remaining <= times - 1; remaining++) {
-      chain = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
+    if (nonMax.size === 0) {
+      // Every face is the max face (a one-sided die, or `minimum` at `sides`): the die and each
+      // of its `times` extra dice all show the max face.
+      pmf = PMF.delta((times + 1) * maxFace, eps);
+    } else {
+      const nonMaxPMF = PMF.fromMap(nonMax, eps);
+
+      // Capped geometric chain, built bottom-up. `chain` holds the distribution of "one more die
+      // roll, with `remaining` further explosions still allowed if THAT roll is also max" for
+      // `remaining` running from 0 (a final roll that can't chain further, however it lands) up to
+      // `times - 1`. Each step wraps the previous chain in one more branch: on a max roll (prob
+      // pMax) add another maxFace and recurse into the shorter chain; otherwise stop at a non-max
+      // value. This reduces to exactly `explode(1)`'s "maxFace + one more untouched die" for
+      // `times === 1`, and never lets more than `times` extra dice enter the total.
+      let chain = pmf; // remaining = 0: an unconstrained extra die, chains no further either way
+      for (let remaining = 1; remaining <= times - 1; remaining++) {
+        chain = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
+      }
+      pmf = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
     }
-    const exploded = PMF.branch(chain.mapDamage((v) => v + maxFace), nonMaxPMF, pMax);
-    pmf = exploded;
   }
 
   singleDiePMFCache.set(cacheKey, pmf);
@@ -502,7 +513,31 @@ function findDie(node: ExpressionNode): DieNode | undefined {
         if (d) return d;
       }
       return undefined;
+    case "max":
+      for (const child of node.children) {
+        const d = findDie(child);
+        if (d) return d;
+      }
+      return undefined;
   }
+}
+
+/** The highest of independent rolls: P(max <= v) is the product of each part's P(<= v). */
+function maxOfIndependent(parts: readonly PMF[], eps: number): PMF {
+  const support = [...new Set(parts.flatMap((part) => part.support()))].sort((a, b) => a - b);
+  const cumulative = parts.map(() => 0);
+  const out = new Map<number, number>();
+  let previous = 0;
+  for (const value of support) {
+    let all = 1;
+    for (let i = 0; i < parts.length; i++) {
+      cumulative[i] += parts[i].pAt(value);
+      all *= cumulative[i];
+    }
+    if (all > previous) out.set(value, all - previous);
+    previous = all;
+  }
+  return PMF.fromMap(out, eps);
 }
 
 function getTotalCount(node: KeepNode): number {
@@ -579,10 +614,10 @@ function keepSumPMF(
   if (keep >= total) return single.power(total, eps);
   if (keep <= 0) return PMF.delta(0, eps);
 
+  // Keyed on every probability at full precision: two per-trial distributions that agree to a
+  // few digits must not share an entry.
   const sortedSupport = [...single.support()].sort((a, b) => a - b);
-  const pmfSig = sortedSupport
-    .map((val) => `${val}:${single.pAt(val).toPrecision(6)}`)
-    .join(",");
+  const pmfSig = sortedSupport.map((val) => `${val}:${single.pAt(val)}`).join(",");
   const cacheKey = `keep|${pmfSig}|t:${total}|k:${keep}|h:${
     highest ? 1 : 0
   }|e:${eps}`;
@@ -760,6 +795,8 @@ export function getASTSignature(node: ExpressionNode): string {
       return `scale{n:${node.numerator},d:${node.denominator},r:${
         node.rounding
       },ch:${getASTSignature(node.child)}}`;
+    case "max":
+      return `max[${node.children.map(getASTSignature).join(",")}]`;
     case "add": {
       let constantValue = 0;
       const otherChildrenSigs: string[] = [];

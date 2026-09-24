@@ -6,45 +6,7 @@ const rollFn = (
   count: number,
   sidesOrDie?: number | RollBuilder,
   modifier?: number
-): RollBuilder => {
-  if (sidesOrDie instanceof RollBuilder) {
-    if (sidesOrDie.hasHiddenState()) {
-      throw new Error(
-        "Cannot use a roll with hidden state (like a pooled roll) as a die type."
-      );
-    }
-    // roll(2, d6, 5)
-    // Create a new config, using the base die's config but overriding the count
-    const subRollConfigs = sidesOrDie.getSubRollConfigs();
-    if (subRollConfigs.length === 0) return new RollBuilder(0).plus(modifier);
-
-    const absCount = Math.abs(count);
-
-    const newConfigs = subRollConfigs.map((config) => ({
-      ...config,
-      count: config.count * absCount,
-      modifier: config.modifier * absCount,
-    }));
-
-    let resultBuilder = new RollBuilder(newConfigs);
-
-    if (count < 0) {
-      const negatedConfigs = resultBuilder
-        .getSubRollConfigs()
-        .map((c) => ({ ...c, isSubtraction: !c.isSubtraction }));
-      resultBuilder = new RollBuilder(negatedConfigs);
-    }
-
-    return resultBuilder.plus(modifier);
-  } else {
-    // roll(2, 6, 5)
-    let builder = new RollBuilder(count);
-    if (sidesOrDie && sidesOrDie > 0) {
-      builder = builder.d(sidesOrDie);
-    }
-    return builder.plus(modifier);
-  }
-};
+): RollBuilder => RollBuilder.fromArgs(count, sidesOrDie, modifier);
 
 rollFn.d = (sides: number | string): RollBuilder => {
   if (typeof sides === "string") {
