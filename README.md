@@ -483,8 +483,8 @@ chance of 0.015 instead of 0.1225.
 |---|---|---|
 | `onFirstHit` | once, on the first attack that lands — doubled if it crit | Sneak Attack |
 | `onAnyCrit` | once, if any attack crit | Divine Smite |
-| `onAnyMiss` | once, if any attack missed; runs after every attack | Unerring Accuracy, Lucky |
-| `onFirstMiss` | once, on the first attack that missed; runs right after it | a reroll that lands in turn order |
+| `onAnyMiss` | once, if any attack missed; runs after every attack | a reroll no grant reaches |
+| `onFirstMiss` | once, on the first attack that missed; runs right after it | Unerring Accuracy, Lucky |
 | `onEveryHit` | once per attack that lands | Hunter's Mark, Hex, Rage |
 | `otherwise` | when the rider before it did *not* | flurry of blows if you didn't smite |
 
@@ -518,6 +518,10 @@ turn([sword, sword]).onEveryHit(flat(2));               // Rage
 turn([dagger, dagger]).onAnyCrit(roll(4, d8)).otherwise([unarmed, unarmed]); // smite, or flurry
 ```
 
+A list of attacks deals their exact summed damage, but it is one payload, not attacks that each
+land: it is not a watchable attack. Naming it in `of` throws `not-an-attack`, and it never joins a
+later rider's default `of`. To watch each strike, give each strike its own rider.
+
 #### The hard build
 
 A goliath rogue/monk/paladin, every trigger at once:
@@ -528,7 +532,7 @@ const goliath = turn([dagger, dagger])
   .onFirstHit(d10)               // fire's burn
   .onAnyCrit(roll(2, d8))        // divine smite
   .otherwise([unarmed, unarmed]) // flurry of blows, if the smite didn't happen
-  .onEveryHit(d6);               // hunter's mark
+  .onEveryHit(d6);               // hunter's mark, on the daggers
 
 goliath.mean();                                // 39.5903
 goliath.toQuery().damageAttributionChartModel();
@@ -537,7 +541,8 @@ goliath.toQuery().damageAttributionChartModel();
 Two things that would be easy to get wrong are handled for you. Riders sharing a trigger resolve
 **jointly** — sneak attack and fire's burn fire together or not at all, which shows up in the spread
 even though it never moves the mean. And `otherwise()` binds to the rider immediately before it, so
-the smite and the flurry are two branches of one decision and can never both land.
+the smite and the flurry are two branches of one decision and can never both land. The mark
+watches the two daggers: the flurry is a list rider, which no rider watches.
 
 #### Asking questions
 
@@ -575,6 +580,8 @@ is below the threshold for that mode. When no later attack it watches can still 
 one, or an earlier one whose watched reroll can no longer fire — it spends on any landing.
 `ifBelow({ hit: 10, crit: 18 })` reaches the optimum on the turn above, and since the threshold
 reads the payload's own values it works on a parsed string or a bare `PMF` too.
+On a tie the original roll is kept; the total is the same, so that only matters to a dice-match
+trigger reading the same attack.
 `fireProbability(id)` reports P(spent). A second transform over any of the same attacks throws
 `duplicate-substitute`, and a transform passed to any other verb throws `unsupported-trigger`.
 
@@ -609,11 +616,14 @@ turn().attack(axe, { tag: "melee" }).attack(bow, { tag: "ranged" })
 type by cancellation — advantage and disadvantage together roll flat — and a net advantage rolls
 three dice for an attack built with `threeDiceAdvantage()`. `critOnHit` makes every landing a crit;
 a natural 1 still misses. `.to(…)` takes ids or tags; left out, every later attack roll reads the
-grant, rerolls and bonus attacks included.
+grant, rerolls and bonus attacks included. An `onAnyMiss` reroll resolves after every attack, so one
+that would read a grant, or apply one, throws `unsupported-trigger`: use `onFirstMiss`, which
+resolves right after the miss and reads the grants in force there.
 
 `chance` or `save` gates the grants only: damage in the same call (`[d8, advantage()…]`) lands
-whatever the save does. `onEveryHit` rolls the save again on each landing until it takes,
-`onFirstHit` rolls it once, and once an `untilEndOfTurn` grant is in force no further save is rolled.
+whatever the save does. `onEveryHit` rolls the save again on each landing until it takes, and
+`onFirstHit` rolls it once. An application whose grants are all `untilEndOfTurn` and all already
+in force rolls no further save; one with any `untilNextAttack` grant always rolls.
 `onSave` applies other grants on the success branch of the same roll:
 `{ chance: 0.4, onSave: advantage().untilNextAttack() }`. `fireProbability(id)` reports P(the grants
 were applied where a later attack reads them). In plain data it is `TurnSpec.conditions`, with the
@@ -622,9 +632,9 @@ were applied where a later attack reads them). In plain data it is `TurnSpec.con
 #### Rerolls, sweeping AC, and naming attacks
 
 A reroll is an attack-shaped rider. `onFirstMiss(attack)` resolves right after the attack that
-missed, so anything that reads order — a `first-hit` rider's crit mode — sees it where it
-happened. A rider or transform added *after* an `onAnyMiss` / `onFirstMiss` reroll watches it
-without being told:
+missed, so anything that reads order — a `first-hit` rider's crit mode, a granted advantage — sees
+it where it happened. A rider or transform added *after* an `onAnyMiss` / `onFirstMiss` reroll
+watches it without being told:
 
 ```ts
 turn([sword, sword])
@@ -667,8 +677,9 @@ straight onto a UI field state. A bad `of` fails at the call that introduced it,
 Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
 rider watches. Left out, it is filled in at that call: the attacks declared so far, plus any reroll
 declared so far. So declare attacks first — `.attack()` after such a rider throws
-`attack-after-rider` rather than silently leaving the new attack out. All of them are sugar over
-`rider()`, which takes the
+`attack-after-rider` rather than silently leaving the new attack out. `Turn.from` fills an omitted
+`of` the same way — every attack plus the rerolls, for a rider the rerolls listed before it — so
+both spellings of a turn watch the same sources. All of them are sugar over `rider()`, which takes the
 trigger as plain data — and `Trigger` is JSON-safe, so a UI can persist one and hand it straight
 back:
 

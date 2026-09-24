@@ -99,8 +99,9 @@ export class Turn {
    * malformed. Use this from a UI, where `error.code` maps to the field state to
    * show.
    *
-   * A rider, substitute or condition with no `of` watches every declared attack:
-   * plain data has no chain position to snapshot.
+   * A rider, substitute or condition with no `of` watches every declared attack
+   * plus the attack-shaped `any-miss` / `first-miss` rerolls — for a rider, those
+   * listed before it — the same sources the chaining spelling snapshots.
    */
   static from(spec: TurnSpec, eps: number = EPS): Turn {
     const riders = spec.riders ?? [];
@@ -183,7 +184,8 @@ export class Turn {
    * An omitted `of` is filled in here, not when the plan is built: the attacks
    * declared so far, plus any attack-shaped `any-miss` / `first-miss` rider
    * declared so far. Nothing else joins — not `every-hit` riders, not
-   * damage-shaped riders, not `dice-match` beams (name those explicitly).
+   * damage-shaped riders, not a list of several attacks, not `dice-match` beams
+   * (name those explicitly).
    */
   rider(rider: Rider): Turn {
     const defaults =
@@ -311,13 +313,14 @@ export class Turn {
   }
 
   /**
-   * Fires once if any source missed. The reroll gate: a reroll is a fresh attack,
-   * so pass one as the damage. Kensei's Unerring Accuracy, Lucky.
+   * Fires once if any source missed. A reroll is a fresh attack, so pass one as
+   * the damage.
    *
    * Its step runs after every declared attack. That is exact when the reroll is
    * identically distributed to the attacks after the one it replaces; when it is
    * not, or a later rider reads the order things landed in, use
-   * {@link Turn.onFirstMiss}.
+   * {@link Turn.onFirstMiss}. A reroll that reads a granted modifier or applies a
+   * condition's grants throws `unsupported-trigger`: use {@link Turn.onFirstMiss}.
    */
   onAnyMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "any-miss" });
@@ -325,8 +328,9 @@ export class Turn {
 
   /**
    * Fires once, on the first source that misses, and resolves directly after that
-   * attack — so a reroll lands in turn order, before the attacks that follow it.
-   * The exact model of "when you miss, you may reroll".
+   * attack — so a reroll lands in turn order, before the attacks that follow it,
+   * and reads the grants in force at that point. The exact model of "when you
+   * miss, you may reroll": Kensei's Unerring Accuracy, Lucky.
    */
   onFirstMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "first-miss" });
