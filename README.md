@@ -262,6 +262,31 @@ never doubled and is unaffected. Three things still do not throw: `keepHighestAl
 pools, which double inside and then pool as before; a flat cap or floor like `2d6 < 9` or `3>d6`;
 and `diceMatchInfo()`, whose crit descriptor is `null` for such an attack (its hit side is unchanged).
 
+**Builder semantics.** `roll(N, X)` is N independent copies of X, so `roll(2, d6.keepHighest(2, 1))`
+is two best-of-two d6 (161/18), and a group of zero dice rolls nothing (`roll(0, d6).plus(3)` is 3).
+A roll type applies to each die of its group: `roll(2, d6).withAdvantage()` is two advantaged d6.
+`explode(k)` needs a finite cap k. Per-die keeps have one reading each: `roll(1, d).keepHighest(T, K)`
+keeps K of T dice, `roll(N, d).keepHighest(N, K)` keeps K of the N dice, and
+`roll(N, d).keepHighest(T, 1)` is the best of T rolls of the whole group (`keepLowest(T, 1)` with
+T ≠ N the worst); any other keep on several dice throws `AmbiguousKeepError`, so use
+`keepHighestAll`/`keepLowestAll` or a keep on one die. `minus(X)` subtracts X's flat along with its
+dice. `half()`, `scaleResult()` and `maxOf()` keep their transform under `plus()`/`minus()`.
+A check's natural roll is its d20 wherever it sits in the sum (with no d20, its largest die);
+`withAdvantage()`/`withDisadvantage()`/`withElvenAccuracy()` apply to that d20 whatever the call
+order; a natural roll of more than one die (`roll(2, d20).ac(15)`) throws; a check with no die
+(`flat(15).ac(12)`) compares its total with the target and never crits; a natural 20 always crits,
+including under `alwaysHits()` and `alwaysCrits()`. A parsed string cannot be a check
+(`d("d20+5").ac(15)` throws `ParsedCheckError`); spell it with the builder or as a full attack string.
+`rerollDamage(k)` rerolls a face when its kept value, after any `minimumDamageDie` floor, is below
+a fresh die's expected value, and never lowers a payload's own `reroll` or `minimum`.
+
+**Strings from builders.** `toExpression()` prints a string that `parse()` reads back to the
+builder's own distribution: a term after the first is parenthesised when it is an expression of its
+own, `~+` joins a term to a running total that can be 0, and an attack always carries its crit clause
+(`noCrit()` prints `crit (<hit payload>)`). Explode, pool-wide explode, `scaleResult(…, "round")`,
+fractional scale factors, `plusSeparateDamage()` and `halfOnMiss()` have no spelling and throw.
+Strings have no natural-1 miss or natural-20 hit.
+
 ### Core Class Flow
 
 ```
@@ -762,6 +787,12 @@ console.table(query.toChartSeries());
 │ 8       │ 12 │ 0.003125 │
 └─────────┴────┴──────────┘
 ```
+
+Percentiles and `quantile()` land on the exact bin, so a d20's median is 10. `missChance()` is the
+probability that at least one attack misses; for "every attack misses" use
+`probExactlyK(["missNone", "missDamage"], n)`. `turn()`, `Turn.from()` and `resolve()` keep every
+reachable damage value (their `eps` defaults to 0). `setCachingEnabled(false)` turns off and
+empties every internal cache; PMFs returned from a cache have frozen bins.
 
 ## 🧪 Running Examples
 

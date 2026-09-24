@@ -197,6 +197,47 @@ changes that turn silent wrong answers into errors.
   d20 advantage is never doubled. `keepHighestAll`/`keepLowestAll` pools, which double inside and
   then pool as before, and a flat cap or floor like `2d6 < 9` or `3>d6` do not throw, and
   `diceMatchInfo()` reports a `null` crit descriptor for such an attack, its hit side unchanged.
+- **Refusals instead of silent wrong numbers.** Each of these now throws a named error where it
+  used to return a number: `explode()` with no cap or an infinite cap (it rolled a plain die);
+  non-finite arguments to `plus`/`minus`, `reroll`, `minimum`, `bestOf`, the keeps, `maxOf` and
+  `d()`; a per-die `keepHighest(T, K)`/`keepLowest(T, K)` on N > 1 dice with more than one reading
+  (`AmbiguousKeepError`; keeping K of one die's T rolls, K of the group's own N dice, and the best or
+  worst of T rolls of the whole group are unchanged); a parsed string used as a check
+  (`d("d20+5").ac(15)`, `ParsedCheckError`; it dropped the +5); a check whose natural roll is more
+  than one die (`roll(2, d20).ac(15)`, `d20 + d20`); `diceMatchInfo()`/`bounce()` on an exploding,
+  advantaged or subtracted pool (`no-dice-descriptor`); a rider whose damage is a list of several
+  attacks named in `of` (`not-an-attack`; such a rider never joins a default `of`); and an
+  attack-shaped `onAnyMiss` reroll that reads or applies a granted modifier (`unsupported-trigger`;
+  it resolved after the last attack with that attack's grants, so use `onFirstMiss`).
+- **A roll type on a group of several dice rolls each die that way**: `roll(2, d6).withAdvantage()`
+  is two advantaged d6 (161/18); it used to be one.
+- **`roll(N, X)`, `plus(N, X)` and `minus(N, X)` are N independent copies of X** when X carries a
+  keep, `bestOf()` or `explodePool()`: `roll(2, d6.keepHighest(2, 1))` is 161/18 (it multiplied the
+  dice count and read as the best of two 2d6), and each copy of an `explodePool` keeps its own budget.
+- **`turn()`, `Turn.from()` and `AttackBuilder.resolve()` default `eps` to 0**, like `toPMF()`, so
+  every reachable damage value is kept: ten d20+10-vs-AC-12 attacks for 20d6 reach 2400, not 2060.
+  `Mixture` prunes relative to its normalized mass, so tiny equal weights no longer throw.
+- **`setCachingEnabled(false)` disables and empties every internal PMF cache**, not only the parse
+  cache. Cached PMFs are frozen (`PMF.map` is a `ReadonlyMap`), so mutating a returned bin throws
+  instead of poisoning later results, and `clearRollCache()` also clears the die caches.
+- **`Turn.from(spec)` fills an omitted `of` like the chaining methods**: the declared attacks plus
+  the attack-shaped `any-miss`/`first-miss` rerolls, so a persisted turn equals its chained spelling.
+- **`parse()` accepts a unary minus** (`-3 + 1d6`, `1d6 + -3`, `1d6 - -3`, `-1d8 + 1d6`), and every
+  unreadable string throws `DiceParseError` with a grammar message instead of an internal
+  `TypeError`. Division by a divisor that can be 0 and a roll of a `d0` throw.
+- **Inside a parsed check (left of `AC`/`DC`), `+` always adds.** Outside a check it still adds to
+  non-zero totals only; a check total of exactly 0 no longer drops the next term
+  (`d20 - 5 + 1d4 AC 1`).
+- **A parsed save string labels every failed save `saveFail`**, like the builder (it used `hit`, and
+  a failure that rolled 0 had no label). `SaveBuilder.resolve().check` uses `DCBuilder.toPMF()`
+  polarity: success at 0, failure at 1.
+- **A natural 20 always crits** on an `alwaysHits()` attack at any crit threshold, including
+  `critOn(21)`, as on an AC check.
+- `explodingPoolMatchProbability(weights, count, budget)` replaces `(pMax, faces, count, budget)`;
+  `scaleDamage(factor, rounding, denominator)` takes an integer denominator for an exact ratio;
+  `missChance()` is documented as the probability that at least one attack misses (its value is
+  unchanged). New: `PMF.createCache()`, `PMF#freeze()`, `LRUCache` options
+  `{ onInsert, followsCachingToggle }`.
 
 ### Fixed
 
@@ -218,6 +259,67 @@ changes that turn silent wrong answers into errors.
   normaliser (0.05 → 0.05/6). It now scales the counts with the faces.
 - **A rider with an unknown `on` never fired.** It now throws `unsupported-trigger` when the turn is
   built.
+- **A group of zero dice rolls nothing.** `roll(0, d6)`, `new RollBuilder(0).d6()` and
+  `roll(2, d8).plus(0, d6)` resolved as one die (yipe/dice#12); only the group's flat is left now.
+  In strings, `0d6`, `0(X)`, `(1d4 - 1)d6` and `nd6` at n = 0 are 0 with probability 1 instead of an
+  empty, mass-0 distribution (`1d8 + 0d6` read as mass 0).
+- **Subtracting a roll subtracts its own flat.** `roll(2, d6).minus(roll(1, d4).plus(2))` is 5/2
+  (was 6.5), and `d20.plus(5).minus(roll(1, d4).plus(1)).ac(15)` hits at 13/40. Subtracting a
+  negative roll adds it (`roll(2, d6).minus(roll(-1, 4))` = 2d6 + d4).
+- **A natural 20 always lands under crit-on-hit.** `alwaysCrits()` on an AC check, and every
+  turn-level `critOnHit()` grant, treated the natural 20 as an ordinary roll, so granting
+  crit-on-hit lowered the landing chance at an AC only a 20 reaches
+  (`d20.plus(5).ac(26).alwaysCrits()` landed 0, exactly 1/20).
+- **A builder check resolves from its natural roll exactly.** The natural roll is its d20 wherever it
+  sits (`d4.plus(d20).plus(5).ac(15)` crit 0 → 1/20, mean 3.675 → 203/40), or its largest die with
+  no d20; `withAdvantage()`/`withDisadvantage()`/`withElvenAccuracy()` after a bonus die apply to the
+  d20, not the bonus die (5537/800, was 5.29375); a check with no die (`flat(15).ac(12)`,
+  `flat(10).dc(12)`) compares its flat total with the target and never crits, like `parse()`,
+  instead of adding a phantom d20.
+- **`half()`, `scaleResult()`, `maxOf()` and `sumRolls()` keep their transform under arithmetic**
+  (`roll(2, d6).half().plus(1)` = 17/4, was 8), and `maxOf(n)` keeps the whole inner roll:
+  `roll(2, d6).plus(3).maxOf(2)` = 7369/648 (was 8.3719, the +3 dropped).
+- **`scaleResult(num, den, rounding)` rounds `v·num/den` exactly**: `roll(1, d20).plus(1)
+.scaleResult(9, 7, "ceil")` is 76/5 (was 15.25).
+- **`parse()`'s `reroll` weights each result by its probability**, so a reroll of a sum, max, min or
+  floor is exact: `2d6 reroll 2` is 257/36 (was 3002/421), `(d20 > d20) reroll 1` 221713/16000 and
+  `(d20 < d20) reroll 1` off by up to 0.0044 before. A single uniform die (`hd20`, `d20 reroll 1`) is
+  unchanged. `reroll d0` is a no-op again.
+- **`toExpression()` strings re-parse to the builder's own distribution.** A reroll, minimum,
+  roll-type or scaled term after another term is parenthesised (`d20 + 5 + (d8 reroll 1)`, was read
+  as a reroll of the whole sum); a term after a running total that can be 0 joins with `~+`; keep,
+  `bestOf` and roll-type groups are never merged by count (`2kh1(1d6) + 2kh1(1d6)` printed as
+  `2kh1(2d6)`); there is no leading unary minus (`0 - 1d8`); an attack always prints its crit clause
+  (`noCrit()` prints `crit (<hit>)`, which 0.12's implicit crit would otherwise double); and
+  `alwaysCrits()`, `threeDiceAdvantage()` and `maxOf()` print what they compute. Across 10,200
+  random builders every printed string that parses now matches the builder bin for bin, except for
+  the documented natural-1/natural-20 difference.
+- **`parse()` resolves keeps with an exact order-statistic DP**, so `4kh1(2d20)`, `6kh2(1d20)` and
+  `9kh3(1d8)` no longer hit the old 1e6-outcome cap, and an attack whose payload is a keep with no
+  dice (`* (3kl2(4))`) crits again.
+- **`quantile()`, `percentiles()` and `snapshot().percentiles` land on the exact bin** when the CDF
+  equals p (a d20's median is 10, was 11), and `quantile(1)` is the maximum.
+- **`rerollDamage()`/`minimumDamageDie()` keep a payload's own higher `reroll`/`minimum`**, and the
+  reroll cap accounts for the floor (`minimumDamageDie(4)` with `rerollDamage(4)` on 2d6 = 29/3).
+- **A damage rider on `onDiceMatch` doubles its dice when a crit's dice matched**, like every other
+  rider on a crit.
+- **Bounce odds:** `calculateBounceOdds` with `rerollDamageDice` (Empowered Spell) is exact, choosing
+  how many dice to reroll ((3, 8, 2) = 583/1024; with Elemental Adept (2, 4, 2) = 43/64);
+  `explodingPoolMatchProbability` weights non-max faces by their real probability and lets a single
+  die match its own explosion (1/64 for a d8); `jointSumAndMatch` emits no residue bins.
+- **Cache keys:** `cacheKey()` keeps ±Infinity and NaN distinct, the keep-pool cache is keyed on exact
+  probabilities (it rounded to six digits), and `fingerprint()` escapes label keys.
+- **PMF algebra:** `Mixture` label counts are normalized by the total weight and are not shared with
+  a built PMF; `applyHitFrequency` is exact Bernoulli thinning for any mass and sign; `maxOfTwo` keeps
+  full precision in the tail (30d4's top bins were 0); `mapValues` keeps outcome counts and never
+  prunes; `probAtLeastOne`/`expectedDamageFrom` count a repeated label once and `probExactlyK` is 0
+  for k < 0; `PMF.variance()` of a PMF whose mass is not 1 is the conditional variance, matching
+  `DiceQuery.variance()`; `power()` no longer relabels a shared cached result; an `LRUCache` with
+  capacity ≤ 0 stores nothing.
+- Smaller exactness fixes: `d6.minimum(6).explode(2)` resolves instead of throwing; save and DC PMFs
+  carry no float-residue bins; `combine("elven accuracy", 2, …)` rolls three dice; `resolve().crit`
+  includes the doubled `plusSeparateDamage` channels even when no roll can crit; repeats whose
+  counts outgrow exact integers (`200d100`) resolve instead of returning mass 0.
 
 ## [0.11.0]
 
