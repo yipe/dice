@@ -300,6 +300,18 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
     if (operand.privateData.isDCCheck && HIT_ONLY_OPS.has(op)) {
       finalResult.setOutcomeDistribution("saveFail", op.call(operand.deleteFace(0), arg).getFaceMap());
     }
+    // A landed hit that deals 0 is still a hit: record it at 0, where the misses also sit, from the
+    // AC check's `*` on through every hit-only term after it.
+    if (!operand.privateData.isDCCheck && HIT_ONLY_OPS.has(op) && (hitText !== undefined || operand.privateData.attackPayload)) {
+      finalResult.privateData.attackPayload = true;
+      const landed = landedHitsAtZero(operand, op, arg);
+      if (landed > 0) finalResult.setOutcomeDistribution("hit", { 0: landed });
+    } else if (op === Dice.prototype.combine && typeof arg !== "number" && arg.privateData.attackPayload) {
+      // `combine` keeps the left side's data; an `&` mix lands the hits of both sides.
+      finalResult.privateData.attackPayload = true;
+      const landed = operand.getOutcomeCount("hit", 0) + arg.getOutcomeCount("hit", 0);
+      if (landed > 0) finalResult.setOutcomeDistribution("hit", { 0: landed });
+    }
     // An `&` mix is an attack check whichever side the gate is on: `combine` copies the left's data.
     const gated = op === Dice.prototype.combine && typeof arg !== "number" && arg.privateData.isACCheck;
     if (op === Dice.prototype.ac || gated) finalResult.privateData.isACCheck = true;
@@ -565,9 +577,13 @@ function keptPart(slice: Dice, apply: (face: Dice) => Dice): Dice {
  * highest totals, which smear a natural roll across several totals once bonus dice are added.
  *
  * A crit face the AC gate turned into 0 missed (parse() has no natural-20 auto-hit): it stays
- * miss mass and is never labelled a crit.
+ * miss mass and is never labelled a crit. `xcrit0` crits on no face, so it needs no natural roll.
  */
 function splitCrit(check: Dice, count: number): { crit: Dice; rest: Dice } {
+  if (count === 0) {
+    const none = new Dice();
+    return { crit: none, rest: subtractCounts(check, none) };
+  }
   const track = check.privateData.critTrack;
   if (!track) {
     throw new Error(
@@ -654,6 +670,21 @@ function applyByOutcome(
   if (labelled.privateData.isDCCheck) result.privateData.isDCCheck = true;
   if (payload !== undefined) result.privateData.implicitCrit = { payload };
   return result;
+}
+
+/**
+ * The count of `op(operand, arg)`'s outcomes at 0 that are landed hits: each of `operand`'s hits (a
+ * recorded 0-damage hit included) times the count of `arg`'s values that `op` takes it to 0 with.
+ */
+function landedHitsAtZero(operand: Dice, op: DiceOperation, arg: Dice | number): number {
+  let landed = 0;
+  for (const [face, count] of Object.entries(operand.calculateHitDistribution())) {
+    if (!(count > 0)) continue;
+    const hit = new Dice();
+    hit.setFace(Number(face), count);
+    landed += op.call(hit, arg).get(0);
+  }
+  return landed;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { PMF } from "../pmf/pmf";
 import { resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
+import { requireFinite } from "./arguments";
 import { RollBuilder } from "./roll";
 import { SaveBuilder } from "./save";
 
@@ -28,6 +29,8 @@ export class DCBuilder extends RollBuilder {
   }
 
   override dc(saveDC: number): DCBuilder {
+    if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");
+    requireFinite(saveDC, "dc()");
     if (this.rollType && this.rollType === "elven accuracy") {
       throw new Error(
         "Cannot use dc() on an AttackRollBuilder. Use ac() for attack rolls instead."
@@ -129,6 +132,5 @@ export class DCBuilder extends RollBuilder {
 
 // Augment the RollBuilder prototype to implement the dc method
 RollBuilder.prototype.dc = function (saveDC: number): DCBuilder {
-  if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");
   return new DCBuilder(this).dc(saveDC);
 };

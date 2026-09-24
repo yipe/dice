@@ -403,7 +403,7 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(5).ac(15).onHit(roll(2, d6).plus(3)).noCrit();
         const pmf = attack.toPMF();
 
-        expect(attack.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) crit (2d6 + 3)");
+        expect(attack.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) xcrit0 (2d6 + 3)");
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBeGreaterThanOrEqual(0);
         expect(pmf.mean()).toBeGreaterThan(0);
@@ -591,7 +591,7 @@ describe("AttackRollBuilder", () => {
 
     it("can prevent auto-crit", () => {
       const action = d20.plus(5).ac(15).onHit(roll(2).d6().plus(3)).noCrit();
-      expect(action.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) crit (2d6 + 3)");
+      expect(action.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) xcrit0 (2d6 + 3)");
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF().mean()).toBeCloseTo(5.5);
     });

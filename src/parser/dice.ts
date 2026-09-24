@@ -50,6 +50,10 @@ export interface DicePrivateData {
   /** Set on an attack whose crit is its hit payload doubled (no crit clause): the payload's
    * text, so a trailing hit-only term joins the payload and doubles with it. See parser.ts. */
   implicitCrit?: { payload: string };
+  /** Set on an attack's payload: the result of an AC check's `*`, and of each hit-only term after it.
+   * A landed hit that deals 0 there is recorded under `hit` at 0, where the misses also sit, and a
+   * later hit-only term keeps it (see {@link Dice.calculateHitDistribution}). Read and written by parser.ts. */
+  attackPayload?: true;
 }
 
 /**
@@ -170,9 +174,10 @@ export class Dice {
         }
       }
 
-      // Zero damage should not be counted as hits - they represent misses
+      // At 0 a miss and a hit that deals nothing coincide: only the landed hits recorded there are
+      // hits (an attack payload's, see `attackPayload`); everything else at 0 is a miss.
       if (numFace === 0) {
-        hitCount = 0;
+        hitCount = this.outcomeData.hit?.[0] ?? 0;
       }
 
       // Defensive clamp: guards against negative hit counts from older

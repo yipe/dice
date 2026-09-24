@@ -12,17 +12,13 @@ import {
   pmfFromRollBuilder,
   resolveRootD20,
 } from "./ast";
+import { requireFinite } from "./arguments";
 import { configTerms, joinTerms, nodeRange, printScale, rootDieExpression, type ExpressionTerm } from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
-
-/** Throws for ±Infinity (NaN has its own, earlier message at each call site). */
-function requireFinite(value: number, what: string): void {
-  if (!Number.isFinite(value)) throw new Error(`${what} must be finite, got ${value}`);
-}
 
 /**
  * Thrown when a parsed string (`d("d20+5")`, `RollBuilder.fromArgs("d20+5")`) is used as an attack
@@ -229,10 +225,7 @@ export class RollBuilder {
       } else if (typeof sidesOrDie === "number" || sidesOrDie === undefined) {
         if (typeof sidesOrDie === "number" && isNaN(sidesOrDie))
           throw new Error("Invalid NaN value for sides argument");
-        let builder = new RollBuilder(count);
-        if (sidesOrDie && sidesOrDie > 0) {
-          builder = builder.d(sidesOrDie);
-        }
+        const builder = new RollBuilder(count).d(sidesOrDie);
         return modifier !== undefined ? builder.plus(modifier) : builder;
       }
     }
@@ -285,6 +278,7 @@ export class RollBuilder {
       throw new Error("Invalid NaN value for sides");
     if (sides === undefined) return this;
     requireFinite(sides, "sides");
+    if (sides < 0) throw new Error(`sides must not be negative, got ${sides}`);
     if (this.lastConfig.sides && this.lastConfig.sides > 0) {
       throw new Error("Cannot add a die after adding a die");
     }
@@ -861,6 +855,9 @@ export class ScaleRollBuilder extends TransformedRollBuilder {
     private readonly rounding: "floor" | "round" | "ceil" = "floor"
   ) {
     super(0); // dummy, we override methods
+    requireFinite(numerator, "scaleResult() numerator");
+    requireFinite(denominator, "scaleResult() denominator");
+    if (denominator === 0) throw new Error("scaleResult() denominator must not be 0");
   }
 
   override hasHiddenState(): boolean {
@@ -1027,6 +1024,7 @@ export class AlwaysHitBuilder extends RollBuilder {
 
   /** Sets the crit threshold for this always-hitting check: a natural roll at or above it crits. */
   critOn(critThreshold: number): AlwaysHitBuilder {
+    requireFinite(critThreshold, "critOn() threshold");
     const newConfig = { critThreshold };
     return new AlwaysHitBuilder(this, newConfig);
   }
@@ -1102,6 +1100,7 @@ export class AlwaysCritBuilder extends RollBuilder {
   }
 
   critOn(critThreshold: number): AlwaysCritBuilder {
+    requireFinite(critThreshold, "critOn() threshold");
     const newConfig = { critThreshold, ac: this.attackConfig.ac };
     return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
   }

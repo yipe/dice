@@ -2,6 +2,7 @@ import { PMF } from "../pmf/pmf";
 import { AttackBuilder } from "./attack";
 import { resolveRootD20 } from "./ast";
 import { checkExpression } from "./expression";
+import { requireFinite } from "./arguments";
 import { AlwaysCritBuilder, naturalRollIndex, RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
@@ -117,6 +118,7 @@ export class ACBuilder extends RollBuilder {
 
   /** Sets the crit threshold: a natural roll at or above it is a crit. */
   critOn(threshold: number): ACBuilder {
+    requireFinite(threshold, "critOn() threshold");
     const newConfig: AttackConfig = {
       ...this.attackConfig,
       critThreshold: threshold,
@@ -190,5 +192,6 @@ export class ACBuilder extends RollBuilder {
 // Augment the RollBuilder prototype to implement the ac method
 RollBuilder.prototype.ac = function (targetAC: number): ACBuilder {
   if (isNaN(targetAC)) throw new Error("Invalid NaN value for targetAC");
+  requireFinite(targetAC, "ac()");
   return new ACBuilder(this, targetAC);
 };
