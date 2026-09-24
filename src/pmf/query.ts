@@ -292,40 +292,14 @@ export class DiceQuery {
   }
 
   /**
-   * Returns damage values at specific percentiles.
+   * Returns damage values at specific percentiles: for each p, the smallest damage x with
+   * P(total ≤ x) ≥ p, exact at CDF boundaries (see {@link PMF.quantile}).
    *
    * Example: `query.percentiles([0.25, 0.5, 0.75])` → [8, 12, 18]
    * Use case: "What are my 25th, 50th, and 75th percentile damage values?"
    */
   percentiles(percentileValues: number[]): number[] {
-    const sortedDamageValues = this.combined.support();
-    if (sortedDamageValues.length === 0) return percentileValues.map(() => 0);
-
-    const cumulativeProbabilities: number[] = [];
-    let runningProbabilitySum = 0;
-    for (const damageValue of sortedDamageValues) {
-      runningProbabilitySum += this.combined.map.get(damageValue)!.p;
-      cumulativeProbabilities.push(runningProbabilitySum);
-    }
-
-    return percentileValues.map((targetPercentile) => {
-      // Binary search for efficiency
-      let leftBound = 0;
-      let rightBound = cumulativeProbabilities.length - 1;
-
-      while (leftBound <= rightBound) {
-        const middleIndex = Math.floor((leftBound + rightBound) / 2);
-        if (cumulativeProbabilities[middleIndex] >= targetPercentile) {
-          rightBound = middleIndex - 1;
-        } else {
-          leftBound = middleIndex + 1;
-        }
-      }
-
-      return leftBound < sortedDamageValues.length
-        ? sortedDamageValues[leftBound]
-        : sortedDamageValues[sortedDamageValues.length - 1];
-    });
+    return percentileValues.map((p) => this.combined.quantile(p));
   }
 
   /**
@@ -425,13 +399,10 @@ export class DiceQuery {
    * Note:
    *
    * - You have to pass in an array of labels to avoid double-counting if you are
-   *   using multiple labels. You cannot just add them.
+   *   using multiple labels. You cannot just add them. A label listed twice counts once.
    */
   probAtLeastOne(labels: OutcomeType | OutcomeType[]): number {
-    // Handle single label case (backward compatibility)
-    if (typeof labels === "string") {
-      labels = [labels];
-    }
+    const distinctLabels = typeof labels === "string" ? [labels] : [...new Set(labels)];
 
     let productOfNonOccurrence = 1;
     for (let diceIndex = 0; diceIndex < this.singles.length; diceIndex++) {
@@ -439,7 +410,7 @@ export class DiceQuery {
       // Clamp to [0,1] so floating-point drift in the per-attack sum cannot push
       // the complement out of range.
       let combinedProbability = 0;
-      for (const label of labels) {
+      for (const label of distinctLabels) {
         combinedProbability += this.singleProb(diceIndex, label);
       }
       if (combinedProbability < 0) combinedProbability = 0;
@@ -504,10 +475,11 @@ export class DiceQuery {
    * - "How likely am I to get exactly 2 successes out of 3 attacks?"
    * - "What's the probability that exactly half my attacks succeed?"
    *
-   * Note: For arrays, an attack counts as a "success" if it has any of the specified labels.
-   * This is different from probAtMostK, which counts an attack as a "success" if it has ALL of the specified labels.
+   * Note: For arrays, an attack counts as a "success" if it has any of the specified labels,
+   * as in probAtLeastK and probAtMostK. A negative k has probability 0.
    */
   probExactlyK(labels: OutcomeType | OutcomeType[], k: number): number {
+    if (k < 0) return 0;
     // Handle single label case (backward compatibility)
     if (typeof labels === "string") {
       const probabilityArray = this.computeBinomialProbabilities(labels, k);
@@ -575,18 +547,27 @@ export class DiceQuery {
    * - "How much damage do I expect from successful attacks?"
    * - "What's the damage contribution from critical hits specifically?"
    * - "How much damage comes from miss effects (like save-for-half spells)?"
+   *
+   * A single whose mass is not 1 is normalized exactly as {@link mean} normalizes it, so the
+   * contributions of labels that cover every outcome add up to `mean()`. A label listed twice
+   * counts once.
    */
   expectedDamageFrom(labels: OutcomeType | OutcomeType[]): number {
-    const wanted = Array.isArray(labels) ? labels : [labels];
+    const wanted = Array.isArray(labels) ? [...new Set(labels)] : [labels];
 
     let total = 0;
-    // By linearity of expectation, we can sum the expected damages from each individual PMF. This avoids issues with the `count` aggregation during
+    // By linearity of expectation, sum the wanted-label damage over each single PMF directly,
+    // avoiding the `count` aggregation issues a merged PMF would introduce.
     for (const single of this.singles) {
+      const mass = single.mass();
+      if (mass <= 0) continue;
+      let contribution = 0;
       for (const [dmg, bin] of single) {
         let p = 0;
         for (const label of wanted) p += bin.count[label] ?? 0;
-        total += dmg * p;
+        contribution += dmg * p;
       }
+      total += Math.abs(mass - 1) <= this._eps ? contribution : contribution / mass;
     }
     return total;
   }
@@ -783,10 +764,15 @@ export class DiceQuery {
   }
 
   /**
-   * Returns the probability of missing (any type of miss).
+   * Returns the probability that at least one attack misses (either kind of miss:
+   * `missNone` or `missDamage`). For a single attack this is its miss chance.
    *
-   * Example: `query.missChance()` → 0.04
-   * Use case: "What's the chance I miss completely this turn?"
+   * Example: `query.missChance()` → 0.45
+   * Use case: "What's the chance I miss at least once this turn?"
+   *
+   * For the chance that every attack misses, use
+   * `probExactlyK(["missNone", "missDamage"], n)` with n attacks, or
+   * `probAtMostK(["hit", "crit"], 0)`.
    */
   missChance(): number {
     // Miss can be either explicit misses with damage or zero-damage misses
@@ -945,8 +931,7 @@ export class DiceQuery {
     const ccdfData: number[] = [];
 
     for (const damage of support) {
-      // For CCDF at point x, we want P(X ≥ x) = 1 - P(X < x)
-      // which is the total probability minus cumulative up to (but not including) x
+      // P(X ≥ x) is the total mass minus the cumulative up to (not including) x.
       const ccdf = 1 - cumulativeProbability;
       ccdfData.push(asPercentages ? ccdf * 100 : ccdf);
 
@@ -963,10 +948,6 @@ export class DiceQuery {
     };
   }
 
-  /*
-        Statistics snapshot of the query.
-            */
-
   /** Probability of doing strictly more than threshold damage (default >0). */
   probDamageGreaterThan(threshold = 0): number {
     let acc = 0;
@@ -974,7 +955,7 @@ export class DiceQuery {
     return acc;
   }
 
-  /** All outcome keys actually present (typed & ordered if you pass an order). */
+  /** All outcome keys present in the PMF, ordered by `order` when given. */
   outcomeKeys(order?: OutcomeType[]): OutcomeType[] {
     const found = new Set<string>();
     for (const [, bin] of this.combined.map) {
@@ -1182,23 +1163,16 @@ export class DiceQuery {
       });
     }
 
-    // 3) Scalars: mean, damageChance, and percentiles from the dense CDF
+    // 3) Scalars: mean, damageChance, and percentiles
     const averageDPR = this.mean();
 
     let damageChance = 0; // P(total damage > 0)
     for (const [x, bin] of this.combined.map) if (x > 0) damageChance += bin.p;
 
-    const { support, data } = this.toCDFSeries(false); // P(X ≤ x) in 0..1
-    const quantile = (p: number) => {
-      if (support.length === 0) return 0;
-      for (let i = 0; i < support.length; i++)
-        if (data[i] >= p) return support[i];
-      return support[support.length - 1];
-    };
     const percentiles = {
-      p25: quantile(0.25),
-      p50: quantile(0.5),
-      p75: quantile(0.75),
+      p25: this.combined.quantile(0.25),
+      p50: this.combined.quantile(0.5),
+      p75: this.combined.quantile(0.75),
     };
 
     return { averageDPR, damageChance, percentiles, outcomes: outcomeMap };
@@ -1289,23 +1263,27 @@ export class DiceQuery {
   }
 
   /**
-   * Returns a new DiceQuery with damage values scaled by a factor.
-   * Convenient wrapper around mapDamage for multiplicative scaling.
+   * Returns a new DiceQuery with damage values scaled by `factor / denominator`.
+   * Convenient wrapper around mapDamage for multiplicative scaling; see
+   * {@link PMF.scaleDamage} for the rounding rules.
    *
-   * @param factor Scaling factor for damage values
+   * @param factor Scaling factor for damage values (the numerator of a ratio)
    * @param rounding Rounding method: "floor" (default), "round", or "ceil"
+   * @param denominator Divisor; integer `factor` and `denominator` round exactly
    * @returns New DiceQuery with scaled damage values
    *
    * @example
    * const baseAttack = parse("2d6 + 3");
    * const doubled = baseAttack.scaleDamage(2); // Double damage
    * const halfDamage = baseAttack.scaleDamage(0.5, "round"); // Half damage, rounded
+   * const sevenTenths = baseAttack.scaleDamage(7, "floor", 10); // floor(7v/10), exactly
    */
   scaleDamage(
     factor: number,
-    rounding: "floor" | "round" | "ceil" = "floor"
+    rounding: "floor" | "round" | "ceil" = "floor",
+    denominator = 1
   ): DiceQuery {
-    return new DiceQuery([this.combined.scaleDamage(factor, rounding)]);
+    return new DiceQuery([this.combined.scaleDamage(factor, rounding, denominator)]);
   }
 
   /**

@@ -17,3 +17,18 @@ export function d20PmfFromCdf(
 
   return PMF.fromMap(out, eps);
 }
+
+/**
+ * `P(X ≥ t)` and `P(X < t)` for `pmf`, each summed from its own bins — so a side with no bins is
+ * exactly 0, never the `1 - p` float residue of the other. Used to split a check's bonus dice at the
+ * total its natural roll still needs.
+ */
+export function splitAtThreshold(pmf: PMF, t: number): { atLeast: number; below: number } {
+  let atLeast = 0;
+  let below = 0;
+  for (const [x, bin] of pmf) {
+    if (x >= t) atLeast += bin.p;
+    else below += bin.p;
+  }
+  return { atLeast, below };
+}

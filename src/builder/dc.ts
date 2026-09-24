@@ -1,6 +1,7 @@
-import { LRUCache } from "../common/lru-cache";
 import { PMF } from "../pmf/pmf";
-import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { resolveRootD20 } from "./ast";
+import { splitAtThreshold } from "./prob";
+import { requireFinite } from "./arguments";
 import { RollBuilder } from "./roll";
 import { SaveBuilder } from "./save";
 
@@ -12,7 +13,7 @@ interface SaveConfig {
  * DC-check PMF cache. The two-outcome success/fail PMF is re-derived on every `toPMF()`, and a save-based
  * DPR sweep asks for the SAME check thousands of times. Keyed by {@link DCBuilder.cacheKey} + `eps`.
  */
-const dcPMFCache = new LRUCache<string, PMF>(4000);
+const dcPMFCache = PMF.createCache(4000);
 
 /** Clears the DC-check PMF cache (test/bench seam). */
 export function clearDCCache(): void {
@@ -28,6 +29,8 @@ export class DCBuilder extends RollBuilder {
   }
 
   override dc(saveDC: number): DCBuilder {
+    if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");
+    requireFinite(saveDC, "dc()");
     if (this.rollType && this.rollType === "elven accuracy") {
       throw new Error(
         "Cannot use dc() on an AttackRollBuilder. Use ac() for attack rolls instead."
@@ -86,6 +89,29 @@ export class DCBuilder extends RollBuilder {
     return base === null ? null : `DC|${this.saveConfig.dc}|${base}`;
   }
 
+  /**
+   * P(success) and P(failure) of this save: success iff natural roll + bonus dice + modifier ≥ DC,
+   * with no natural-1/natural-20 rule (a check with no die compares its flat total alone). Each side
+   * is summed from its own outcomes, so a certain success has a failure chance of exactly 0.
+   */
+  saveProbabilities(): { pSuccess: number; pFail: number } {
+    const natural = resolveRootD20(this);
+    const bonusDicePMFs = this.getBonusDicePMFs(this, 0);
+    const bonusPMF = bonusDicePMFs.length ? PMF.convolveMany(bonusDicePMFs, 0) : PMF.delta(0, 0);
+    let pSuccess = 0;
+    let pFail = 0;
+    for (const [r, bin] of natural) {
+      const { atLeast, below } = splitAtThreshold(bonusPMF, this.saveDC - this.modifier - r);
+      pSuccess += bin.p * atLeast;
+      pFail += bin.p * below;
+    }
+    return { pSuccess, pFail };
+  }
+
+  /**
+   * The check outcome as a PMF: a success at 0, a failure at 1 (so `hitProbability()` is the
+   * chance the save fails — the chance the effect lands). `SaveBuilder.resolve().check` is this PMF.
+   */
   override toPMF(eps: number = 0): PMF {
     const key = this.cacheKey();
     const fullKey = key === null ? null : `${key}*e${eps}`;
@@ -94,29 +120,10 @@ export class DCBuilder extends RollBuilder {
       if (cached) return cached;
     }
 
-    const saveDC = this.saveDC;
-    const d20 = resolveRootD20(this);
-    const staticMod = this.modifier;
-    const bonusDicePMFs = this.getBonusDiceConfigs().map((cfg) =>
-      pmfFromRollBuilder(RollBuilder.fromConfigs([cfg]), eps)
-    );
-    const bonusPMF = bonusDicePMFs.length
-      ? PMF.convolveMany(bonusDicePMFs, eps)
-      : PMF.delta(0, eps);
-
-    let psuccess = 0;
-    for (const [r, bin] of d20) {
-      const pr = bin.p;
-      if (pr <= 0) continue;
-      const need = saveDC - staticMod - r;
-      psuccess += pr * bonusPMF.tailProbGE(need);
-    }
-
-    const pfail = Math.max(0, 1 - psuccess);
-    const m = new Map<number, number>([
-      [0, psuccess > 0 ? psuccess : 0],
-      [1, pfail > 0 ? pfail : 0],
-    ]);
+    const { pSuccess, pFail } = this.saveProbabilities();
+    const m = new Map<number, number>();
+    if (pSuccess > 0) m.set(0, pSuccess);
+    if (pFail > 0) m.set(1, pFail);
     const pmf = PMF.fromMap(m, eps);
     if (fullKey !== null) dcPMFCache.set(fullKey, pmf);
     return pmf;
@@ -125,6 +132,5 @@ export class DCBuilder extends RollBuilder {
 
 // Augment the RollBuilder prototype to implement the dc method
 RollBuilder.prototype.dc = function (saveDC: number): DCBuilder {
-  if (isNaN(saveDC)) throw new Error("Invalid NaN value for saveDC");
   return new DCBuilder(this).dc(saveDC);
 };
