@@ -46,7 +46,9 @@ describe("AttackRollBuilder", () => {
       const complexBonusAttack = roll.d20().plus(2, d4).plus(1).plus(6).ac(16);
 
       expect(complexBonusAttack.toExpression()).toBe("(d20 + 7 + 2d4 AC 16)");
-      expect(complexBonusAttack.toPMF().mean()).toBe(29.5); // TODO: confirm
+      // E[(d20 + 2d4 + 7) · 1{total ≥ 16}] = 1637/80, enumerated exactly. The old 29.5 counted the
+      // +7 twice (d20 + 2d4 + 14 never misses AC 16, so its mean is the whole 10.5 + 5 + 14).
+      expect(complexBonusAttack.toPMF().mean()).toBeCloseTo(1637 / 80, 12);
     });
 
     it("should work with advantage and bonus dice", () => {
@@ -186,11 +188,11 @@ describe("AttackRollBuilder", () => {
     it("should handle invalid AC values", () => {
       // Handles htem for now… we can always prevent it later if needed
       expect(() => {
-        d20.ac(-1);
+        void d20.ac(-1);
       }).not.toThrow();
 
       expect(() => {
-        d20.ac(0);
+        void d20.ac(0);
       }).not.toThrow();
     });
 
@@ -208,7 +210,7 @@ describe("AttackRollBuilder", () => {
     it("should handle invalid plus values", () => {
       const attack = d20.ac(15);
       expect(() => {
-        attack.plus(roll.flat(NaN));
+        void attack.plus(roll.flat(NaN));
       }).toThrow();
     });
   });
@@ -525,15 +527,19 @@ describe("AttackRollBuilder", () => {
         expect(pmf.mean()).toBeGreaterThan(0);
       });
 
-      it("should handle attack with keep dice in damage", () => {
+      it("should handle attack with keep dice in damage, given an explicit crit", () => {
+        // A 4d6-drop-lowest payload has no single doubled crit (R33), so it takes an explicit one.
+        const keep = () => roll(4, d6).keepHighest(4, 3);
         const attack = d20
           .plus(5)
           .ac(15)
-          .onHit(roll(4, d6).keepHighest(4, 3).plus(2));
+          .onHit(keep().plus(2))
+          .onCrit(keep().plus(keep()).plus(2));
         const pmf = attack.toPMF();
 
-        expect(pmf).toBeDefined();
         expect(pmf.min()).toBe(0);
+        // 0.5 × (15869/1296 + 2) + 0.05 × (2 × 15869/1296 + 2)
+        expect(pmf.mean()).toBeCloseTo(8.446759259259259, 10);
       });
     });
   });
@@ -733,21 +739,21 @@ describe("AttackRollBuilder", () => {
       it("should handle invalid hit effects", () => {
         const attack = d20.ac(15);
         expect(() => {
-          attack.onHit(roll.flat(NaN));
+          void attack.onHit(roll.flat(NaN));
         }).toThrow();
       });
 
       it("should handle invalid crit effects", () => {
         const attack = d20.ac(15).onHit(roll.d6());
         expect(() => {
-          attack.onCrit(roll.flat(NaN));
+          void attack.onCrit(roll.flat(NaN));
         }).toThrow();
       });
 
       it("should handle invalid miss effects", () => {
         const attack = d20.ac(15).onHit(roll.d6());
         expect(() => {
-          attack.onMiss(roll.flat(NaN));
+          void attack.onMiss(roll.flat(NaN));
         }).toThrow(); // Currently allows NaN effects, but should validate
       });
     });

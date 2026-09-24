@@ -3,6 +3,7 @@ import type { CritConfig } from "../common/types";
 import type { DCBuilder } from "./dc";
 import { LRUCache } from "../common/lru-cache";
 import { parse } from "../parser/parser";
+import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionError } from "../parser/scaleDice";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { astFromRollConfigs, pmfFromRollBuilder, resolveRootD20 } from "./ast";
@@ -11,12 +12,39 @@ import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
 
 /** Validates a `scaleDice`/`doubleDice` multiplier: must be a positive integer. Shared by
- * `RollBuilder.scaleDice` and every wrapper subclass's override (Half/Scale/MaxOf/Composite). */
+ * `RollBuilder.scaleDice` and every subclass's override (Half/Scale/MaxOf/Composite/Parsed/Pooled). */
 function validateScaleInt(scale: number): number {
   const scaleInt = Math.floor(scale);
   if (scaleInt !== scale) throw new Error("Scale must be an integer");
   if (scaleInt <= 0) throw new Error("Scale must be > 0");
   return scaleInt;
+}
+
+/**
+ * Why scaling `config`'s dice by `scale` has no single meaning (R33), or `undefined` when it has one.
+ * `astFromRollConfigs` reads a per-die keep through the die count, so multiplying that count only
+ * means "double the dice" for keep-highest-of-1 ("roll it N times, keep the best", which then
+ * doubles its dice inside each trial). Any other keep, a `bestOf()` that is (or becomes) a keep, and
+ * a die rolled with advantage/disadvantage/elven accuracy (whose count the AST ignores) do not.
+ */
+function ambiguousScaling(config: RollConfig, scale: number): string | undefined {
+  const die = `d${config.sides}`;
+  if (config.rollType !== "flat") {
+    return `a ${die} rolled with ${config.rollType} ignores its dice count, so a doubled crit would equal the hit`;
+  }
+  if (config.keep) {
+    const { total, count, mode } = config.keep;
+    if (count === 1 && mode === "highest") return undefined;
+    return (
+      `the per-die keep \`${total}${mode === "highest" ? "kh" : "kl"}${count}\` of ${die} has no single doubled meaning ` +
+      `(only keep-highest-of-1, "roll it N times, keep the best", doubles its dice inside each trial)`
+    );
+  }
+  const dice = Math.abs(config.count);
+  if (config.bestOf > 0 && config.bestOf < dice * scale) {
+    return `bestOf(${config.bestOf}) on ${dice}${die} keeps individual dice from the scaled pool, which has no single doubled meaning`;
+  }
+  return undefined;
 }
 
 /**
@@ -393,7 +421,9 @@ export class RollBuilder {
     };
     const currentExpr = this.toExpression();
     const expression = `${total}kh${count}(${currentExpr})`;
-    return new PooledRollBuilder(keepNode, expression);
+    return new PooledRollBuilder(keepNode, expression, [], (scale) =>
+      this.scaleDice(scale).keepHighestAll(total, count)
+    );
   }
 
   keepLowestAll(total: number, count: number): PooledRollBuilder {
@@ -413,7 +443,9 @@ export class RollBuilder {
     };
     const currentExpr = this.toExpression();
     const expression = `${total}kl${count}(${currentExpr})`;
-    return new PooledRollBuilder(keepNode, expression);
+    return new PooledRollBuilder(keepNode, expression, [], (scale) =>
+      this.scaleDice(scale).keepLowestAll(total, count)
+    );
   }
 
   withAdvantage(): RollBuilder {
@@ -457,11 +489,23 @@ export class RollBuilder {
     return this.create(configs);
   }
 
+  /**
+   * Multiplies every die group's count by `scale` (R33 crit doubling); flats stay. Throws an
+   * {@link AmbiguousCritDoublingError} for a group whose scaled meaning is ambiguous (see
+   * {@link ambiguousScaling}): the caller must give the crit explicitly.
+   */
   scaleDice(scale: number): RollBuilder {
     const scaleInt = validateScaleInt(scale);
 
     const newConfigs = this.getSubRollConfigs().map((config) => {
       if (!config.sides || config.sides <= 0) return config;
+      const ambiguity = ambiguousScaling(config, scaleInt);
+      if (ambiguity !== undefined) {
+        throw new AmbiguousCritDoublingError(
+          `Cannot double the dice of "${this.toExpression()}" on a crit: ${ambiguity}. ` +
+            `Give the crit explicitly: onCrit(...) on an attack, critDamage on a rider, or noCrit().`
+        );
+      }
       return { ...config, count: config.count * scaleInt };
     });
     return this.create(newConfigs);
@@ -798,14 +842,20 @@ export class RollBuilder {
     return this.getSubRollConfigs();
   }
 
+  /**
+   * The check's dice other than its root die (Bless, Bane, Guidance), each WITHOUT its flat
+   * modifier. `.plus(n)` stores `n` on whichever group came last, so `d20.plus(d4).plus(5)` holds
+   * the 5 on the d4 group; every check resolver already adds all flats once via {@link modifier},
+   * so a bonus group that kept its own would count it twice and make the check order-dependent.
+   */
   getBonusDiceConfigs(): RollConfig[] {
     const allConfigs = this.subRollConfigs;
     const rootConfig =
       allConfigs.find((config) => config.sides > 0) || allConfigs[0];
     if (!rootConfig) return [];
     return allConfigs
-      .filter((config) => config.sides > 0)
-      .filter((config) => config !== rootConfig);
+      .filter((config) => config.sides > 0 && config !== rootConfig)
+      .map((config) => ({ ...config, modifier: 0 }));
   }
 
   getBonusDicePMFs(check: RollBuilder, eps: number = 0): PMF[] {
@@ -1303,18 +1353,51 @@ export class ParsedRollBuilder extends RollBuilder {
     return new ParsedRollBuilder(this.originalExpression);
   }
 
+  /**
+   * Whether this is a damage expression whose dice a crit doubles (R33): false for one with an AC/DC
+   * check or a crit/save/pc/miss clause, or a dice-valued repeat count (`d4d6`), which a crit adds
+   * as-is. True for every other expression, including one whose doubling is ambiguous (a keep other
+   * than keep-highest-of-1, a min of two dice terms): that is still damage, and {@link doubleDice}
+   * refuses it with an `AmbiguousCritDoublingError` so no crit is approximated. Reads the string
+   * only; nothing is parsed into a PMF.
+   */
+  canDoubleDice(): boolean {
+    try {
+      scaleParsedDice(this.originalExpression, 2);
+      return true;
+    } catch (error) {
+      if (error instanceof UndoubleableExpressionError) return false;
+      if (error instanceof AmbiguousCritDoublingError) return true;
+      throw error;
+    }
+  }
+
+  /**
+   * R33: a crit doubles every dice term of the expression; flats and operators stay. Throws when
+   * {@link canDoubleDice} is false, and for an ambiguous keep (see {@link canDoubleDice}).
+   */
   override doubleDice(): ParsedRollBuilder {
-    throw new Error(
-      "ParsedRollBuilder does not support doubleDice(). Use explicit onCrit() with the crit damage expression instead."
-    );
+    return this.scaleDice(2);
+  }
+
+  override scaleDice(scale: number): ParsedRollBuilder {
+    return new ParsedRollBuilder(scaleParsedDice(this.originalExpression, validateScaleInt(scale)));
   }
 }
+
+/**
+ * Rebuilds a pool from its pre-pool roll with that roll's dice scaled. This is how a pool's dice
+ * double on a crit (R33): `roll(2,d6).plus(3).keepHighestAll(2,1)` crits as
+ * `roll(4,d6).plus(3).keepHighestAll(2,1)`, never as the whole pool rolled twice.
+ */
+type RepoolScaled = (scale: number) => PooledRollBuilder;
 
 export class PooledRollBuilder extends RollBuilder {
   constructor(
     private readonly baseAST: ExpressionNode,
     private readonly baseExpression: string,
-    configs: readonly RollConfig[] = []
+    configs: readonly RollConfig[] = [],
+    private readonly repoolScaled?: RepoolScaled
   ) {
     // Initialize with empty config if none provided
     super(configs.length > 0 ? configs : 0);
@@ -1323,7 +1406,7 @@ export class PooledRollBuilder extends RollBuilder {
   protected create(configs: readonly RollConfig[]): PooledRollBuilder {
     // This is the key fix: we preserve the baseAST and baseExpression
     // and only update the configs
-    return new PooledRollBuilder(this.baseAST, this.baseExpression, configs);
+    return new PooledRollBuilder(this.baseAST, this.baseExpression, configs, this.repoolScaled);
   }
 
   override hasHiddenState(): boolean {
@@ -1418,38 +1501,24 @@ export class PooledRollBuilder extends RollBuilder {
   }
 
   override copy(): PooledRollBuilder {
-    return new PooledRollBuilder(
-      this.baseAST,
-      this.baseExpression,
-      this.getSubRollConfigs()
-    );
+    return this.create(this.getSubRollConfigs());
   }
 
-  override scaleDice(scale: number): RollBuilder {
-    const scaleInt = Math.floor(scale);
-    if (scaleInt !== scale) throw new Error("Scale must be an integer");
-    if (scaleInt <= 0) throw new Error("Scale must be > 0");
-
-    // Scale the base pool (treat it as a die/unit)
-    // We wrap the base AST in a SumNode
-    const newBaseAST: SumNode = {
-      type: "sum",
-      count: scaleInt,
-      child: this.baseAST,
-    };
-    const newBaseExpr =
-      scaleInt === 1
-        ? this.baseExpression
-        : `${scaleInt}(${this.baseExpression})`;
-
-    // We preserve the existing modifiers (subRollConfigs) without scaling them,
-    // because scaleDice() generally only scales "dice", not flat modifiers.
-    // Since we forbid adding dice to PooledRollBuilder, subRollConfigs are only modifiers.
-    return new PooledRollBuilder(
-      newBaseAST,
-      newBaseExpr,
-      this.getSubRollConfigs()
-    );
+  /**
+   * R33: scales the dice inside the pool, then pools — the pool is rebuilt from its own pre-pool
+   * roll with that roll's dice scaled, so its trial count and flats never multiply. Dice added
+   * after pooling (`pool.plus(roll(1, d4))`) scale too; flat modifiers do not.
+   */
+  override scaleDice(scale: number): PooledRollBuilder {
+    const scaleInt = validateScaleInt(scale);
+    if (!this.repoolScaled) {
+      throw new Error(
+        "This pool has no pre-pool roll to scale its dice inside; build it with keepHighestAll(), keepLowestAll() or times()."
+      );
+    }
+    const repooled = this.repoolScaled(scaleInt);
+    const configs = super.scaleDice(scaleInt).getSubRollConfigs();
+    return new PooledRollBuilder(repooled.baseAST, repooled.baseExpression, configs, repooled.repoolScaled);
   }
 
   times(count: number): PooledRollBuilder {
@@ -1470,7 +1539,7 @@ export class PooledRollBuilder extends RollBuilder {
 
     const newExpr = count === 1 ? currentExpr : `${count}(${currentExpr})`;
 
-    return new PooledRollBuilder(sumNode, newExpr);
+    return new PooledRollBuilder(sumNode, newExpr, [], (scale) => this.scaleDice(scale).times(count));
   }
 }
 

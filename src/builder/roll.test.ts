@@ -161,7 +161,7 @@ describe("RollBuilder", () => {
   it("should throw error if adding a die after adding a die", () => {
     const d8Builder = roll.d8();
     expect(() => {
-      d8Builder.d(8);
+      void d8Builder.d(8);
     }).toThrow("Cannot add a die after adding a die");
   });
 
@@ -478,84 +478,84 @@ describe("RollBuilder", () => {
     describe("RollBuilder Input Validation", () => {
       it("should handle invalid dice sides", () => {
         expect(() => {
-          roll.d(0);
+          void roll.d(0);
         }).not.toThrow(); // Currently allows 0 sides, but should validate
 
         expect(() => {
-          roll.d(-1);
+          void roll.d(-1);
         }).not.toThrow(); // Currently allows negative sides, but should validate
       });
 
       it("should handle invalid dice count", () => {
         expect(() => {
-          roll(-1).d6();
+          void roll(-1).d6();
         }).not.toThrow(); // Currently allows negative count, but should validate
 
         expect(() => {
-          roll(0).d6();
+          void roll(0).d6();
         }).not.toThrow(); // Currently allows 0 count, but should validate
       });
 
       it("should handle invalid reroll values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.reroll(-1);
+          void builder.reroll(-1);
         }).not.toThrow(); // Currently allows negative reroll, but should validate
 
         expect(() => {
-          builder.reroll(7); // Reroll value higher than die sides
+          void builder.reroll(7); // Reroll value higher than die sides
         }).not.toThrow(); // Currently allows invalid reroll, but should validate
       });
 
       it("should handle invalid minimum values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.minimum(0); // Minimum of 0 should be invalid
+          void builder.minimum(0); // Minimum of 0 should be invalid
         }).not.toThrow(); // Currently allows, but should validate
 
         expect(() => {
-          builder.minimum(7); // Minimum higher than die sides
+          void builder.minimum(7); // Minimum higher than die sides
         }).not.toThrow(); // Currently allows, but should validate
       });
 
       it("should handle invalid explode values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.explode(-1);
+          void builder.explode(-1);
         }).toThrow();
 
         expect(() => {
-          builder.explode(0);
+          void builder.explode(0);
         }).not.toThrow(); // Currently allows 0 explode, which just means no explode
       });
 
       it("should handle invalid keep dice values", () => {
         const builder = roll(3).d6();
         expect(() => {
-          builder.keepHighest(2, 5); // Keep more than total
+          void builder.keepHighest(2, 5); // Keep more than total
         }).not.toThrow(); // Currently allows, but should validate
 
         expect(() => {
-          builder.keepHighest(3, 0); // Keep 0 dice
+          void builder.keepHighest(3, 0); // Keep 0 dice
         }).not.toThrow(); // Currently allows, but should validate
 
         expect(() => {
-          builder.keepHighest(3, -1); // Keep negative dice
+          void builder.keepHighest(3, -1); // Keep negative dice
         }).not.toThrow(); // Currently allows, but should validate
       });
 
       it("should handle invalid bestOf values", () => {
         const builder = roll(3).d6();
         expect(() => {
-          builder.bestOf(0);
+          void builder.bestOf(0);
         }).toThrow();
 
         expect(() => {
-          builder.bestOf(5); // bestOf higher than count
+          void builder.bestOf(5); // bestOf higher than count
         }).not.toThrow(); // TODO: Currently allows, but should throw
 
         expect(() => {
-          builder.bestOf(-1);
+          void builder.bestOf(-1);
         }).toThrow();
       });
     });
@@ -881,14 +881,17 @@ describe("RollBuilder", () => {
       expect(builder.toExpression()).toBe("4d6 + 5");
     });
 
-    it("should double keepHighest dice", () => {
-      const builder = roll(1).d(6).keepHighest(4, 3).doubleDice();
-      expect(builder.toExpression()).toBe("4kh3(2d6)");
+    it("should double keep-highest-of-1 dice inside each trial", () => {
+      const builder = roll(1).d(6).keepHighest(4, 1).doubleDice();
+      expect(builder.toExpression()).toBe("4kh1(2d6)");
     });
 
-    it("should double keepLowest dice", () => {
-      const builder = roll(1).d(6).keepLowest(4, 3).doubleDice();
-      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    it("should refuse to double a keepHighest of more than one die (no single doubled meaning)", () => {
+      expect(() => roll(1).d(6).keepHighest(4, 3).doubleDice()).toThrow(/4kh3/);
+    });
+
+    it("should refuse to double keepLowest dice (no single doubled meaning)", () => {
+      expect(() => roll(1).d(6).keepLowest(4, 3).doubleDice()).toThrow(/4kl3/);
     });
 
     it("should keepLowest double dice", () => {

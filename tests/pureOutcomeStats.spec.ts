@@ -49,8 +49,9 @@ describe("combinedDamageStats", () => {
   });
 
   it("should return zeros for impossible outcomes", () => {
-    const query = createQuery("(d20 + 10 AC 15) * (2d6 + 4)"); // No crit specified
-    const stats = query.combinedDamageStats("crit");
+    // No miss clause, so no miss damage. (Every attack string crits, R33.)
+    const query = createQuery("(d20 + 10 AC 15) * (2d6 + 4)");
+    const stats = query.combinedDamageStats("missDamage");
 
     expect(stats.min).toBe(0);
     expect(stats.max).toBe(0);

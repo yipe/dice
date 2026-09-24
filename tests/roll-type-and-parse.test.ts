@@ -165,7 +165,8 @@ describe("tryParse and the n substitution", () => {
 describe("withRollType with nested parentheses", () => {
   it("finds the AC check when it is not in the innermost group", () => {
     const nested = "((d20 + 8) AC 16) * (1d4 + 4)";
-    expect(parse(nested).mean()).toBeCloseTo(4.225, 3);
+    // 0.60 × (1d4 + 4) + 0.05 × (2d4 + 4) on the natural 20 (R33): the nested check still crits.
+    expect(parse(nested).mean()).toBeCloseTo(4.35, 12);
     expect(withRollType(nested, "advantage")).toBe(
       "((d20 > d20 + 8) AC 16) * (1d4 + 4)"
     );

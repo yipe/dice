@@ -127,21 +127,24 @@ describe("String Damage Expressions", () => {
       expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 5);
     });
 
-    it("should parse '3kl2(1d6)+3' with explicit crit and match roll(1).d(6).keepLowest(3, 2).plus(3)", () => {
+    it("should parse '3kl2(1d6)+3' with explicit crit and match roll(1).d(6).keepLowest(3, 2).plus(3) with the same explicit crit", () => {
       const stringAttack = d20
         .plus(10)
         .ac(18)
         .onHit("3kl2(1d6)+3")
         .onCrit("3kl2(2d6)+3");
+      // A keepLowest has no single doubled crit (R33), so the builder states the same crit.
       const builderAttack = d20
         .plus(10)
         .ac(18)
-        .onHit(roll(1).d(6).keepLowest(3, 2).plus(3));
+        .onHit(roll(1).d(6).keepLowest(3, 2).plus(3))
+        .onCrit(roll(2).d(6).keepLowest(3, 2).plus(3));
 
       const stringRes = stringAttack.resolve();
       const builderRes = builderAttack.resolve();
 
       expect(stringRes.hit.mean()).toBeCloseTo(builderRes.hit.mean(), 5);
+      expect(stringRes.crit.mean()).toBeCloseTo(builderRes.crit.mean(), 10);
       expect(stringRes.pmf.mean()).toBeCloseTo(builderRes.pmf.mean(), 5);
     });
   });

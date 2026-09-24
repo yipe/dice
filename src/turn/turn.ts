@@ -1,102 +1,58 @@
 import { EPS } from "../common/types";
+import type { Check } from "../builder/types";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
-import type { SourceSlices, Step, TurnPlan } from "./plan";
-import { buildPlan } from "./plan";
-import type { StepOutcome } from "./state";
-import {
-  advance,
-  CRIT_BIT,
-  FIRST_CRIT,
-  FIRST_NONE,
-  MATCH_BIT,
-  MISS_BIT,
-  START_CODE,
-} from "./state";
+import type { ConditionOptions, Grant, Transform } from "./effects";
+import { grantSpec, isGrant, isTransform, substituteFields } from "./effects";
+import type { FireMode, TurnPlan } from "./plan";
+import { buildPlan, fireMode, grantApplies } from "./plan";
+import { advance, FIRST_NONE, START_CODE } from "./state";
 import type {
   Attack,
+  AttackOptions,
+  ConditionSpec,
+  Damage,
   Rider,
   RiderDamage,
   RiderOptions,
   Source,
+  SubstituteSpec,
+  ToPMF,
   TurnSpec,
 } from "./types";
 import { TurnSpecError } from "./types";
 
-/** Which payload a rider uses when it fires, or `null` when it doesn't fire. */
-type FireMode = "hit" | "crit" | null;
-
-/** One outcome draw a step's walk convolves in: which group-state outcome it
- * advances, whether it counts as a dice-match, and the sub-mass PMF itself. */
-type Draw = { outcome: StepOutcome; matched: boolean; slice: PMF };
-
-/**
- * The outcome draws for one step. Match-split branches (`hitMatch`/`critMatch`)
- * expand hit and/or crit into two draws each — five total at most — ONLY when
- * this source is actually match-sliced (a `dice-match` trigger named it); every
- * other turn walks the same three draws it always did, so turns with no
- * `dice-match` trigger anywhere pay zero extra cost.
- */
-function stepDraws(slices: SourceSlices): Draw[] {
-  const draws: Draw[] = [];
-  if (slices.hitMatch) {
-    draws.push({ outcome: "hit", matched: true, slice: slices.hitMatch });
-    draws.push({ outcome: "hit", matched: false, slice: slices.hitNoMatch as PMF });
-  } else {
-    draws.push({ outcome: "hit", matched: false, slice: slices.hit });
-  }
-  if (slices.critMatch) {
-    draws.push({ outcome: "crit", matched: true, slice: slices.critMatch });
-    draws.push({ outcome: "crit", matched: false, slice: slices.critNoMatch as PMF });
-  } else {
-    draws.push({ outcome: "crit", matched: false, slice: slices.crit });
-  }
-  draws.push({ outcome: "miss", matched: false, slice: slices.miss });
-  return draws;
+/** Everything a `Turn` is built from, plus what its chaining methods remember. */
+interface TurnState {
+  attacks: readonly Attack[];
+  riders: readonly Rider[];
+  substitutes: readonly SubstituteSpec[];
+  conditions: readonly ConditionSpec[];
+  /**
+   * A chaining call defaulted some rider's, substitute's or condition's `of`.
+   * Appending an attack now would leave it out of that set silently, so it throws
+   * instead.
+   */
+  defaulted: boolean;
+  /** What the last chaining call added — the target of {@link Turn.otherwise}. */
+  last: { kind: "rider" | "substitute"; index: number } | null;
 }
 
+/** What a trigger verb accepts: damage, grants, or both in one list (R29). */
+type Effect = RiderDamage | Grant | readonly (Damage | Grant)[];
+
+/** Test seam: the plan and walk size of a turn. Not exported from the package. */
+const inspections = new WeakMap<Turn, { plan: TurnPlan; stateCounts?: readonly number[] }>();
+
 /**
- * Decide whether `step` fires in state `codes`, and in which mode.
- *
- * Every group a trigger reads is fully determined before its own step runs
- * (sources always precede dependents), so a trigger can be evaluated once, at
- * its step, and again at the end for {@link Turn.fireProbability} — both give the
- * same answer.
+ * The number of trigger groups `t` tracks and, per step, the number of distinct
+ * walk states after it. Resolves `t` if it has not been resolved yet.
  */
-function fireMode(
-  step: Step,
-  codes: readonly number[],
-  firedByStep: readonly FireMode[]
-): FireMode {
-  const trigger = step.trigger;
-  if (!trigger) return "hit";
-
-  if (trigger.on === "not-fired") {
-    return firedByStep[step.negates] === null ? "hit" : null;
-  }
-
-  const code = codes[step.reads];
-  const first = (code >> 2) & 0b11;
-
-  switch (trigger.on) {
-    case "first-hit":
-      if (first === FIRST_NONE) return null;
-      return first === FIRST_CRIT ? "crit" : "hit";
-    case "any-crit":
-      return (code & CRIT_BIT) !== 0 ? "crit" : null;
-    case "any-miss":
-      return (code & MISS_BIT) !== 0 ? "hit" : null;
-    case "dice-match":
-      // An attack-shaped rider (the only kind a `dice-match` trigger can fire —
-      // it always has `step.slices`, never `step.damage`) ignores the returned
-      // mode entirely; "hit" is just the truthy sentinel meaning "fires".
-      return (code & MATCH_BIT) !== 0 ? "hit" : null;
-    default:
-      // `every-hit` never becomes a step — it is folded into its sources' slices.
-      return null;
-  }
+export function inspectTurn(t: Turn): { groupCount: number; stateCounts: readonly number[] } {
+  t.mean();
+  const inspection = inspections.get(t) as { plan: TurnPlan; stateCounts: readonly number[] };
+  return { groupCount: inspection.plan.groupCount, stateCounts: inspection.stateCounts };
 }
-
 
 /**
  * A turn of attacks plus conditional damage riders, resolved to one **exact**
@@ -115,55 +71,83 @@ function fireMode(
  */
 export class Turn {
   private readonly eps: number;
-  private readonly declaredAttacks: readonly Attack[];
-  private readonly riders: readonly Rider[];
+  private readonly state: TurnState;
   private readonly plan: TurnPlan;
   private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
 
-  private constructor(
-    attacks: readonly Attack[],
-    riders: readonly Rider[],
-    eps: number
-  ) {
+  private constructor(state: TurnState, eps: number) {
     // Copied, because a caller can hand in an array they still hold and keep
     // mutating it. Shallow is the right depth: the entries are builders and
     // PMFs this module does not own and which are immutable by convention
     // throughout this library.
-    this.declaredAttacks = [...attacks];
-    this.riders = [...riders];
+    this.state = {
+      ...state,
+      attacks: [...state.attacks],
+      riders: [...state.riders],
+      substitutes: [...state.substitutes],
+      conditions: [...state.conditions],
+    };
     this.eps = eps;
     // Built here, not on first use, so every way of constructing a Turn
     // validates at the same moment: the call that introduced the mistake.
-    this.plan = buildPlan({ attacks: this.declaredAttacks, riders: this.riders }, eps);
+    this.plan = buildPlan(this.state, eps);
+    inspections.set(this, { plan: this.plan });
   }
 
   /**
    * Builds a turn from plain data, throwing {@link TurnSpecError} if it is
    * malformed. Use this from a UI, where `error.code` maps to the field state to
    * show.
+   *
+   * A rider, substitute or condition with no `of` watches every declared attack:
+   * plain data has no chain position to snapshot.
    */
   static from(spec: TurnSpec, eps: number = EPS): Turn {
-    return new Turn(spec.attacks, spec.riders ?? [], eps);
+    const riders = spec.riders ?? [];
+    const substitutes = spec.substitutes ?? [];
+    const conditions = spec.conditions ?? [];
+    const last: TurnState["last"] = riders.length
+      ? { kind: "rider", index: riders.length - 1 }
+      : substitutes.length
+        ? { kind: "substitute", index: substitutes.length - 1 }
+        : null;
+    return new Turn(
+      { attacks: spec.attacks, riders, substitutes, conditions, defaulted: false, last },
+      eps
+    );
+  }
+
+  private with(changes: Partial<TurnState>): Turn {
+    return new Turn({ ...this.state, ...changes }, this.eps);
+  }
+
+  /** What a chaining call's omitted `of` means: the attacks so far, plus any reroll so far. */
+  private defaultOf(): readonly string[] {
+    return [...this.plan.attackIds, ...this.plan.rerollIds];
   }
 
   /**
    * Appends an attack, throwing {@link TurnSpecError} if that makes the turn
-   * invalid.
+   * invalid. Pass an id (or `{ id, tag }`) to name it in `of`; a `tag` can be
+   * shared by several attacks and names all of them at once.
    *
-   * A rider with no explicit `of` watches every declared attack *including ones
-   * appended after it*, because `of` is resolved when the plan is built rather
-   * than when the rider is added. Pass an explicit `of` to pin a rider to the
-   * attacks it already saw. One attack must exist before a rider with a default
-   * `of` is added, or the build fails `unknown-id`.
+   * Declare attacks before the riders that watch them. A rider added without an
+   * `of` watches the attacks declared *so far*, so appending one after it throws
+   * `attack-after-rider` rather than silently leaving the new attack out. Give
+   * that rider an explicit `of` to pin it to the attacks it already saw.
    */
-  attack(source: Source, id?: string): Turn {
-    const entry: Attack = id === undefined ? source : { id, source };
-    return new Turn([...this.declaredAttacks, entry], this.riders, this.eps);
+  attack(source: Source, options?: string | AttackOptions): Turn {
+    this.refuseAttackAfterRider();
+    const { id, tag } = typeof options === "string" ? { id: options, tag: undefined } : (options ?? {});
+    const entry: Attack =
+      id === undefined && tag === undefined ? source : { id, tag, source };
+    return this.with({ attacks: [...this.state.attacks, entry] });
   }
 
   /**
    * Appends `count` copies of the same attack — the Extra Attack case, which is
-   * most of 5e. Argument order mirrors `roll(count, die)`.
+   * most of 5e. Argument order mirrors `roll(count, die)`. `tag` names every copy
+   * at once in a later `of`.
    *
    * ```ts
    * turn().attacks(4, greatsword).onEveryHit(d6); // fighter 20 + hunter's mark
@@ -171,59 +155,204 @@ export class Turn {
    *
    * @throws {RangeError} if `count` is not a positive integer.
    */
-  attacks(count: number, source: Source): Turn {
+  attacks(count: number, source: Source, options: { tag?: string } = {}): Turn {
     if (!Number.isInteger(count) || count < 1) {
       throw new RangeError(
         `attacks(count) needs a positive integer, got ${count}.`
       );
     }
-    const added: Attack[] = new Array<Attack>(count).fill(source);
-    return new Turn([...this.declaredAttacks, ...added], this.riders, this.eps);
+    this.refuseAttackAfterRider();
+    const entry: Attack = options.tag === undefined ? source : { tag: options.tag, source };
+    const added: Attack[] = new Array<Attack>(count).fill(entry);
+    return this.with({ attacks: [...this.state.attacks, ...added] });
+  }
+
+  private refuseAttackAfterRider(): void {
+    if (!this.state.defaulted) return;
+    throw new TurnSpecError(
+      "attack-after-rider",
+      "",
+      "An attack was added after a rider or substitute whose `of` defaulted to the attacks declared before it, so the new attack would be silently left out. Declare attacks first, or give that rider an explicit `of`."
+    );
   }
 
   /**
    * Appends a rider, throwing {@link TurnSpecError} if that makes the turn
    * invalid. The `onX` methods below are the readable way to call this.
+   *
+   * An omitted `of` is filled in here, not when the plan is built: the attacks
+   * declared so far, plus any attack-shaped `any-miss` / `first-miss` rider
+   * declared so far. Nothing else joins — not `every-hit` riders, not
+   * damage-shaped riders, not `dice-match` beams (name those explicitly).
    */
   rider(rider: Rider): Turn {
-    return new Turn(this.declaredAttacks, [...this.riders, rider], this.eps);
+    const defaults =
+      rider.on !== "not-fired" && rider.on !== "dice-match" && rider.of === undefined;
+    const entry = (defaults ? { ...rider, of: this.defaultOf() } : rider) as Rider;
+    return this.with({
+      riders: [...this.state.riders, entry],
+      defaulted: this.state.defaulted || defaults,
+      last: { kind: "rider", index: this.state.riders.length },
+    });
+  }
+
+  /**
+   * Adds what one trigger-verb call describes: its damage as a rider, its grants as
+   * a condition over the same `of`. The gate (`save` / `chance` / `onSave`) applies
+   * to the grants only; the damage lands whatever the save does. With both, `id`
+   * names the rider and the condition takes the default `condition N`.
+   */
+  private addEffect(on: ConditionSpec["on"], effect: Effect, options: ConditionOptions): Turn {
+    const { save, chance, onSave, ...riderOptions } = options;
+    const gated = save !== undefined || chance !== undefined || onSave !== undefined;
+    const parts: readonly unknown[] = Array.isArray(effect) ? effect : [effect];
+    const grants = parts.filter(isGrant);
+    if (grants.length === 0) {
+      if (gated) {
+        throw new Error(
+          "save, chance and onSave gate grants only, and this call has none: damage is never gated by them. Pass a SaveBuilder as the damage for damage that depends on a save."
+        );
+      }
+      return this.rider({ ...riderOptions, damage: effect as RiderDamage, on });
+    }
+    if (save !== undefined && chance !== undefined) {
+      throw new Error("Pass either save or chance, not both: each is the chance the grants take.");
+    }
+    if (onSave !== undefined && save === undefined && chance === undefined) {
+      throw new Error("onSave needs a save or a chance: without one there is no other branch to apply it on.");
+    }
+    if (save !== undefined && typeof (save as Partial<ToPMF>).toPMF !== "function") {
+      throw new Error("save must be a DC check such as d20.plus(2).dc(15).");
+    }
+    const damage = parts.filter((part) => !isGrant(part)) as Damage[];
+    if (damage.length === 0 && riderOptions.critDamage !== undefined) {
+      throw new TurnSpecError(
+        "unused-crit-damage",
+        riderOptions.id ?? "",
+        "A grant deals no damage, so critDamage has nothing to apply to."
+      );
+    }
+
+    const of = riderOptions.of ?? this.defaultOf();
+    // A save's P(fail): the DC check's PMF puts it at 1. `vsAC` leaves it alone —
+    // it is the target's save bonus, not its AC.
+    const probability = save === undefined ? chance : save.toPMF(this.eps).pAt(1);
+    const saved = onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave as Grant];
+    const condition: ConditionSpec = {
+      ...(damage.length === 0 && riderOptions.id !== undefined ? { id: riderOptions.id } : {}),
+      on,
+      of,
+      ...(probability === undefined ? {} : { chance: probability }),
+      grants: grants.map(grantSpec),
+      ...(saved.length === 0 ? {} : { onSave: saved.map(grantSpec) }),
+    };
+    const riders =
+      damage.length === 0
+        ? this.state.riders
+        : [...this.state.riders, { ...riderOptions, of, damage, on } as Rider];
+    return this.with({
+      riders,
+      conditions: [...this.state.conditions, condition],
+      defaulted: this.state.defaulted || riderOptions.of === undefined,
+      last: damage.length === 0 ? null : { kind: "rider", index: this.state.riders.length },
+    });
   }
 
   /**
    * Fires once, on the first source that lands, in that source's mode — so a
    * crit on the first landing attack doubles the rider's dice. Sneak Attack.
+   *
+   * Given a {@link Transform} such as `keepBestDamage()` instead of damage, it
+   * adds a once-per-turn substitute: the first watched landing its policy accepts
+   * draws the transformed base payload instead. One call covers every watched
+   * attack; a second over any of the same attacks is `duplicate-substitute`. A
+   * substitute allocates no trigger group. `fireProbability(id)` is P(spent).
+   *
+   * Given a {@link Grant}, the first landing applies it once — a passed save is
+   * final for the turn:
+   *
+   * ```ts
+   * turn([fist, fist, fist]).onFirstHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.4 });
+   * ```
    */
-  onFirstHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
-    return this.rider({ ...options, damage, on: "first-hit" });
+  onFirstHit(effect: Effect | Transform, options: ConditionOptions = {}): Turn {
+    if (!isTransform(effect)) return this.addEffect("first-hit", effect, options);
+    if (options.save !== undefined || options.chance !== undefined || options.onSave !== undefined) {
+      throw new Error("save, chance and onSave gate grants only; a transform is not gated by them.");
+    }
+    if (options.critDamage !== undefined) {
+      throw new TurnSpecError(
+        "unused-crit-damage",
+        options.id ?? "",
+        "A transform rewrites the attack's own payload, so critDamage has nothing to apply to."
+      );
+    }
+    const substitute: SubstituteSpec = {
+      ...(options.id === undefined ? {} : { id: options.id }),
+      on: "first-hit",
+      of: options.of ?? this.defaultOf(),
+      ...substituteFields(effect),
+    };
+    return this.with({
+      substitutes: [...this.state.substitutes, substitute],
+      defaulted: this.state.defaulted || options.of === undefined,
+      last: { kind: "substitute", index: this.state.substitutes.length },
+    });
   }
 
   /**
    * Fires once if any source crit, always in crit mode. Divine Smite: nothing is
    * lost by holding it for a crit, so this is "any", not "first".
+   *
+   * Given a {@link Grant}, every crit applies it.
    */
-  onAnyCrit(damage: RiderDamage, options: RiderOptions = {}): Turn {
-    return this.rider({ ...options, damage, on: "any-crit" });
+  onAnyCrit(effect: Effect, options: ConditionOptions = {}): Turn {
+    return this.addEffect("any-crit", effect, options);
   }
 
   /**
    * Fires once if any source missed. The reroll gate: a reroll is a fresh attack,
    * so pass one as the damage. Kensei's Unerring Accuracy, Lucky.
+   *
+   * Its step runs after every declared attack. That is exact when the reroll is
+   * identically distributed to the attacks after the one it replaces; when it is
+   * not, or a later rider reads the order things landed in, use
+   * {@link Turn.onFirstMiss}.
    */
   onAnyMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
     return this.rider({ ...options, damage, on: "any-miss" });
   }
 
   /**
+   * Fires once, on the first source that misses, and resolves directly after that
+   * attack — so a reroll lands in turn order, before the attacks that follow it.
+   * The exact model of "when you miss, you may reroll".
+   */
+  onFirstMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
+    return this.rider({ ...options, damage, on: "first-miss" });
+  }
+
+  /**
    * Fires once per source that lands, in that hit's mode — so it can fire several
    * times in a turn. Hunter's Mark, Hex, Rage.
+   *
+   * Given a {@link Grant}, every landing applies it, and a `save` or `chance` is
+   * rolled again on each landing until it takes:
+   *
+   * ```ts
+   * turn([sword, sword, sword]).onEveryHit(advantage().untilNextAttack());
+   * turn([axe, axe]).onEveryHit(advantage().untilEndOfTurn(), { save: d20.plus(2).dc(15) });
+   * ```
    */
-  onEveryHit(damage: RiderDamage, options: RiderOptions = {}): Turn {
-    return this.rider({ ...options, damage, on: "every-hit" });
+  onEveryHit(effect: Effect, options: ConditionOptions = {}): Turn {
+    return this.addEffect("every-hit", effect, options);
   }
 
   /**
    * Damage for the turns where the rider added just before this one did *not*
-   * fire: "flurry of blows if I didn't smite".
+   * fire: "flurry of blows if I didn't smite". After a transform, it fires when
+   * the transform was never spent — under the default policy, when no watched
+   * attack landed.
    *
    * ```ts
    * turn([dagger, dagger])
@@ -242,29 +371,41 @@ export class Turn {
     damage: RiderDamage,
     options: Omit<RiderOptions, "of"> = {}
   ): Turn {
-    const index = this.riders.length - 1;
-    if (index < 0) {
+    const last = this.state.last;
+    if (last === null) {
       throw new TurnSpecError(
         "unknown-id",
         "",
         "otherwise() needs a preceding rider to negate."
       );
     }
-    const previous = this.riders[index];
-    if (previous.on === "every-hit") {
-      throw new TurnSpecError(
-        "not-an-attack",
-        previous.id ?? `rider ${index + 1}`,
-        "otherwise() cannot negate an every-hit rider: it can fire more than once."
-      );
-    }
 
-    // `of` must name the previous rider, so give it the id `buildPlan` would.
-    const target = previous.id ?? `rider ${index + 1}`;
-    const riders: Rider[] = [...this.riders];
-    riders[index] = { ...previous, id: target };
+    // `of` must name the negated node, so give it the id `buildPlan` would.
+    let target: string;
+    const riders: Rider[] = [...this.state.riders];
+    const substitutes: SubstituteSpec[] = [...this.state.substitutes];
+    if (last.kind === "substitute") {
+      const previous = substitutes[last.index];
+      target = previous.id ?? `substitute ${last.index + 1}`;
+      substitutes[last.index] = { ...previous, id: target };
+    } else {
+      const previous = riders[last.index];
+      target = previous.id ?? `rider ${last.index + 1}`;
+      if (previous.on === "every-hit") {
+        throw new TurnSpecError(
+          "not-an-attack",
+          target,
+          "otherwise() cannot negate an every-hit rider: it can fire more than once."
+        );
+      }
+      riders[last.index] = { ...previous, id: target };
+    }
     riders.push({ ...options, damage, on: "not-fired", of: target });
-    return new Turn(this.declaredAttacks, riders, this.eps);
+    return this.with({
+      riders,
+      substitutes,
+      last: { kind: "rider", index: riders.length - 1 },
+    });
   }
 
   /**
@@ -284,6 +425,56 @@ export class Turn {
     options: Omit<RiderOptions, "of"> = {}
   ): Turn {
     return this.rider({ ...options, damage, on: "dice-match", of });
+  }
+
+  /**
+   * The same turn against a target with armor class `ac`: every attack with an
+   * AC — declared, or carried by a rider (a reroll, a bonus attack) — is rebuilt
+   * through `withCheck`. Saves, attacks with no AC to rebind, and bare PMFs pass
+   * through unchanged, so a mixed attack/save turn still sweeps.
+   *
+   * ```ts
+   * const base = turn([sword, sword]).onFirstHit(roll(3, d6));
+   * [12, 14, 16, 18].map((ac) => base.vsAC(ac).mean());
+   * ```
+   *
+   * @throws {TurnSpecError} `no-rebindable-source` if nothing in the turn has an AC.
+   */
+  vsAC(ac: number): Turn {
+    if (!Number.isFinite(ac)) throw new RangeError(`vsAC(ac) needs a finite number, got ${ac}.`);
+    let rebound = 0;
+    const rebind = (damage: Damage): Damage => {
+      const attack = damage as {
+        check?: { attackConfig?: { ac?: number } };
+        withCheck?: (fn: (check: Check) => Check) => Damage;
+      };
+      if (typeof attack.withCheck !== "function") return damage;
+      if (typeof attack.check?.attackConfig?.ac !== "number") return damage;
+      rebound++;
+      return attack.withCheck((check) => ({ ...check, ac }));
+    };
+    const rebindAll = (damage: RiderDamage): RiderDamage =>
+      Array.isArray(damage) ? damage.map(rebind) : rebind(damage as Damage);
+
+    const attacks = this.state.attacks.map(
+      (entry): Attack =>
+        "source" in entry ? { ...entry, source: rebind(entry.source) } : rebind(entry)
+    );
+    const riders = this.state.riders.map(
+      (rider): Rider => ({
+        ...rider,
+        damage: rebindAll(rider.damage),
+        ...(rider.critDamage === undefined ? {} : { critDamage: rebindAll(rider.critDamage) }),
+      })
+    );
+    if (rebound === 0) {
+      throw new TurnSpecError(
+        "no-rebindable-source",
+        "",
+        "vsAC() found nothing with an AC to rebind: every source is a save, an attack that always hits, or a bare PMF."
+      );
+    }
+    return this.with({ attacks, riders });
   }
 
   /**
@@ -333,11 +524,32 @@ export class Turn {
   }
 
   /**
+   * Substitute ids in declaration order, including the `substitute 1`, … defaults.
+   * {@link Turn.fireProbability} accepts these too.
+   */
+  get substituteIds(): readonly string[] {
+    return this.plan.substituteIds;
+  }
+
+  /**
+   * Condition ids in declaration order, including the `condition 1`, … defaults.
+   * {@link Turn.fireProbability} accepts these too.
+   */
+  get conditionIds(): readonly string[] {
+    return this.plan.conditionIds;
+  }
+
+  /**
    * P(this rider fired). For an `every-hit` rider it is P(at least one source
-   * hit), since that rider can fire more than once in a turn.
+   * hit), since that rider can fire more than once in a turn. For a substitute it
+   * is P(it was spent). For a condition it is P(its grants were applied at least
+   * once where a later attack roll reads them) — on the fail branch of its save,
+   * not the `onSave` one. Two attacks with "a hit gives the next attack
+   * advantage" give P(attack 1 landed), since nothing reads attack 2's grant.
    *
-   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider — attack ids
-   * included, since attacks always happen and have no firing probability.
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider, substitute or
+   * condition — attack ids included, since attacks always happen and have no
+   * firing probability.
    */
   fireProbability(id: string): number {
     const mass = this.resolve().fireMass.get(id);
@@ -345,7 +557,11 @@ export class Turn {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not a rider in this turn. Riders: ${this.plan.riderIds
+        `"${id}" is not a rider, substitute or condition in this turn. Riders: ${[
+          ...this.plan.riderIds,
+          ...this.plan.substituteIds,
+          ...this.plan.conditionIds,
+        ]
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
@@ -359,20 +575,32 @@ export class Turn {
     const plan = this.plan;
     const eps = this.eps;
     const width = plan.groupCount;
+    const conditionCount = plan.conditionIds.length;
 
-    // state key -> { codes, accumulated sub-mass damage, per-step firing }
+    // state key -> { codes, accumulated sub-mass damage, per-slot firing, flag word,
+    // per-condition applied mass }
     type State = {
       codes: number[];
       pmf: PMF;
       fired: FireMode[];
+      flags: number;
+      /**
+       * Per condition, the part of `pmf`'s mass in which it was applied at least once
+       * while a later step read it. Carried as mass rather than as a key bit: whether
+       * it was applied changes no later transition, so it must not split states (R31).
+       */
+      applied: number[];
     };
 
     const start: State = {
       codes: new Array<number>(width).fill(START_CODE),
       pmf: PMF.delta(0, eps),
-      fired: new Array<FireMode>(plan.steps.length).fill(null),
+      fired: new Array<FireMode>(plan.slotCount).fill(null),
+      flags: 0,
+      applied: new Array<number>(conditionCount).fill(0),
     };
     let states = new Map<string, State>([[String.fromCharCode(), start]]);
+    const stateCounts: number[] = [];
 
     plan.steps.forEach((step, stepIndex) => {
       const next = new Map<string, State>();
@@ -390,38 +618,56 @@ export class Turn {
       for (let g = 0; g < plan.groupCount; g++) {
         if (plan.groupLastReadStep[g] > stepIndex) liveGroups.push(g);
       }
+      // Flags get the same treatment, and a dead flag is cleared rather than merely
+      // left out of the key, so a stale bit can never be read back (R31).
+      let liveFlags = 0;
+      plan.flagLastReadStep.forEach((last, bit) => {
+        if (last > stepIndex) liveFlags |= 1 << bit;
+      });
 
       const merge = (state: State): void => {
-        // Whether each rider fired is part of the state: two paths that agree on
-        // group codes but disagree on a rider's firing must not merge — both
-        // `not-fired` downstream AND the final `fireMass` collapse (every rider
-        // step, not just `not-fired` targets) read `state.fired` per rider, so
-        // every rider step's bit must stay in the key.
+        // Whether each rider fired (and each substitute was spent) is part of the
+        // state: two paths that agree on group codes but disagree on a slot must
+        // not merge — `not-fired`, `first-miss`, a substitute's variant choice AND
+        // the final `fireMass` collapse all read `state.fired`.
         let codesKey = "";
         for (const g of liveGroups) codesKey += String.fromCharCode(state.codes[g]);
+        const flags = state.flags & liveFlags;
         const key =
           codesKey +
           "\u0001" +
-          state.fired.map((mode) => (mode === null ? "-" : "+")).join("");
+          state.fired.map((mode) => (mode === null ? "-" : "+")).join("") +
+          "\u0002" +
+          String.fromCharCode(flags);
         const existing = next.get(key);
-        if (existing) existing.pmf = existing.pmf.add(state.pmf);
-        else next.set(key, state);
+        if (existing) {
+          existing.pmf = existing.pmf.add(state.pmf);
+          if (conditionCount) {
+            existing.applied = existing.applied.map((mass, c) => mass + state.applied[c]);
+          }
+        } else {
+          next.set(key, { ...state, flags });
+        }
       };
 
       for (const state of states.values()) {
         const mode = fireMode(step, state.codes, state.fired);
-        const fired = [...state.fired];
-        fired[stepIndex] = mode;
 
         if (mode === null) {
-          merge({ codes: state.codes, pmf: state.pmf, fired });
+          merge(state);
           continue;
         }
 
-        if (!step.slices) {
+        let fired = state.fired;
+        if (step.slot !== -1) {
+          fired = [...fired];
+          fired[step.slot] = mode;
+        }
+
+        if (step.variants.length === 0) {
           const payload = step.damage as { hit: PMF; crit: PMF };
           merge({
-            codes: state.codes,
+            ...state,
             pmf: state.pmf.convolve(
               mode === "crit" ? payload.crit : payload.hit,
               eps,
@@ -432,7 +678,13 @@ export class Turn {
           continue;
         }
 
-        for (const { outcome, matched, slice } of stepDraws(step.slices)) {
+        // Order at a step (§7.2): read the flags to select the variant, clear the
+        // `next-attack` flags this roll consumes, draw, advance the groups, then
+        // apply this outcome's grants.
+        const draws = step.variants[step.select(state.codes, fired, state.flags)];
+        const flags = state.flags & ~step.consumes;
+        const stateMass = conditionCount ? state.pmf.mass() : 0;
+        for (const { outcome, matched, spends, slice } of draws) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
 
@@ -440,28 +692,71 @@ export class Turn {
           for (const group of step.updates) {
             codes[group] = advance(codes[group], outcome, matched);
           }
-          merge({
-            codes,
-            pmf: state.pmf.convolve(slice, eps, true),
-            fired,
-          });
+          let drawFired = fired;
+          if (spends) {
+            drawFired = [...fired];
+            drawFired[step.spendSlot] = outcome === "crit" ? "crit" : "hit";
+          }
+          const pmf = state.pmf.convolve(slice, eps, true);
+          if (step.grants.length === 0) {
+            merge({
+              codes,
+              pmf,
+              fired: drawFired,
+              flags,
+              applied: conditionCount ? state.applied.map((mass) => mass * sliceMass) : state.applied,
+            });
+            continue;
+          }
+
+          // Each qualifying condition splits the draw by its chance: its grants on
+          // one part, its onSave grants on the other. Splits compose, since each
+          // condition rolls its own save.
+          let parts: { flags: number; share: number; applied: number[] }[] = [
+            { flags, share: 1, applied: [] },
+          ];
+          for (const app of step.grants) {
+            if (!grantApplies(app, outcome, state.codes)) continue;
+            parts = parts.flatMap((part) => {
+              if (app.inForce !== 0 && (part.flags & app.inForce) === app.inForce) return [part];
+              const applied = app.effective ? [...part.applied, app.condition] : part.applied;
+              const taken = { flags: part.flags | app.grants, share: part.share * app.chance, applied };
+              const saved = { ...part, flags: part.flags | app.onSave, share: part.share * (1 - app.chance) };
+              return [taken, saved].filter((each) => each.share > 0);
+            });
+          }
+          for (const part of parts) {
+            const scale = sliceMass * part.share;
+            merge({
+              codes,
+              pmf: part.share === 1 ? pmf : pmf.scaleMass(part.share),
+              fired: drawFired,
+              flags: part.flags,
+              applied: state.applied.map((mass, c) =>
+                part.applied.includes(c) ? stateMass * scale : mass * scale
+              ),
+            });
+          }
         }
       }
 
       states = next;
+      stateCounts.push(next.size);
     });
+    inspections.set(this, { plan, stateCounts });
 
     // Collapse: sum every terminal state, and tally per-rider firing mass.
     const fireMass = new Map<string, number>();
-    for (const id of plan.riderSteps.keys()) fireMass.set(id, 0);
+    for (const id of plan.fireSlots.keys()) fireMass.set(id, 0);
     for (const id of plan.perHitGroups.keys()) fireMass.set(id, 0);
+    for (const id of plan.conditionIds) fireMass.set(id, 0);
 
     let total: PMF | undefined;
     for (const state of states.values()) {
       total = total ? total.add(state.pmf) : state.pmf;
       const mass = state.pmf.mass();
-      for (const [id, stepIndex] of plan.riderSteps) {
-        if (state.fired[stepIndex] !== null) {
+      for (const [id, slot] of plan.fireSlots) {
+        if (state.fired[slot] !== null) {
           fireMass.set(id, (fireMass.get(id) as number) + mass);
         }
       }
@@ -471,6 +766,9 @@ export class Turn {
           fireMass.set(id, (fireMass.get(id) as number) + mass);
         }
       }
+      plan.conditionIds.forEach((id, c) => {
+        fireMass.set(id, (fireMass.get(id) as number) + state.applied[c]);
+      });
     }
 
     const pmf = total ?? PMF.delta(0, eps);

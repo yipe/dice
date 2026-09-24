@@ -54,9 +54,11 @@ describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds",
   });
 
   it("a keep()/bestOf() pool has no match info (ambiguous under crit doubling)", () => {
-    const attack = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3));
-    const { hit } = attack.diceMatchInfo();
+    // Its crit cannot auto-double (R33 refuses an ambiguous keep), so it states one explicitly.
+    const attack = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3)).onCrit(roll(8, d8).keepHighest(8, 6));
+    const { hit, crit } = attack.diceMatchInfo();
     expect(hit).toBeNull();
+    expect(crit).toBeNull();
   });
 
   it("a single die is a supported source with zero match probability, not a missing descriptor", () => {
@@ -78,7 +80,7 @@ describe("dice-match trigger — validation", () => {
     const barePMF = chromaticOrb(3).toPMF();
     expect(() => turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3))).toThrow(TurnSpecError);
     try {
-      turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3));
+      void turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3));
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(TurnSpecError);

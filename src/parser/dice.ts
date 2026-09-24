@@ -28,17 +28,42 @@ export interface DicePrivateData {
   except?: Dice | Record<string, never>;
   /** Keep-highest/lowest selector applied when a die is multiplied out. */
   keep?: (values: number[]) => number;
-  /** Set on a freshly parsed flat `dN`/`hdN` atom: its own face count and whether it rerolls a
-   * natural 1 once (Halfling Luck). Read by {@link parseExpression} in parser.ts to recover a
-   * base check die's natural-max identity after it has been convolved with bonus to-hit dice
-   * and modifiers, for a correct plain-`crit` probability. See parser.ts's "Track a flat ...
-   * base check die" comment. */
-  checkDie?: { sides: number; rerollOne: boolean };
-  /** Set on the result of a tracked AC gate (see parser.ts): the exact "natural max, any bonus
-   * roll" sub-distribution, already isolated from the rest of the to-hit total. A plain `crit`
-   * clause reads this directly instead of peeling the combined expression's single highest
-   * face, which is wrong whenever bonus dice are present. */
-  natMaxCritSlice?: Dice;
+  /** How many rolls {@link keep} keeps: a keep of one (`2kh1d20`) keeps a single natural roll. */
+  keepCount?: number;
+  /** The natural roll of an attack check, followed through every op applied to it, so a crit is the
+   * natural-max event (or an `xcrit` range of natural faces) at any bonus roll. It is the check's one
+   * d20 wherever it sits in the sum, or with no d20 its largest die; other dice are bonus dice. Read
+   * and written by {@link parseExpression} in parser.ts; set on every freshly parsed `dN`/`hdN` atom. */
+  critTrack?: CritTrack;
+  /** Set instead of {@link critTrack} on a value whose natural die has no single natural roll to
+   * follow (`2d20`, `d20 + d20`, `(d20 + 1d4)!`, a bonus pool like `2d4`): that die's size, so a
+   * die it outranks never passes for the natural roll. Read and written by parser.ts. */
+  untrackedSides?: number;
+  /** Set on a value built from numbers alone, with no die anywhere in it but an AC or DC target. As an
+   * attack check it has no natural roll, so its crit mass is exactly 0. Read and written by parser.ts. */
+  noDie?: true;
+  /** The operands of an `&` mix, each carried through every op since with its own natural roll, so the
+   * mix crits where a branch does, at that branch's share. Read and written by parser.ts. */
+  branches?: readonly Dice[];
+  /** Set on the result of an `AC` gate: a following `*` is an attack's hit payload, which crits
+   * (R33) even with no crit clause. Read by {@link parseExpression} in parser.ts. */
+  isACCheck?: boolean;
+  /** Set on an attack whose crit is its hit payload doubled (R33, no crit clause): the payload's
+   * text, so a trailing hit-only term joins the payload and doubles with it. See parser.ts. */
+  implicitCrit?: { payload: string };
+}
+
+/**
+ * An attack check's natural roll. `slice(f)` is the check's share where the kept natural roll is f,
+ * in the check's own counts: every op after the natural die acts face by face, so replaying the
+ * ops on face f's weight gives exactly that share, and a mix of checks adds its branches' shares.
+ */
+export interface CritTrack {
+  /** The natural die's size. */
+  readonly sides: number;
+  /** The check is its natural roll itself, with no op since (`d20`, `2kh1d20`, `d20 > d20`, `d20 & d20`). */
+  readonly bare: boolean;
+  readonly slice: (face: number) => Dice;
 }
 
 /**
@@ -289,6 +314,7 @@ export class Dice {
     this.faces[face] = current + count;
   }
 
+  /** Scales every face count, and every outcome's counts with it, so each outcome keeps its share. */
   public normalize(scalar: number): Dice {
     const result = new Dice();
 
@@ -297,7 +323,13 @@ export class Dice {
     }
 
     result.privateData = { ...this.privateData };
-    result.outcomeData = { ...this.outcomeData };
+    for (const [key, distribution] of Object.entries(this.outcomeData)) {
+      const scaled: DamageDistribution = {};
+      for (const [face, count] of Object.entries(distribution)) {
+        scaled[Number(face)] = count * scalar;
+      }
+      result.outcomeData[key as OutcomeType] = scaled;
+    }
     return result;
   }
 

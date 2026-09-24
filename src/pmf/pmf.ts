@@ -828,6 +828,60 @@ export class PMF {
     ];
   }
 
+  /**
+   * Max of two i.i.d. copies of this PMF's distribution: normalize, square
+   * the CDF, then restore the original mass. The engine's damage-reroll
+   * substitution (`onFirstHit(keepBestDamage())`) applies this to a landing
+   * attack's base payload slice — "roll it again, keep the better total".
+   *
+   * PRESERVES outcome labels and attribution. A max, unlike a sum, is
+   * literally one of the two draws: the value that wins was drawn from this
+   * same distribution, so its `count`/`attr` composition is unchanged in
+   * *proportion* — only that bin's total mass is recomputed (via the
+   * squared-CDF step) and every label is rescaled by the same factor. This
+   * is why {@link power}'s documented provenance loss does not apply here:
+   * for a sum, one output value arises from many `(x1, x2)` pairs with
+   * different attribution mixes, so provenance is genuinely ambiguous; for a
+   * max, there is exactly one realized draw per bin. A naive rebuild through
+   * {@link fromMap} would silently discard both `count` and `attr`.
+   *
+   * Works on a non-unit-mass slice (e.g. {@link filterOutcome}'s output):
+   * the CDF is squared on the NORMALIZED distribution, then the result is
+   * rescaled back to this PMF's original total mass, not to 1.
+   */
+  maxOfTwo(): PMF {
+    const totalMass = this.mass();
+    if (totalMass <= 0) return this;
+
+    const resultMap = new Map<number, Bin>();
+    let cdf = 0; // running NORMALIZED cdf through the previous support value
+
+    for (const damage of this.support()) {
+      const bin = this.map.get(damage)!;
+      const normalizedP = bin.p / totalMass;
+      if (normalizedP <= 0) continue;
+
+      const prevCdf = cdf;
+      cdf += normalizedP;
+
+      // P(max = damage), normalized: F(damage)^2 - F(damage^-)^2.
+      const newNormalizedP = cdf * cdf - prevCdf * prevCdf;
+
+      // Scale factor from the original bin to the new one. Reusing the bin's
+      // count/attr via scaleBin (rather than rebuilding from a bare number)
+      // is what keeps every label's proportion intact.
+      const factor = newNormalizedP / normalizedP;
+      resultMap.set(damage, PMF.scaleBin(bin, factor));
+    }
+
+    return new PMF(
+      resultMap,
+      this.epsilon,
+      this.normalized,
+      `maxOfTwo(${this.identifier})`
+    );
+  }
+
   scaleMass(factor: number): PMF {
     if (factor === 1) return this;
 
