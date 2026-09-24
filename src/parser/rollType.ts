@@ -9,10 +9,10 @@ const DECIMAL_INTEGER = /^\s*[+-]?\d+\s*$/;
  * Parse without throwing — for UI code that reparses on every keystroke, where
  * a transiently invalid expression is normal rather than exceptional.
  *
- * Also accepts a *signed* integer, which the grammar rejects: `"-3"` becomes a
- * delta at -3, `"+7"` one at 7. Unsigned integers need no help — `parse("7")`
- * already returns a delta at 7 — but a half-typed damage field is a bare signed
- * number often enough to be worth covering.
+ * Also accepts `+` before an integer, which the grammar has no use for: `"+7"`
+ * becomes a delta at 7. Integers are read here rather than by the grammar
+ * (which reads `"-3"` as a unary minus) so a huge one is refused instead of
+ * rounded; a half-typed damage field is a bare signed number often enough.
  *
  * The failure value is {@link PMF.empty}, which has **mass 0**, not a
  * distribution. Convolving it collapses the whole result to mass 0, so a caller

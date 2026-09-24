@@ -215,7 +215,8 @@ export function scaleParsedDice(expression: string, scale: number): string {
   const keepReading =
     'has no single doubled meaning (only keep-highest-of-1, "roll it N times, keep the best", doubles its dice inside each trial)';
   const noteKeep = (keep: Extract<DiceAtom, { kind: "keep" }>, trials?: DiceAtom): void => {
-    if (keep.mode === "h" && keep.kept === 1) return;
+    // A keep of numbers alone is a constant: it has no dice to double, so one meaning.
+    if ((keep.mode === "h" && keep.kept === 1) || !atomHasDice(keep.inner)) return;
     ambiguous.push(`the keep \`${source(trials?.kind === "number" ? trials.start : keep.start, keep.inner.start)}\` ${keepReading}`);
   };
 

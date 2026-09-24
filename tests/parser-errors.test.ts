@@ -93,7 +93,7 @@ describe("Parser Error Handling", () => {
     it("should throw for invalid dice numbers", () => {
       const invalidDiceExpressions = [
         "d-1", // Negative-sided die
-        "-1d6", // Negative number of dice
+        "(1d2 - 2)d6", // Negative number of dice
         "d6.5", // Non-integer sides
         "2.5d6", // Non-integer number of dice
       ];
@@ -189,17 +189,8 @@ describe("Parser Error Handling", () => {
 
   describe("Complex Expression Errors", () => {
     it("should throw for malformed complex expressions", () => {
-      const malformedComplexExpressions = [
-        "d6++3", // Double operator
-        "d6--2", // Double operator
-        "d6**4", // Double operator (though ** might be valid power)
-        "d6 + + 3", // Spaced double operator
-        "d6 * * 2", // Spaced double operator
-      ];
-
-      // Note: ** might be valid power notation, so we test others
+      // `d6--2` is d6 minus -2 (unary minus); there is no unary plus.
       expect(() => parse("d6++3")).toThrow();
-      expect(() => parse("d6--2")).toThrow();
       expect(() => parse("d6 + + 3")).toThrow();
     });
 

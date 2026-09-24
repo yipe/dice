@@ -12,15 +12,17 @@ type DiceOperation = ((this: Dice, other: Dice | number) => Dice) & {
 
 /**
  * Resource-exhaustion guards. Adversarial expressions (a huge die, a huge dice
- * count, or a keep over a large enumerated pool) can otherwise blow up memory
- * and CPU. These caps are deliberately generous so every legitimate expression
- * the suite exercises (e.g. d100000) still parses.
+ * count, or a keep over a huge pool) can otherwise blow up memory and CPU.
+ * These caps are deliberately generous so every legitimate expression the suite
+ * exercises (e.g. d100000) still parses.
  */
 // Must stay >= 100000: the suite asserts d100000 (100k faces) parses.
 const MAX_DIE_SIDES = 1_000_000;
 const MAX_DICE_COUNT = 10_000;
-// multiplyDiceByDice enumerates faces^count outcomes when a keep is applied.
-const MAX_KEEP_OUTCOMES = 1_000_000;
+// Bound on keepDice's work, faces · kept² · (kept · face span + 1): its states times its steps.
+const MAX_KEEP_WORK = 100_000_000;
+// Face counts are whole numbers up to here; a repeat whose counts would pass it keeps probabilities.
+const MAX_EXACT_COUNT = Number.MAX_SAFE_INTEGER;
 
 /**
  * Internal parse cache for PMFs produced from string expressions.
@@ -83,6 +85,20 @@ export function parse(expression: string, n: number = 0): PMF {
     );
   }
 
+  const total = result.total();
+  if (total === 0) {
+    throw new DiceParseError(
+      `Cannot parse dice expression [${expression}]: it has no outcomes (a d0 has no faces; it is only a reroll set, as in \`reroll d0\`)`,
+      { expression }
+    );
+  }
+  if (!Number.isFinite(total)) {
+    throw new DiceParseError(
+      `Cannot parse dice expression [${expression}]: its outcome counts overflow (too many dice combined to count exactly)`,
+      { expression }
+    );
+  }
+
   // When creating the PMF, do not epsilon prune
   const resultPMF = result.toPMF(-1);
   if (cachingEnabled) {
@@ -136,22 +152,55 @@ const HIT_ONLY_OPS: ReadonlySet<DiceOperation> = new Set<DiceOperation>([
 /** An AC or DC gate: its target, on the right, is never the check's natural roll. */
 const GATE_OPS: ReadonlySet<DiceOperation> = new Set<DiceOperation>([Dice.prototype.ac, Dice.prototype.dc]);
 
-function parseExpression(arr: string[], n: number): Dice {
-  const first = parseArgument(arr, n);
+/**
+ * The count of tokens left in `arr` where the last `AC`/`DC` gate at this nesting level starts, or
+ * undefined with none. Every term read while more tokens are left builds that check's total.
+ */
+function lastGateAt(arr: readonly string[]): number | undefined {
+  let depth = 0;
+  let at: number | undefined;
+  for (let i = 0; i < arr.length - 1; i++) {
+    const c = arr[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      if (depth === 0) break;
+      depth--;
+    } else if (depth === 0 && (c === "a" || c === "d") && arr[i + 1] === "c") {
+      at = arr.length - i;
+    }
+  }
+  return at;
+}
+
+/**
+ * `inCheck`: `arr` is part of a check total (a group left of an `AC`/`DC`), so its `+` always adds.
+ */
+function parseExpression(arr: string[], n: number, inCheck = false): Dice {
+  const gate = lastGateAt(arr);
+  const buildsCheck = (): boolean => inCheck || (gate !== undefined && arr.length > gate);
+  // `+` adds only to a non-zero total, so a miss (0) stays 0 -- except in a check total, where a
+  // running total of exactly 0 (`d20 - 5` on a natural 5) is a roll like any other.
+  const readOperation = (): DiceOperation | undefined => {
+    const checkTerm = buildsCheck();
+    const parsed = parseOperation(arr);
+    return parsed === Dice.prototype.addNonZero && checkTerm ? Dice.prototype.add : parsed;
+  };
+
+  const first = parseArgument(arr, n, buildsCheck());
   let finalResult = typeof first === "number" ? Dice.scalar(first) : first;
   if (typeof first === "number") finalResult.privateData.noDie = true;
 
   // While `finalResult` crits with its doubled hit payload, the text of each op and its argument,
   // so a trailing hit-only term joins the payload it is part of. Joined only for that case.
   let opText = finalResult.privateData.implicitCrit ? arr.join("") : undefined;
-  let op = parseOperation(arr);
+  let op = readOperation();
 
   while (op != null) {
     // An AC check times a payload is an attack's hit: keep the payload's text, so its crit can
     // double the dice when the string has no crit clause. Joined only for that case.
     const pending =
       op === Dice.prototype.conditionalApply && finalResult.privateData.isACCheck ? arr.join("") : undefined;
-    const arg = !op.unary ? parseArgument(arr, n) : finalResult;
+    const arg = !op.unary ? parseArgument(arr, n, buildsCheck()) : finalResult;
     const hitText = pending?.slice(0, pending.length - arr.length);
     const termText = opText?.slice(0, opText.length - arr.length);
     const before = finalResult;
@@ -254,10 +303,15 @@ function parseExpression(arr: string[], n: number): Dice {
 
     const clause = crit !== undefined || save !== undefined || pc !== undefined || miss !== undefined;
     const labelled = hasOutcomeLabels(finalResult);
+    const operand = finalResult;
     if (!clause && labelled && HIT_ONLY_OPS.has(op)) {
       finalResult = applyByOutcome(finalResult, op, arg, termText, n);
     } else {
       finalResult = op.call(finalResult, arg);
+    }
+    // A save's payload: every failed save (a 1) is `saveFail`, whatever the payload rolls there.
+    if (operand.privateData.isDCCheck && HIT_ONLY_OPS.has(op)) {
+      finalResult.setOutcomeDistribution("saveFail", op.call(operand.deleteFace(0), arg).getFaceMap());
     }
     // An `&` mix is an attack check whichever side the gate is on: `combine` copies the left's data.
     const gated = op === Dice.prototype.combine && typeof arg !== "number" && arg.privateData.isACCheck;
@@ -316,7 +370,7 @@ function parseExpression(arr: string[], n: number): Dice {
 
     if (implicitCrit) finalResult.privateData.implicitCrit = { payload: hitText! };
     opText = finalResult.privateData.implicitCrit ? arr.join("") : undefined;
-    op = parseOperation(arr);
+    op = readOperation();
   }
 
   return finalResult;
@@ -615,17 +669,32 @@ function applyByOutcome(
   return result;
 }
 
-function parseArgument(s: string[], n: number): Dice | number {
-  let result = parseArgumentInternal(s, n);
-
-  while (true) {
-    const next = parseArgumentInternal(s, n);
-    if (next === undefined) break;
-
-    result = multiplyDiceByDice(result as Dice | number, next);
+/**
+ * One argument: a repeat chain (`2d6`, `2(1d4 + 1)`, `(1d4)d6`, `4kh3d6`), or a unary minus and the
+ * argument it negates, whole chain included: `-2d6` is `-(2d6)`, `1d6 + -3` is `1d6 - 3`.
+ */
+function parseArgument(s: string[], n: number, inCheck = false): Dice | number {
+  if (s[0] === "-") {
+    s.shift();
+    const operand = parseArgument(s, n, inCheck);
+    if (typeof operand === "number") return 0 - operand;
+    const zero = asValue(0);
+    const negated = zero.subtract(operand);
+    followNaturalRoll(zero, Dice.prototype.subtract, operand, negated, false);
+    return negated;
   }
 
-  return result as Dice | number;
+  let result = parseArgumentInternal(s, n, inCheck);
+  if (result === undefined) {
+    const at = s.length === 0 ? "the end of the expression" : `'${s.slice(0, 20).join("")}'`;
+    throw new Error(`Expected a number, a die, a keep or '(' at ${at}`);
+  }
+
+  for (let next = parseArgumentInternal(s, n, inCheck); next !== undefined; next = parseArgumentInternal(s, n, inCheck)) {
+    result = multiplyDiceByDice(result, next);
+  }
+
+  return result;
 }
 
 function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
@@ -640,39 +709,22 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
   // an object and preserves insertion order, which matches d1.keys() ascending
   // order — so the combine order below is identical to the previous version.
   const faces = new Map<number, Dice>();
-  let normalizationFactor = 1;
+  let common = 1;
 
+  const { keep } = d2.privateData;
   for (const key of d1.keys()) {
-    let face: Dice;
+    const face = keep ? keepDice(d2, key, keep) : multiplyDice(key, d2);
 
-    if (typeof key !== "number") {
-      continue; // Skip invalid scalar
-    }
-
-    if (d2.privateData.keep) {
-      // Repeat dice2 "key" times and apply keep. opDice enumerates the full
-      // faces^count outcome space, so guard against a combinatorial blow-up.
-      const faceCount = d2.keys().length;
-      if (Math.pow(faceCount, key) > MAX_KEEP_OUTCOMES) {
-        throw new DiceParseError(
-          `Keep enumeration of ${faceCount}^${key} outcomes exceeds the maximum of ${MAX_KEEP_OUTCOMES}`
-        );
-      }
-      const repeat: Dice[] = Array(key).fill(d2);
-      face = opDice(repeat, d2.privateData.keep);
-    } else {
-      face = multiplyDice(key, d2);
-    }
-
-    normalizationFactor *= face.total();
+    common *= face.total();
     faces.set(key, face);
   }
 
+  // Scaled to one common total the counts stay whole numbers; past MAX_EXACT_COUNT they could not,
+  // and the product would overflow, so each count becomes its probability instead.
+  const exact = common <= MAX_EXACT_COUNT;
   for (const [k, face] of faces) {
     const count = d1.get(k);
-    result.combineInPlace(
-      face.normalize((count * normalizationFactor) / face.total())
-    );
+    result.combineInPlace(face.normalize(((exact ? common : 1) * count) / face.total()));
   }
 
   result.privateData.except = {};
@@ -680,8 +732,8 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
   // disadvantage, `3kh1(1d20)` elven accuracy) is one kept natural roll, like `d20 > d20`: a crit
   // is read from either. Any other count or keep has no single natural roll.
   const [only, ...more] = d1.keys();
-  const { keepCount, critTrack } = d2.privateData;
-  const rolls = keepCount === undefined ? only : Math.min(only, keepCount);
+  const { critTrack } = d2.privateData;
+  const rolls = keep === undefined ? only : Math.min(only, keep.kept);
   const sides = outranks(naturalSides(d2), naturalSides(d1)) ? naturalSides(d2) : naturalSides(d1);
   if (rolls === 1 && more.length === 0 && critTrack?.bare) {
     result.privateData.critTrack = bareTrack(result);
@@ -692,13 +744,21 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
   return result;
 }
 
-function multiplyDice(n: number, d: Dice): Dice {
+/** A repeat count is a whole number of copies, 0 included (no dice: the point mass at 0). */
+function assertRepeatCount(n: number): void {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new DiceParseError(`A repeat count must be a whole number of 0 or more; this one can be ${n}`);
+  }
   if (n > MAX_DICE_COUNT) {
     throw new DiceParseError(
       `Dice count ${n} exceeds the maximum of ${MAX_DICE_COUNT}`
     );
   }
-  if (n === 0) return new Dice(0);
+}
+
+function multiplyDice(n: number, d: Dice): Dice {
+  assertRepeatCount(n);
+  if (n === 0) return Dice.scalar(0);
   if (n === 1) return d;
 
   const half = Math.floor(n / 2);
@@ -709,45 +769,83 @@ function multiplyDice(n: number, d: Dice): Dice {
     result = result.add(d);
   }
 
-  return result;
+  // Counts past MAX_EXACT_COUNT are no longer whole numbers and a few more doublings overflow:
+  // keep them as probabilities, which lose nothing more.
+  const total = result.total();
+  return total > MAX_EXACT_COUNT ? result.normalize(1 / total) : result;
 }
 
-function opDice(diceList: Dice[], keepFn: (values: number[]) => number): Dice {
-  return opDiceInternal(diceList, new Dice(), 0, [], 1, keepFn);
-}
+/**
+ * The sum of the `kept` highest (or lowest) of `count` independent copies of `die`, exactly, for
+ * any per-copy distribution. Faces are visited from the kept end. With `placed` copies already on
+ * earlier faces, how many of the other m = count - placed land on this face is Binomial(m, q), q
+ * being this face's share of the mass from here on. Once `kept` copies are placed the kept sum is
+ * final, so only states with fewer placed are carried: kept × (sums so far) states per face.
+ */
+function keepDice(die: Dice, count: number, { kept, lowest }: { kept: number; lowest: boolean }): Dice {
+  assertRepeatCount(count);
+  if (kept >= count) return multiplyDice(count, die);
+  if (kept <= 0) return Dice.scalar(0);
 
-function opDiceInternal(
-  diceList: Dice[],
-  result: Dice,
-  index: number,
-  values: number[],
-  weight: number,
-  combineFn: (values: number[]) => number
-): Dice {
-  if (index === diceList.length) {
-    return result.combine(Dice.scalar(combineFn(values)).normalize(weight));
-  }
-
-  const currentDice = diceList[index];
-  for (const face of currentDice.keys()) {
-    values.push(face as number);
-    result = opDiceInternal(
-      diceList,
-      result,
-      index + 1,
-      values,
-      weight * currentDice.get(face),
-      combineFn
+  const faces = die
+    .getFaceEntries()
+    .filter(([, weight]) => weight > 0)
+    .sort(([a], [b]) => (lowest ? a - b : b - a));
+  if (faces.length === 0) return new Dice(); // copies of a d0: no outcomes, reported by parse()
+  const span = Math.abs(faces[faces.length - 1][0] - faces[0][0]);
+  const work = faces.length * kept * kept * (kept * span + 1);
+  if (work > MAX_KEEP_WORK) {
+    throw new DiceParseError(
+      `Keep of ${kept} of ${count} copies of a ${faces.length}-face roll exceeds the maximum work of ${MAX_KEEP_WORK}`
     );
-    values.pop();
   }
 
+  // The mass from each face on, summed from the far end so the last face's share is exactly 1.
+  const tails: number[] = new Array(faces.length);
+  for (let i = faces.length - 1, tail = 0; i >= 0; i--) tails[i] = tail += faces[i][1];
+
+  const addTo = (map: Map<number, number>, key: number, p: number): void => {
+    map.set(key, (map.get(key) ?? 0) + p);
+  };
+  // states[placed]: kept sum so far → probability, with `placed` < `kept` copies placed.
+  let states = Array.from({ length: kept }, () => new Map<number, number>());
+  states[0].set(0, 1);
+  const done = new Map<number, number>();
+
+  faces.forEach(([value, weight], i) => {
+    const q = weight / tails[i];
+    const next = Array.from({ length: kept }, () => new Map<number, number>());
+    states.forEach((sums, placed) => {
+      if (sums.size === 0) return;
+      const left = count - placed;
+      const need = kept - placed;
+      // P(exactly c of the `left` copies land here) for c < need; the rest completes the keep.
+      const few: number[] = [];
+      let logChoose = 0;
+      for (let c = 0; c < need; c++) {
+        if (c > 0) logChoose += Math.log((left - c + 1) / c);
+        few.push(q >= 1 ? 0 : Math.exp(logChoose + c * Math.log(q) + (left - c) * Math.log1p(-q)));
+      }
+      const enough = Math.max(0, 1 - few.reduce((total, p) => total + p, 0));
+      for (const [sum, p] of sums) {
+        few.forEach((pc, c) => {
+          if (pc > 0) addTo(next[placed + c], sum + c * value, p * pc);
+        });
+        if (enough > 0) addTo(done, sum + need * value, p * enough);
+      }
+    });
+    states = next;
+  });
+
+  const result = new Dice();
+  for (const [sum, p] of done) result.increment(sum, p);
   return result;
 }
 
 function parseArgumentInternal(
   s: string[],
-  n: number
+  n: number,
+  inCheck = false
 ): Dice | number | undefined {
   if (s.length === 0) return;
 
@@ -756,7 +854,7 @@ function parseArgumentInternal(
   switch (c) {
     case "(":
       s.shift();
-      return assertToken(s, ")", parseExpression(s, n));
+      return assertToken(s, ")", parseExpression(s, n, inCheck));
 
     case "h":
     case "d":
@@ -764,7 +862,7 @@ function parseArgumentInternal(
 
     case "k":
       assertToken(s, "k");
-      return parseKeep(s, n);
+      return parseKeep(s, n, inCheck);
 
     case "n":
       return parseNumber(s, n);
@@ -821,6 +919,8 @@ function parseDice(s: string[], n: number): Dice | undefined {
     );
   }
   let result = new Dice(sides);
+  // A d0 has no faces: it is only a face set (`reroll d0` rerolls nothing), never a roll.
+  if (sides === 0) return result;
 
   if (rerollOne) {
     // Reroll a rolled 1 exactly once, keeping the second roll (e.g. halfling
@@ -868,36 +968,27 @@ function isDigit(c: string): boolean {
   return c >= "0" && c <= "9";
 }
 
-function parseKeep(s: string[], n: number): Dice | undefined {
-  let keepLowest = false;
+function parseKeep(s: string[], n: number, inCheck: boolean): Dice | undefined {
+  let lowest = false;
 
   if (peek(s, "l")) {
     assertToken(s, "l");
-    keepLowest = true;
+    lowest = true;
   } else if (peek(s, "h")) {
     assertToken(s, "h");
-    keepLowest = false;
   } else {
     return;
   }
 
-  const keepCount = parseNumber(s, n);
-  const result = parseArgumentInternal(s, n);
+  const kept = parseNumber(s, n);
+  const result = parseArgumentInternal(s, n, inCheck);
 
   if (result instanceof Dice) {
-    result.privateData.keep = keepN(keepCount, keepLowest);
-    result.privateData.keepCount = keepCount;
+    result.privateData.keep = { kept, lowest };
     return result;
   }
 
   throw new Error("Expected Dice after keep modifier");
-}
-
-function keepN(n: number, low: boolean): (values: number[]) => number {
-  return (values: number[]): number => {
-    const sorted = [...values].sort((a, b) => (low ? a - b : b - a));
-    return sorted.slice(0, n).reduce((sum, val) => sum + val, 0);
-  };
 }
 
 function parseOperation(s: string[]): DiceOperation | undefined {
