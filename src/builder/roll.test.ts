@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { d10, d20, d4, d6, d8, roll } from "../builder";
 import { parse } from "../parser/parser";
 import { builderPMFCache } from "./factory";
-import { HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
+import { AmbiguousKeepError, HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
 import type { RollConfig } from "./types";
 export const testCases: {
   label: string;
@@ -363,15 +363,8 @@ describe("RollBuilder", () => {
       expect(builder.toPMF()?.mean()).toBeCloseTo(24.5086, 1);
     });
 
-    it("should handle complex keepLowest scenario", () => {
-      const builder = roll(8).d10().plus(3).keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(8d10) + 3");
-      expect(builder.toPMF()).toBeDefined();
-      // Interpretation: 4 trials of (8d10), keep the lowest 2 trial sums, then +3.
-      // Per-trial mean is 8*5.5 = 44, but picking the 2 minima of 4 lowers the total well below 2*44.
-      // The exact expectation is computed by DP over the per-trial PMF (order statistics of sums).
-      // See keepSumPMF DP in ast.ts.
-      expect(builder.toPMF()?.mean()).toBeCloseTo(80.1826, 3);
+    it("should refuse a per-die keepLowest(4, 2) on 8d10, which has more than one reading", () => {
+      expect(() => roll(8).d10().plus(3).keepLowest(4, 2)).toThrow(AmbiguousKeepError);
     });
 
     it("should handle copy() with multiple dice configurations", () => {
@@ -460,17 +453,8 @@ describe("RollBuilder", () => {
       expect(finalBuilder.toPMF()?.mean()).toBeCloseTo(7.2, 1);
     });
 
-    it("should handle complex combination of keep and modifiers", () => {
-      const builder = roll(3).d8().keepHighest(4, 3).plus(3);
-      // .addRoll(2)
-      // .d6()
-      // .keepLowest(2, 1);
-      // + 2kl1(2d6)
-      expect(builder.toExpression()).toBe("4kh3(3d8) + 3");
-      expect(builder.toPMF()).toBeDefined();
-      // Interpretation: 4 trials of (3d8), keep the highest 3 trial sums, then +3.
-      // Exact mean is E[sum of top-3 of 4 i.i.d. 3d8] + 3, computed via DP over the per-trial PMF.
-      expect(builder.toPMF()?.mean()).toBeCloseTo(47.6011, 3);
+    it("should refuse a per-die keepHighest(4, 3) on 3d8, which has more than one reading", () => {
+      expect(() => roll(3).d8().keepHighest(4, 3).plus(3)).toThrow(AmbiguousKeepError);
     });
   });
 
@@ -533,7 +517,7 @@ describe("RollBuilder", () => {
         const builder = roll(3).d6();
         expect(() => {
           void builder.keepHighest(2, 5); // Keep more than total
-        }).not.toThrow(); // Currently allows, but should validate
+        }).toThrow(AmbiguousKeepError);
 
         expect(() => {
           void builder.keepHighest(3, 0); // Keep 0 dice
@@ -809,13 +793,13 @@ describe("RollBuilder", () => {
     });
 
     describe("Complex Combination Mathematics", () => {
-      it("should have correct mean for 2d6 + 3 with advantage", () => {
+      it("should roll each die of 2d6 + 3 with advantage", () => {
         const rollBuilder = new RollBuilder(2).d6().withAdvantage().plus(3);
         const pmf = rollBuilder.toPMF();
-        // Mean should be higher than 2d6 + 3 due to advantage
-        expect(pmf.mean()).toBeGreaterThan(7.0); // 2d6 + 3 mean (not 10.0)
-        expect(pmf.min()).toBe(4); // Advantage can result in lower values
-        expect(pmf.max()).toBe(9); // Actual max value is 9
+        // Two advantaged d6 (161/36 each) plus 3.
+        expect(pmf.mean()).toBeCloseTo(161 / 18 + 3, 12);
+        expect(pmf.min()).toBe(5);
+        expect(pmf.max()).toBe(15);
       });
 
       it("should have correct mean for 3d6 reroll 1 minimum 2 + 5", () => {
@@ -894,9 +878,8 @@ describe("RollBuilder", () => {
       expect(() => roll(1).d(6).keepLowest(4, 3).doubleDice()).toThrow(/4kl3/);
     });
 
-    it("should keepLowest double dice", () => {
-      const builder = roll(1).d(6).doubleDice().keepLowest(4, 3);
-      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    it("should refuse a keepLowest(4, 3) on the doubled 2d6, which has more than one reading", () => {
+      expect(() => roll(1).d(6).doubleDice().keepLowest(4, 3)).toThrow(AmbiguousKeepError);
     });
 
     it("should not affect modifiers", () => {

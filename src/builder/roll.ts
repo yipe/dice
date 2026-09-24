@@ -6,10 +6,41 @@ import { parse } from "../parser/parser";
 import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionError } from "../parser/scaleDice";
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { astFromRollConfigs, pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { astFromRollConfigs, perDieKeepReading, pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
+
+export { AmbiguousKeepError } from "./ast";
+
+/** Throws for ±Infinity (NaN has its own, earlier message at each call site). */
+function requireFinite(value: number, what: string): void {
+  if (!Number.isFinite(value)) throw new Error(`${what} must be finite, got ${value}`);
+}
+
+/**
+ * Thrown when a parsed string (`d("d20+5")`, `RollBuilder.fromArgs("d20+5")`) is used as an attack
+ * or save check. A parsed builder carries only its PMF, not the dice and flats a check reads, so
+ * the check would silently lose them.
+ */
+export class ParsedCheckError extends Error {
+  constructor(readonly expression: string, verb: "ac" | "dc") {
+    const example = verb === "ac" ? "d20.plus(5).ac(15)" : "d20.plus(5).dc(15)";
+    const full = verb === "ac" ? "(d20 + 5 AC 15) * (1d8)" : "(d20 + 5 DC 15) * (8d6) save half";
+    super(
+      `Cannot use the parsed string "${expression}" as a check with .${verb}(): a parsed roll carries no ` +
+        `dice or flats for the check to read. Build the check with the builder API (${example}) or ` +
+        `parse a full attack or save string ("${full}").`
+    );
+    this.name = "ParsedCheckError";
+    Object.setPrototypeOf(this, ParsedCheckError.prototype);
+  }
+}
+
+/** A group that `roll(N, X)` must copy N times rather than scale: its dice count is part of its meaning. */
+function repeatsByCopy(config: RollConfig): boolean {
+  return config.keep !== undefined || config.bestOf > 0 || config.explodePoolBudget > 0;
+}
 
 /** Validates a `scaleDice`/`doubleDice` multiplier: must be a positive integer. Shared by
  * `RollBuilder.scaleDice` and every subclass's override (Half/Scale/MaxOf/Composite/Parsed/Pooled). */
@@ -25,12 +56,16 @@ function validateScaleInt(scale: number): number {
  * `astFromRollConfigs` reads a per-die keep through the die count, so multiplying that count only
  * means "double the dice" for keep-highest-of-1 ("roll it N times, keep the best", which then
  * doubles its dice inside each trial). Any other keep, a `bestOf()` that is (or becomes) a keep, and
- * a die rolled with advantage/disadvantage/elven accuracy (whose count the AST ignores) do not.
+ * a die rolled with advantage/disadvantage/elven accuracy (doubled as twice the advantaged dice, or
+ * as advantage over the doubled sum) do not.
  */
 function ambiguousScaling(config: RollConfig, scale: number): string | undefined {
   const die = `d${config.sides}`;
   if (config.rollType !== "flat") {
-    return `a ${die} rolled with ${config.rollType} ignores its dice count, so a doubled crit would equal the hit`;
+    return (
+      `a ${die} rolled with ${config.rollType} has no single doubled meaning ` +
+      `(twice as many dice each rolled with ${config.rollType}, or ${config.rollType} over the doubled sum)`
+    );
   }
   if (config.keep) {
     const { total, count, mode } = config.keep;
@@ -112,6 +147,7 @@ export class RollBuilder {
     if (typeof countOrConfigs === "number") {
       const count = countOrConfigs;
       if (isNaN(count)) throw new Error("Invalid NaN value for count");
+      requireFinite(count, "count");
       this.subRollConfigs = [
         { ...defaultConfig, count, isSubtraction: count < 0 },
       ];
@@ -145,7 +181,10 @@ export class RollBuilder {
    * `null` to opt OUT of caching — a conservative miss is always safe; a wrong key would corrupt DPR.
    */
   cacheKey(): string | null {
-    return JSON.stringify(this.subRollConfigs);
+    // Non-finite numbers are kept distinct: JSON.stringify alone writes ±Infinity and NaN as null.
+    return JSON.stringify(this.subRollConfigs, (_key, value: unknown) =>
+      typeof value === "number" && !Number.isFinite(value) ? `#${value}` : value
+    );
   }
 
   // for testing
@@ -183,37 +222,8 @@ export class RollBuilder {
       if (isNaN(count)) throw new Error("Invalid NaN value for count argument");
 
       if (sidesOrDie instanceof RollBuilder) {
-        if (sidesOrDie.hasHiddenState()) {
-          throw new Error(
-            "Cannot use a roll with hidden state (like a pooled roll) as a die type."
-          );
-        }
-        const subRollConfigs = sidesOrDie.getSubRollConfigs();
-        if (subRollConfigs.length === 0) {
-          const result = new RollBuilder(0);
-          return modifier !== undefined ? result.plus(modifier) : result;
-        }
-
-        const absCount = Math.abs(count);
-
-        const newConfigs = subRollConfigs.map((config) => ({
-          ...config,
-          count: config.count * absCount,
-          modifier: config.modifier * absCount,
-        }));
-
-        let resultBuilder = new RollBuilder(newConfigs);
-
-        if (count < 0) {
-          const negatedConfigs = resultBuilder
-            .getSubRollConfigs()
-            .map((c) => ({ ...c, isSubtraction: !c.isSubtraction }));
-          resultBuilder = new RollBuilder(negatedConfigs);
-        }
-
-        return modifier !== undefined
-          ? resultBuilder.plus(modifier)
-          : resultBuilder;
+        const repeated = RollBuilder.repeated(sidesOrDie, count);
+        return modifier !== undefined ? repeated.plus(modifier) : repeated;
       } else if (typeof sidesOrDie === "number" || sidesOrDie === undefined) {
         if (typeof sidesOrDie === "number" && isNaN(sidesOrDie))
           throw new Error("Invalid NaN value for sides argument");
@@ -228,11 +238,51 @@ export class RollBuilder {
     throw new Error(`Invalid arguments passed: ${args.join(", ")}`);
   }
 
+  /**
+   * `count` independent copies of `die`, subtracted when `count` is negative. A plain group scales
+   * its dice count; a group whose count is part of its meaning (a keep, `bestOf()`, a pool-wide
+   * `explodePool()` budget) is copied, so `roll(2, d6.keepHighest(2, 1))` is two best-of-two d6.
+   * Each copy brings its own flat modifier, negated with the dice when subtracted.
+   */
+  protected static repeated(die: RollBuilder, count: number): RollBuilder {
+    if (die instanceof TransformedRollBuilder) {
+      const copies = Math.abs(count);
+      if (copies === 0) return new RollBuilder(0);
+      const total = sumRolls(Array.from({ length: copies }, () => die));
+      return count < 0 ? new ScaleRollBuilder(total, -1) : total;
+    }
+    if (die.hasHiddenState()) {
+      throw new Error(
+        "Cannot use a roll with hidden state (like a pooled roll) as a die type."
+      );
+    }
+    const configs = die.getSubRollConfigs();
+    if (configs.length === 0) return new RollBuilder(0);
+
+    const copies = Math.abs(count);
+    const negate = count < 0;
+    const repeatedConfigs: RollConfig[] = [];
+    for (const config of configs) {
+      const isSubtraction = (config.isSubtraction === true || config.count < 0) !== negate;
+      const dice = Math.abs(config.count);
+      const modifier = (negate ? -1 : 1) * config.modifier * copies;
+      if (copies > 1 && repeatsByCopy(config)) {
+        for (let i = 0; i < copies; i++) {
+          repeatedConfigs.push({ ...config, count: dice, isSubtraction, modifier: i === 0 ? modifier : 0 });
+        }
+      } else {
+        repeatedConfigs.push({ ...config, count: dice * copies, isSubtraction, modifier });
+      }
+    }
+    return new RollBuilder(repeatedConfigs);
+  }
+
   // --- Core Dice Methods ---
   d(sides: number | undefined): RollBuilder {
     if (sides !== undefined && isNaN(sides))
       throw new Error("Invalid NaN value for sides");
     if (sides === undefined) return this;
+    requireFinite(sides, "sides");
     if (this.lastConfig.sides && this.lastConfig.sides > 0) {
       throw new Error("Cannot add a die after adding a die");
     }
@@ -250,33 +300,9 @@ export class RollBuilder {
   ): RollBuilder {
     if (typeof modOrRoll === "number" && isNaN(modOrRoll))
       throw new Error("Invalid NaN value for modOrRoll");
+    if (typeof modOrRoll === "number") requireFinite(modOrRoll, "plus()/minus() argument");
     if (die instanceof RollBuilder && typeof modOrRoll === "number") {
-      if (die.hasHiddenState()) {
-        throw new Error(
-          "Cannot use a roll with hidden state (like a pooled roll) as a die type."
-        );
-      }
-      const count = modOrRoll;
-      const subRollConfigs = die.getSubRollConfigs();
-      if (subRollConfigs.length === 0) return this;
-
-      const absCount = Math.abs(count);
-
-      const newConfigs = subRollConfigs.map((config) => ({
-        ...config,
-        count: config.count * absCount,
-        modifier: config.modifier * absCount,
-      }));
-
-      let rollToAdd = new RollBuilder(newConfigs);
-
-      if (count < 0) {
-        const negatedConfigs = rollToAdd
-          .getSubRollConfigs()
-          .map((c) => ({ ...c, isSubtraction: !c.isSubtraction }));
-        rollToAdd = new RollBuilder(negatedConfigs);
-      }
-      return this.add(rollToAdd);
+      return this.add(RollBuilder.repeated(die, modOrRoll));
     }
 
     if (die !== undefined) {
@@ -311,9 +337,14 @@ export class RollBuilder {
       : this.plus(-1, modOrRoll as RollBuilder);
   }
 
-  /** Apply one-pass reroll threshold (k): reroll faces 1..k once, must keep. */
+  /**
+   * Reroll faces 1..`value` once and keep the second roll (Great Weapon Fighting in the 2014
+   * rules). The reroll decides on the die's raw face: on a group that also has a {@link minimum},
+   * the floor applies to the kept face afterwards, whichever of the two was called first.
+   */
   reroll(value: number): RollBuilder {
     if (isNaN(value)) throw new Error("Invalid NaN value for reroll");
+    requireFinite(value, "reroll()");
     if (value === this.lastConfig.reroll) return this;
 
     const newConfigs = this.getSubRollConfigs();
@@ -322,11 +353,19 @@ export class RollBuilder {
     return this.create(newConfigs);
   }
 
-  /** Set finite explode count for max-face explosions (Infinity allowed). */
-  explode(count: number | undefined = Infinity): RollBuilder {
-    if (count !== undefined && isNaN(count))
-      throw new Error("Invalid NaN value for explode count");
-    if (count === undefined) return this;
+  /**
+   * Let each die explode: a roll of its highest face adds another die, at most `count` extra dice
+   * per die. The cap is required and must be finite; `explode(0)` is a no-op. For one budget
+   * shared by the whole pool, use {@link explodePool}.
+   */
+  explode(count: number): RollBuilder {
+    if (count === undefined) {
+      throw new Error(
+        "explode() needs an explicit cap: explode(k) lets each die add at most k extra dice."
+      );
+    }
+    if (isNaN(count)) throw new Error("Invalid NaN value for explode count");
+    requireFinite(count, "explode() cap");
     if (count === 0) return this;
     if (count < 0) throw new Error("Explode count must be >= 0");
     if (this.lastConfig.explodePoolBudget > 0) {
@@ -343,8 +382,7 @@ export class RollBuilder {
   /**
    * Set a pool-wide exploding-dice budget: at most `budget` extra dice may be added across the
    * WHOLE pool (shared), as opposed to {@link explode}'s per-die cap (`n` dice each individually
-   * allowed up to `explode(k)` extra dice). `budget` must be a finite non-negative integer —
-   * unlike `explode()`, `Infinity` is not accepted (it would make the pool-wide DP non-terminating).
+   * allowed up to `explode(k)` extra dice). `budget` must be a finite non-negative integer.
    */
   explodePool(budget: number): RollBuilder {
     if (isNaN(budget)) throw new Error("Invalid NaN value for explodePool budget");
@@ -362,12 +400,16 @@ export class RollBuilder {
     return this.create(newConfigs);
   }
 
-  /** Apply per-die minimum value (floors each die roll at `val`, e.g. `minimum(3)` treats a 1 or
-   * 2 as a 3 -- the 2024 Great Weapon Fighting style). */
+  /**
+   * Floor each die at `val`: `minimum(3)` treats a 1 or 2 as a 3 (the 2024 Great Weapon Fighting
+   * style). On a group that also has a {@link reroll}, the reroll decides on the raw face and this
+   * floor applies to the kept face afterwards, whichever of the two was called first.
+   */
   minimum(val: number | undefined): RollBuilder {
     if (val !== undefined && isNaN(val))
       throw new Error("Invalid NaN value for minimum");
     if (val === undefined) return this;
+    requireFinite(val, "minimum()");
     if (val === 0) return this;
     if (val < 0) throw new Error("Minimum value must be >= 0");
 
@@ -380,6 +422,7 @@ export class RollBuilder {
     if (count !== undefined && isNaN(count))
       throw new Error("Invalid NaN value for bestOf count");
     if (count === undefined) return this;
+    requireFinite(count, "bestOf()");
     if (count <= 0) throw new Error("Best of count must be > 0");
 
     const newConfigs = this.getSubRollConfigs();
@@ -387,25 +430,45 @@ export class RollBuilder {
     return this.create(newConfigs);
   }
 
+  /**
+   * Keep the highest `count` of `total`. On one die, that is `count` of `total` rolls of the die;
+   * on N dice it is `count` of the N dice when `total` is N and `count` >= 2, or the best of
+   * `total` rolls of the whole N-dice group when `count` is 1. Any other shape on N > 1 dice has
+   * more than one reading and throws an {@link AmbiguousKeepError}; use {@link keepHighestAll}
+   * or a keep on each die instead.
+   */
   keepHighest(total: number, count: number): RollBuilder {
     if (isNaN(total) || isNaN(count))
       throw new Error("Invalid NaN value for keepHighest");
-    const newConfigs = this.getSubRollConfigs();
-    newConfigs[newConfigs.length - 1].keep = { total, count, mode: "highest" };
-    return this.create(newConfigs);
+    return this.withKeep({ total, count, mode: "highest" });
   }
 
+  /**
+   * Keep the lowest `count` of `total`; the mirror of {@link keepHighest}. On N > 1 dice,
+   * `keepLowest(N, 1)` throws an {@link AmbiguousKeepError}: the lowest single die and the worse
+   * of N rolls of the whole group are both plausible readings.
+   */
   keepLowest(total: number, count: number): RollBuilder {
     if (isNaN(total) || isNaN(count))
       throw new Error("Invalid NaN value for keepLowest");
+    return this.withKeep({ total, count, mode: "lowest" });
+  }
+
+  private withKeep(keep: NonNullable<RollConfig["keep"]>): RollBuilder {
+    requireFinite(keep.total, "keep total");
+    requireFinite(keep.count, "keep count");
     const newConfigs = this.getSubRollConfigs();
-    newConfigs[newConfigs.length - 1].keep = { total, count, mode: "lowest" };
+    const last = newConfigs[newConfigs.length - 1];
+    if (last.sides > 0 && last.rollType === "flat") perDieKeepReading(last.count, last.sides, keep);
+    last.keep = keep;
     return this.create(newConfigs);
   }
 
   keepHighestAll(total: number, count: number): PooledRollBuilder {
     if (isNaN(total) || isNaN(count))
       throw new Error("Invalid NaN value for keepHighestAll");
+    requireFinite(total, "keepHighestAll() total");
+    requireFinite(count, "keepHighestAll() count");
     const currentAST = this.toAST();
     // Wrap in SumNode to represent trials, then KeepNode
     const trialPool: SumNode = {
@@ -429,6 +492,8 @@ export class RollBuilder {
   keepLowestAll(total: number, count: number): PooledRollBuilder {
     if (isNaN(total) || isNaN(count))
       throw new Error("Invalid NaN value for keepLowestAll");
+    requireFinite(total, "keepLowestAll() total");
+    requireFinite(count, "keepLowestAll() count");
     const currentAST = this.toAST();
     const trialPool: SumNode = {
       type: "sum",
@@ -462,6 +527,7 @@ export class RollBuilder {
 
   add(anotherRoll: RollBuilder | undefined): RollBuilder {
     if (anotherRoll === undefined) return this;
+    if (anotherRoll instanceof TransformedRollBuilder) return sumRolls([this, anotherRoll]);
     if (anotherRoll.hasHiddenState()) {
       throw new Error(
         "Cannot add a roll with hidden state (like a pooled roll) to a standard roll. Try adding the standard roll to the pooled roll instead: pool.plus(roll)."
@@ -901,9 +967,18 @@ export class RollBuilder {
     return new ScaleRollBuilder(this, numerator, denominator, rounding);
   }
 
-  // Create a "max of N rolls" version of this roll for crit damage with keep operations
-  maxOf(count: number): MaxOfRollBuilder {
-    return new MaxOfRollBuilder(this, count);
+  /**
+   * The highest of `count` independent rolls of this whole roll (dice, flats, rerolls and all):
+   * `roll(2, d6).plus(3).maxOf(2)` is the better of two 2d6 + 3. Given another roll instead, the
+   * higher of this roll and that one: `roll(3, d8).maxOf(roll(2, d10))`.
+   */
+  maxOf(count: number): MaxOfRollBuilder;
+  maxOf(other: RollBuilder): RollBuilder;
+  maxOf(countOrOther: number | RollBuilder): RollBuilder {
+    if (countOrOther instanceof RollBuilder) return new MaxOfRollsBuilder([this, countOrOther]);
+    if (isNaN(countOrOther)) throw new Error("Invalid NaN value for maxOf count");
+    requireFinite(countOrOther, "maxOf() count");
+    return new MaxOfRollBuilder(this, countOrOther);
   }
 
   // These methods are implemented via prototype augmentation in ac.ts and dc.ts
@@ -917,7 +992,47 @@ export class RollBuilder {
   }
 }
 
-export class HalfRollBuilder extends RollBuilder {
+/**
+ * A roll whose value is a transform of whole rolls: halved, scaled, the highest of several, or a
+ * sum that keeps such parts. Arithmetic on it (`plus`, `minus`, `add`) composes as a sum that
+ * keeps the transform, so `roll(2, d6).half().plus(1)` is floor(2d6 / 2) + 1. Verbs that edit the
+ * underlying dice (`reroll`, `minimum`, `keepHighest`, advantage, ...) throw instead: set them on
+ * the roll before transforming it.
+ */
+abstract class TransformedRollBuilder extends RollBuilder {
+  /** The call that made this roll, for error messages (e.g. `half()`). */
+  protected abstract readonly verb: string;
+
+  protected override create(_configs: readonly RollConfig[]): RollBuilder {
+    throw new Error(
+      `Cannot change the dice of a ${this.verb} roll: that would drop the ${this.verb} transform. ` +
+        `Set reroll/minimum/explode/keep/advantage on the roll before calling ${this.verb}.`
+    );
+  }
+
+  override plus(modOrRoll: number | RollBuilder | undefined): RollBuilder;
+  override plus(count: number, die: RollBuilder): RollBuilder;
+  override plus(modOrRoll: number | RollBuilder | undefined, die?: RollBuilder): RollBuilder {
+    if (typeof modOrRoll === "number" && isNaN(modOrRoll))
+      throw new Error("Invalid NaN value for modOrRoll");
+    if (typeof modOrRoll === "number") requireFinite(modOrRoll, "plus()/minus() argument");
+    if (die instanceof RollBuilder && typeof modOrRoll === "number") {
+      return this.add(RollBuilder.repeated(die, modOrRoll));
+    }
+    if (die !== undefined) throw new Error("Invalid arguments to plus()");
+    if (modOrRoll === undefined || modOrRoll === 0) return this;
+    if (typeof modOrRoll === "number") return sumRolls([this, new RollBuilder(0).plus(modOrRoll)]);
+    return this.add(modOrRoll);
+  }
+
+  override add(anotherRoll: RollBuilder | undefined): RollBuilder {
+    return anotherRoll === undefined ? this : sumRolls([this, anotherRoll]);
+  }
+}
+
+export class HalfRollBuilder extends TransformedRollBuilder {
+  protected readonly verb = "half()";
+
   constructor(private readonly innerRoll: RollBuilder) {
     super(0); // dummy, we override methods
   }
@@ -929,9 +1044,6 @@ export class HalfRollBuilder extends RollBuilder {
   override cacheKey(): string | null {
     return null; // half-of transform not captured by subRollConfigs
   }
-
-  // Inherits `create()` and the `.plus()` family from `RollBuilder`, so chaining one of those on
-  // a HalfRollBuilder returns a plain `RollBuilder` rather than a HalfRollBuilder.
 
   override get lastConfig(): RollConfig {
     // `lastConfig` is protected on the base class; reach it on the wrapped
@@ -974,9 +1086,11 @@ export class HalfRollBuilder extends RollBuilder {
 /**
  * A roll whose result is scaled by `numerator / denominator` and rounded — the composable
  * generalization of {@link HalfRollBuilder}. Renders as `N * (inner)`, `(inner) // D`, or
- * `(inner) * N // D`. Terminal (like `half`): use {@link sumRolls} to combine with other rolls.
+ * `(inner) * N // D`. Arithmetic after it keeps the scale (see {@link sumRolls}).
  */
-export class ScaleRollBuilder extends RollBuilder {
+export class ScaleRollBuilder extends TransformedRollBuilder {
+  protected readonly verb = "scaleResult()";
+
   constructor(
     private readonly innerRoll: RollBuilder,
     private readonly numerator: number,
@@ -1057,7 +1171,9 @@ export class ScaleRollBuilder extends RollBuilder {
   }
 }
 
-export class MaxOfRollBuilder extends RollBuilder {
+export class MaxOfRollBuilder extends TransformedRollBuilder {
+  protected readonly verb = "maxOf()";
+
   constructor(
     private readonly innerRoll: RollBuilder,
     private readonly count: number,
@@ -1096,44 +1212,7 @@ export class MaxOfRollBuilder extends RollBuilder {
   }
 
   toAST(): ExpressionNode {
-    // Use the stored dice info if available
-    if (this.diceCount && this.diceSides) {
-      const sumChild: ExpressionNode = {
-        type: "sum",
-        count: this.diceCount,
-        child: { type: "die", sides: this.diceSides },
-      };
-      return {
-        type: "maxOf",
-        count: this.count,
-        child: sumChild,
-      };
-    }
-
-    // Fallback: try to get from innerRoll
-    try {
-      const configs = this.innerRoll.getSubRollConfigs();
-      if (configs.length === 1 && configs[0].sides) {
-        const config = configs[0];
-        const sumChild: ExpressionNode = {
-          type: "sum",
-          count: config.count,
-          child: { type: "die", sides: config.sides },
-        };
-        return {
-          type: "maxOf",
-          count: this.count,
-          child: sumChild,
-        };
-      }
-    } catch {
-      // Last resort: try parsing the expression (though this shouldn't work with current RollBuilder)
-    }
-
-    // Fallback - this shouldn't happen in normal usage
-    throw new Error(
-      `MaxOfRollBuilder.toAST(): Unsupported innerRoll configuration`
-    );
+    return { type: "maxOf", count: this.count, child: this.innerRoll.toAST() };
   }
 
   toPMF(eps: number = 0): PMF {
@@ -1332,6 +1411,16 @@ export class ParsedRollBuilder extends RollBuilder {
     return this.originalExpression;
   }
 
+  /** Refused: a parsed roll has no dice or flats for a check to read (see {@link ParsedCheckError}). */
+  override ac(_targetAC: number): ACBuilder {
+    throw new ParsedCheckError(this.originalExpression, "ac");
+  }
+
+  /** Refused: a parsed roll has no dice or flats for a check to read (see {@link ParsedCheckError}). */
+  override dc(_saveDC: number): DCBuilder {
+    throw new ParsedCheckError(this.originalExpression, "dc");
+  }
+
   override toAST(): ExpressionNode {
     // Parsed expressions carry no AST; they are terminal damage payloads, so AST conversion is
     // unsupported rather than reconstructed.
@@ -1415,7 +1504,7 @@ export class PooledRollBuilder extends RollBuilder {
     throw new Error("Cannot set reroll on a pooled roll.");
   }
 
-  override explode(_count: number | undefined = Infinity): RollBuilder {
+  override explode(_count: number): RollBuilder {
     throw new Error("Cannot set explode on a pooled roll.");
   }
 
@@ -1535,13 +1624,14 @@ export class PooledRollBuilder extends RollBuilder {
 
 /**
  * An additive composite of independent rolls that preserves each part's AST — the piece
- * that lets a scaled/halved sub-roll (which the flat `.plus()` merge would otherwise drop)
- * sit beside plain rolls in one damage payload. Its PMF convolves the parts; its expression
- * joins them with ` + `. Built via {@link sumRolls}; terminal (used as an onHit/onCrit/
- * onSaveFailure payload), so it reports hidden state to reject accidental flat merges.
+ * that lets a scaled/halved sub-roll sit beside plain rolls in one damage payload. Its PMF
+ * convolves the parts; its expression joins them with ` + `. Built via {@link sumRolls} and by
+ * arithmetic on a transformed roll; it reports hidden state so it is never merged as dice.
  */
-class CompositeSumRollBuilder extends RollBuilder {
-  constructor(private readonly parts: readonly RollBuilder[]) {
+class CompositeSumRollBuilder extends TransformedRollBuilder {
+  protected readonly verb = "sumRolls()";
+
+  constructor(readonly parts: readonly RollBuilder[]) {
     super(0); // dummy, we override methods
   }
 
@@ -1601,15 +1691,60 @@ class CompositeSumRollBuilder extends RollBuilder {
   }
 }
 
+/** The higher of independent, possibly different rolls: `roll(3, d8).maxOf(roll(2, d10))`. */
+class MaxOfRollsBuilder extends TransformedRollBuilder {
+  protected readonly verb = "maxOf()";
+
+  constructor(private readonly rolls: readonly RollBuilder[]) {
+    super(0); // dummy, we override methods
+  }
+
+  override hasHiddenState(): boolean {
+    return true;
+  }
+
+  override cacheKey(): string | null {
+    return null; // max of rolls not captured by subRollConfigs
+  }
+
+  override getSubRollConfigs(): readonly RollConfig[] {
+    return [];
+  }
+
+  override toAST(): ExpressionNode {
+    return { type: "max", children: this.rolls.map((r) => r.toAST()) };
+  }
+
+  override toExpression(): string {
+    return this.rolls.map((r) => `(${r.toExpression()})`).join(" > ");
+  }
+
+  override toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  /** Scales each roll's dice; the result is still the higher of the scaled rolls. */
+  override scaleDice(scale: number): RollBuilder {
+    validateScaleInt(scale);
+    return new MaxOfRollsBuilder(this.rolls.map((r) => r.scaleDice(scale)));
+  }
+
+  override copy(): MaxOfRollsBuilder {
+    return new MaxOfRollsBuilder(this.rolls.map((r) => r.copy()));
+  }
+}
+
 /**
  * Combine several rolls into one additive payload whose PMF is their convolution and whose
- * expression is them joined with ` + `. Unlike `a.plus(b)`, this preserves parts that carry
- * hidden state (e.g. `roll.scaleResult(1, 2)` / `roll.half()`), so per-damage-type resistance
+ * expression is them joined with ` + `. Unlike merging plain dice, this preserves parts that carry
+ * a transform (e.g. `roll.scaleResult(1, 2)` / `roll.half()`), so per-damage-type resistance
  * and vulnerability survive into both the distribution and the rendered expression.
- * Empty parts collapse to `0`; a single part is returned unwrapped.
+ * Empty parts collapse to `0`; a single part is returned unwrapped; nested sums are flattened.
  */
 export function sumRolls(parts: readonly RollBuilder[]): RollBuilder {
-  const meaningful = parts.filter((p): p is RollBuilder => p !== undefined);
+  const meaningful = parts
+    .filter((p): p is RollBuilder => p !== undefined)
+    .flatMap((p) => (p instanceof CompositeSumRollBuilder ? p.parts : [p]));
   if (meaningful.length === 0) return new RollBuilder(0);
   if (meaningful.length === 1) return meaningful[0];
   return new CompositeSumRollBuilder(meaningful);
