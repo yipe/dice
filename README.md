@@ -189,13 +189,16 @@ when used as a payload that doubles (`onHit`, `doubleDice()`); as a rider it is 
 crit, like the attack or save builder it stands for.
 An attack string with no crit clause crits too: `"(d20 + 8 AC 16) * (2d6)"` rolls its natural 20 as
 `4d6`, like `d20.plus(8).ac(16).onHit(roll(2, d6))`; a `crit (…)` clause still wins. A term after
-the payload joined by `+`, `*`, `**`, `/` or `//` applies only where the attack deals damage (the
-grammar reads left to right, and `+` adds to non-zero totals), so it is part of the payload:
-`(d20 + 5 AC 15) * (1d8) + 1d6` crits as `2d8 + 2d6`, like `onHit(roll(1, d8).plus(roll(1, d6)))`,
-and keeps its hit, crit and miss labels. After a `crit (…)` clause the term is added to the crit as
-written. The crit rate reads the check's natural die, its one d20 wherever it sits in the sum (with
-no d20, its largest die), through bonus to-hit dice, advantage (`d20 > d20`, `d20!`, `2kh1d20`),
-disadvantage (`2kl1(1d20)`), elven accuracy (`3kh1(1d20)`) and halfling luck (`hd20`,
+the payload joined by `+`, `*`, `**`, `/` or `//` is part of the payload and never applies to a
+miss (the grammar reads left to right). `+` adds to every landed hit and crit, one whose payload
+rolled 0 included, like the builder's `plus`: `(d20 + 5 AC 12) * (1d4 - 1) + 1d6` is
+`onHit(roll(1, d4).minus(1).plus(d6))` (mean 3.8). `*`, `**`, `/` and `//` act on the payload's
+value, so a hit that deals 0 still deals 0. `(d20 + 5 AC 15) * (1d8) + 1d6` crits as `2d8 + 2d6`,
+like `onHit(roll(1, d8).plus(roll(1, d6)))`, and keeps its hit, crit and miss labels. After a
+`crit (…)` clause the term is added to the crit as written, and after a `miss (…)` clause to the
+miss damage too. The crit rate reads the check's natural die, its one d20 wherever it sits in the
+sum (with no d20, its largest die), through bonus to-hit dice, advantage (`d20 > d20`, `d20!`,
+`2kh1d20`), disadvantage (`2kl1(1d20)`), elven accuracy (`3kh1(1d20)`) and halfling luck (`hd20`,
 `d20 reroll 1`), for `crit` and `xcrit N` alike: `(d20 > d20 + 5 + 1d4 AC 15) * (2d6)` crits at
 39/400, like `d20.withAdvantage().plus(5).plus(d4)`, `(1d4 + d20 + 5 AC 15)` crits on the d20, not
 the d4, and `(d20 + d100 AC 60)` on the d20, not the d100 (61/2000). A max or min against another
@@ -438,7 +441,7 @@ associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to gr
 | `7`, `d6`, `3d6`, `hd20` | A number, a die, a sum of dice, a die whose 1 is rerolled once (halfling luck, `d20 reroll 1`). |
 | `N(X)`, `(X)d6` | N independent copies of X, summed. The count may be rolled: `(1d4)d6`. A count of 0 is 0 (`0d6`, `(1d4 - 1)d6` has P(0) = 1/4); a count that can be negative throws. |
 | `NkhK(X)`, `NklK(X)` | The sum of the K highest (lowest) of N independent copies of X, exact for any X: `4kh3d6`, `2kl1(1d20)`, `4kh1(2d20)`. `2kl1(2d6)` keeps the lower of two 2d6 *sums*. |
-| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0: `(d20 + 5 AC 15) * (1d8) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
+| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0. After an attack's payload it adds to every landed hit and crit, one that deals 0 included: `(d20 + 5 AC 15) * (1d4 - 1) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
 | `X ~+ Y` | Always adds. |
 | `X - Y`, `-X` | Subtracts. A leading `-` negates the argument after it, repeat included: `-2d6` is `-(2d6)`, `1d6 + -3` is `1d6 - 3`, `-1d8 + 1d6` has mean -1. There is no unary `+`. |
 | `X * Y` | Y where X is not 0, else 0: the hit gate of `(check) * (damage)`. |
@@ -449,7 +452,7 @@ associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to gr
 | `X = Y` | 1 where X equals Y, else 0. |
 | `X & Y` | A mix weighted by each side's count of outcomes (see the refused shapes above). |
 | `X reroll R` | Rolls X, and on a result in the face set R rolls X again and keeps the second roll. |
-| `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). |
+| `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). A total of exactly 0 that meets a T of 0 or less lands, though it reads 0 like a miss: `(d20 - 5 AC 0) * (1d6)` hits on a natural 5 and crits on a 20, like `d20.minus(5).ac(0).onHit(roll(1, d6))`. |
 | `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. `xcrit0 (Y)` never crits: every landing is a hit. |
 
 **Rerolls.** `reroll N` rerolls the face N only; `reroll dN` rerolls every face from 1 to N; the
@@ -465,8 +468,8 @@ The reroll decides on the raw face and a minimum applies after: `3>(d6 reroll 1)
 **Labels.** An attack labels its outcomes `hit`, `crit`, `missNone` and `missDamage`. A save labels a
 failed save `saveFail` (whatever the payload rolls, 0 included), a halved success `saveHalf`, and a
 success with no `save half` `missNone`, like the builder's `onSaveFailure()`. A landed hit whose
-payload deals 0 is still `hit` (a 0-damage crit is `crit`), like the builder; only a miss is
-`missNone`.
+payload deals 0 is still `hit` (a 0-damage crit is `crit`), like the builder, and so is an AC
+check's landed total of exactly 0; only a miss is `missNone`.
 
 A `d0` has no faces: it is only a face set (`reroll d0`); rolled on its own it throws, as does a
 string the grammar cannot read, always as a `DiceParseError`.

@@ -125,8 +125,9 @@ function subtractCounts(a: Dice, b: Dice): Dice {
 
 /**
  * Ops that leave a 0 (a miss) at 0 whatever their argument. A term joined to an attack by one of
- * these applies only where the attack deals damage, so it is part of that damage: `(check) *
- * (1d8) + 1d6` is `(check) * ((1d8) + 1d6)`, since the grammar reads left to right.
+ * these applies only where the attack lands, so it is part of the payload, since the grammar reads
+ * left to right: `(check) * (1d4 - 1) + 1d6` is `(check) * ((1d4 - 1) ~+ 1d6)`, a `+` adding to
+ * every landed outcome, one at 0 included (see {@link applyToLanded}).
  */
 const HIT_ONLY_OPS: ReadonlySet<DiceOperation> = new Set<DiceOperation>([
   Dice.prototype.addNonZero,
@@ -191,6 +192,9 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
     const hitText = pending?.slice(0, pending.length - arr.length);
     const termText = opText?.slice(0, opText.length - arr.length);
     const before = finalResult;
+    // An attack's check or payload: at 0 it holds its misses and its landed hits at 0 (`hit` at 0).
+    const attack = isAttack(finalResult);
+    const acCheck = finalResult.privateData.isACCheck === true;
     if (op === Dice.prototype.combine) assertMixable(before, arg, arr);
 
     // Handle crit (e.g. xcrit, crit). With no clause, an attack's crit is its hit payload with
@@ -219,7 +223,9 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
         ({ crit, rest: finalResult } = splitCrit(finalResult, count));
 
         critNorm = crit.total();
-        crit = op.call(crit, critClause ? parseBinaryArgument(arg, arr, n) : critPayload(hitText!, n));
+        const critArg = critClause ? parseBinaryArgument(arg, arr, n) : critPayload(hitText!, n);
+        // Every crit landed, one whose total is 0 included: it takes the payload like any hit.
+        crit = HIT_ONLY_OPS.has(op) ? applyToLanded(crit, op, critArg, crit.get(0), acCheck) : op.call(crit, critArg);
 
         critNorm = crit && critNorm ? crit.total() / critNorm : 1;
       }
@@ -234,13 +240,10 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
       assertToken(arr, "v");
       assertToken(arr, "e");
 
-      save = new Dice();
-      const min = finalResult.minFace();
-      save.increment(min > 0 ? min : 1, finalResult.get(min));
-
-      saveNorm = save.total();
-      finalResult = finalResult.deleteFace(min);
-      save = op.call(save, parseBinaryArgument(arg, arr, n));
+      const { miss: missed, rest } = splitMiss(finalResult, attack);
+      finalResult = rest;
+      saveNorm = missed.total();
+      save = op.call(missed, parseBinaryArgument(arg, arr, n));
       saveNorm = save && saveNorm ? save.total() / saveNorm : 1;
     }
 
@@ -252,14 +255,11 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
       assertToken(arr, "p");
       assertToken(arr, "c");
 
-      pc = new Dice();
-      const min = finalResult.minFace();
-      pc.increment(min > 0 ? min : 1, finalResult.get(min));
+      const { miss: missed, rest } = splitMiss(finalResult, attack);
+      finalResult = rest;
+      const missBefore = missed.total();
 
-      const missBefore = pc.total();
-      finalResult = finalResult.deleteFace(min);
-
-      pc = op.call(pc, parseBinaryArgument(arg, arr, n)).divideRoundDown(2); // parse the damage
+      pc = op.call(missed, parseBinaryArgument(arg, arr, n)).divideRoundDown(2); // parse the damage
 
       const missAfter = pc ? pc.total() : 0;
       pcNorm = missBefore ? missAfter / missBefore : 1;
@@ -275,14 +275,11 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
       assertToken(arr, "s");
       assertToken(arr, "s");
 
-      miss = new Dice();
-      const min = finalResult.minFace();
-      miss.increment(min > 0 ? min : 1, finalResult.get(min));
+      const { miss: missed, rest } = splitMiss(finalResult, attack);
+      finalResult = rest;
+      missNorm = missed.total();
 
-      missNorm = miss.total();
-      finalResult = finalResult.deleteFace(min);
-
-      miss = op.call(miss, parseBinaryArgument(arg, arr, n));
+      miss = op.call(missed, parseBinaryArgument(arg, arr, n));
       missNorm = miss && missNorm ? miss.total() / missNorm : 1;
     }
 
@@ -293,6 +290,8 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
     const operand = finalResult;
     if (!clause && labelled && HIT_ONLY_OPS.has(op)) {
       finalResult = applyByOutcome(finalResult, op, arg, termText, n);
+    } else if (HIT_ONLY_OPS.has(op)) {
+      finalResult = applyToLanded(finalResult, op, arg, landedAtZero(finalResult), acCheck);
     } else {
       finalResult = op.call(finalResult, arg);
     }
@@ -301,15 +300,15 @@ function parseExpression(arr: string[], n: number, inCheck = false): Dice {
       finalResult.setOutcomeDistribution("saveFail", op.call(operand.deleteFace(0), arg).getFaceMap());
     }
     // A landed hit that deals 0 is still a hit: record it at 0, where the misses also sit, from the
-    // AC check's `*` on through every hit-only term after it.
-    if (!operand.privateData.isDCCheck && HIT_ONLY_OPS.has(op) && (hitText !== undefined || operand.privateData.attackPayload)) {
+    // AC check on through every hit-only term after it.
+    if (attack && HIT_ONLY_OPS.has(op)) {
       finalResult.privateData.attackPayload = true;
-      const landed = landedHitsAtZero(operand, op, arg);
+      const landed = landedHitsAtZero(operand, op, arg, acCheck);
       if (landed > 0) finalResult.setOutcomeDistribution("hit", { 0: landed });
-    } else if (op === Dice.prototype.combine && typeof arg !== "number" && arg.privateData.attackPayload) {
-      // `combine` keeps the left side's data; an `&` mix lands the hits of both sides.
-      finalResult.privateData.attackPayload = true;
-      const landed = operand.getOutcomeCount("hit", 0) + arg.getOutcomeCount("hit", 0);
+    } else if (op === Dice.prototype.combine && typeof arg !== "number") {
+      // `combine` keeps the left side's data; an `&` mix lands the hits at 0 of both sides.
+      if (arg.privateData.attackPayload) finalResult.privateData.attackPayload = true;
+      const landed = landedAtZero(operand) + landedAtZero(arg);
       if (landed > 0) finalResult.setOutcomeDistribution("hit", { 0: landed });
     }
     // An `&` mix is an attack check whichever side the gate is on: `combine` copies the left's data.
@@ -424,6 +423,60 @@ const hasOutcomeLabels = (value: Dice | number): boolean =>
 
 const isSave = (value: Dice | number): boolean => typeof value !== "number" && value.privateData.isDCCheck === true;
 
+/** An AC check, or an attack's payload: its outcomes at 0 are its misses and its landed hits at 0. */
+const isAttack = (value: Dice): boolean =>
+  value.privateData.isDCCheck !== true && (value.privateData.isACCheck === true || value.privateData.attackPayload === true);
+
+/**
+ * The count of `value`'s outcomes at 0 that are landed hits, not misses: an AC check's total of
+ * exactly 0 that met its target, or a payload's hit that deals 0 (its `hit` at 0).
+ */
+const landedAtZero = (value: Dice | number): number => (typeof value === "number" ? 0 : value.getOutcomeCount("hit", 0));
+
+/**
+ * `op(value, arg)` for a hit-only op, where `landed` of `value`'s outcomes at 0 are landed hits and
+ * the rest there are misses. A miss stays 0; a landed hit at 0 takes `+` like any other hit, so the
+ * term is added to it, and on an AC check (`gate`) takes the payload of the check's `*`. Everywhere
+ * else it is 0 damage, which `*`, `**`, `/` and `//` keep at 0.
+ */
+function applyToLanded(value: Dice, op: DiceOperation, arg: Dice | number, landed: number, gate: boolean): Dice {
+  const lands = op === Dice.prototype.addNonZero || (gate && op === Dice.prototype.conditionalApply);
+  if (!(landed > 0) || !lands) return op.call(value, arg);
+  const misses = value.deleteFace(0);
+  const missed = value.get(0) - landed;
+  if (missed > 0) misses.setFace(0, missed);
+  const result = op.call(misses, arg);
+  result.combineInPlace(asValue(arg).normalize(landed));
+  return result;
+}
+
+/**
+ * `op(value, arg)` for a hit-only op on an attack's check (`gate`) or payload with no outcome labels
+ * (a crit slice): its landed hits at 0 take the op as hits, and the result records its own.
+ */
+function applyToAttack(value: Dice, op: DiceOperation, arg: Dice | number, gate: boolean): Dice {
+  const result = applyToLanded(value, op, arg, landedAtZero(value), gate);
+  result.privateData.attackPayload = true;
+  const landed = landedHitsAtZero(value, op, arg, gate);
+  if (landed > 0) result.setOutcomeDistribution("hit", { 0: landed });
+  return result;
+}
+
+/**
+ * Split the misses a `miss`, `pc` or `save` clause applies to off `check`: an attack's (`attack`) at
+ * 0, less its landed hits there, which stay with the hits; any other check's on its lowest face (a
+ * save's success). The misses are moved to face 1, so the clause's `*` deals them its payload.
+ */
+function splitMiss(check: Dice, attack: boolean): { miss: Dice; rest: Dice } {
+  const face = attack ? 0 : check.minFace();
+  const landed = face === 0 ? landedAtZero(check) : 0;
+  const miss = new Dice();
+  miss.increment(face > 0 ? face : 1, check.get(face) - landed);
+  const rest = check.deleteFace(face);
+  if (landed > 0) rest.setFace(0, landed);
+  return { miss, rest };
+}
+
 /**
  * An `&` mix weights each side by its count of outcomes and keeps the left side's labels. An attack
  * already split into crit, miss or save outcomes has no count to weight by (the split renormalises
@@ -489,7 +542,10 @@ function followNaturalRoll(before: Dice, op: DiceOperation, arg: Dice | number, 
     const rights = advantage ? lefts : gate ? [asValue(arg)] : branchesOf(arg);
     data.branches = lefts.flatMap((left) =>
       rights.map((right) => {
-        const part = pairOp.call(left, right);
+        const part =
+          HIT_ONLY_OPS.has(pairOp) && isAttack(left)
+            ? applyToAttack(left, pairOp, right, left.privateData.isACCheck === true)
+            : pairOp.call(left, right);
         followNaturalRoll(left, pairOp, right, part, false);
         return part;
       })
@@ -515,7 +571,12 @@ function followNaturalRoll(before: Dice, op: DiceOperation, arg: Dice | number, 
   } else if (extremum && track?.bare && argTrack?.bare && sides === argSides) {
     data.critTrack = bareTrack(after);
   } else if (followed) {
-    const apply = own ? (value: Dice) => op.call(value, arg) : (value: Dice) => op.call(before, value);
+    // A hit-only op on an attack's slice carries its landed hits at 0 (see `applyToAttack`).
+    const attack = HIT_ONLY_OPS.has(op) && isAttack(before);
+    const gated = before.privateData.isACCheck === true;
+    const call = (value: Dice, other: Dice | number): Dice =>
+      attack ? applyToAttack(value, op, other, gated) : op.call(value, other);
+    const apply = own ? (value: Dice) => call(value, arg) : (value: Dice) => call(before, value);
     const step = extremum ? (slice: Dice) => keptPart(slice, apply) : apply;
     data.critTrack = { sides: followed.sides, bare: false, slice: (face) => step(followed.slice(face)) };
   }
@@ -548,7 +609,13 @@ function mixNaturalRolls(after: Dice, branches: readonly Dice[]): void {
     bare: tracks.length === branches.length && tracks.every((track) => track.bare),
     slice: (face) => {
       const slice = new Dice();
-      for (const track of tracks) slice.combineInPlace(track.slice(face));
+      let landed = 0;
+      for (const track of tracks) {
+        const part = track.slice(face);
+        slice.combineInPlace(part);
+        landed += landedAtZero(part);
+      }
+      if (landed > 0) slice.setOutcomeDistribution("hit", { 0: landed });
       return slice;
     },
   };
@@ -576,13 +643,16 @@ function keptPart(slice: Dice, apply: (face: Dice) => Dice): Dice {
  * builder's rule. A check whose natural roll is not one die throws rather than guessing from its
  * highest totals, which smear a natural roll across several totals once bonus dice are added.
  *
- * A crit face the AC gate turned into 0 missed (parse() has no natural-20 auto-hit): it stays
- * miss mass and is never labelled a crit. `xcrit0` crits on no face, so it needs no natural roll.
+ * A crit face whose total missed the target reads 0 (parse() has no natural-20 auto-hit): it stays
+ * miss mass and is never labelled a crit. One whose total is exactly 0 and met a target of 0 or less
+ * landed: it stays a crit at 0. `xcrit0` crits on no face, so it needs no natural roll.
  */
 function splitCrit(check: Dice, count: number): { crit: Dice; rest: Dice } {
   if (count === 0) {
     const none = new Dice();
-    return { crit: none, rest: subtractCounts(check, none) };
+    const rest = subtractCounts(check, none);
+    if (landedAtZero(check) > 0) rest.setOutcomeDistribution("hit", { 0: landedAtZero(check) });
+    return { crit: none, rest };
   }
   const track = check.privateData.critTrack;
   if (!track) {
@@ -598,13 +668,21 @@ function splitCrit(check: Dice, count: number): { crit: Dice; rest: Dice } {
     throw new Error(`xcrit${count} is wider than the d${sides} it reads its natural roll from`);
   }
   let crit = new Dice();
-  for (let face = sides; face > sides - count; face--) crit.combineInPlace(track.slice(face));
+  let landed = 0;
+  for (let face = sides; face > sides - count; face--) {
+    const slice = track.slice(face);
+    crit.combineInPlace(slice);
+    landed += landedAtZero(slice);
+  }
   const rest = subtractCounts(check, crit);
-  const missed = crit.get(0);
+  const missed = crit.get(0) - landed;
   if (missed) {
     crit = crit.deleteFace(0);
+    if (landed > 0) crit.setFace(0, landed);
     rest.increment(0, missed);
   }
+  const restLanded = landedAtZero(check) - landed;
+  if (restLanded > 0) rest.setOutcomeDistribution("hit", { 0: restLanded });
   return { crit, rest };
 }
 
@@ -635,7 +713,9 @@ function critPayload(text: string, n: number): Dice {
  * `op(labelled, arg)` for a hit-only op, outcome by outcome, so an attack's labels survive a
  * trailing term. A doubled crit (no crit clause) takes the term into its payload and doubles the
  * whole payload again, exactly as if the term were written inside it; every other outcome,
- * an explicit crit clause's included, takes the term as written.
+ * an explicit crit clause's included, takes the term as written. A trailing `+` adds to every
+ * outcome with a payload, one that rolled 0 included -- each hit and crit, and each miss a `miss (…)`
+ * clause deals damage to -- the way the builder's `plus` does, while a miss with no payload stays 0.
  */
 function applyByOutcome(
   labelled: Dice,
@@ -656,17 +736,20 @@ function applyByOutcome(
     rest = subtractCounts(rest, part);
     let applied: Dice;
     if (label === "crit" && implicit && termText !== undefined) {
-      payload = implicit.payload + termText;
+      // Written into the payload, a `+` term always adds: `~+`.
+      payload = implicit.payload + (op === Dice.prototype.addNonZero ? "~" : "") + termText;
       const doubled = critPayload(payload, n);
       // `op` scales every other outcome's counts by the argument's; keep the crit's share.
       applied = doubled.normalize((part.total() * argTotal) / doubled.total());
+    } else if (label === "crit" || label === "missDamage") {
+      applied = applyToLanded(part, op, arg, part.get(0), false);
     } else {
       applied = op.call(part, arg);
     }
     result.combineInPlace(applied);
     result.setOutcomeDistribution(label as OutcomeType, applied.getFaceMap());
   }
-  result.combineInPlace(op.call(rest, arg));
+  result.combineInPlace(applyToLanded(rest, op, arg, landedAtZero(labelled), false));
   if (labelled.privateData.isDCCheck) result.privateData.isDCCheck = true;
   if (payload !== undefined) result.privateData.implicitCrit = { payload };
   return result;
@@ -674,15 +757,16 @@ function applyByOutcome(
 
 /**
  * The count of `op(operand, arg)`'s outcomes at 0 that are landed hits: each of `operand`'s hits (a
- * recorded 0-damage hit included) times the count of `arg`'s values that `op` takes it to 0 with.
+ * landed hit at 0 included, which takes the op as `applyToLanded` says) times the count of `arg`'s
+ * values that `op` takes it to 0 with. `gate`: `operand` is an AC check.
  */
-function landedHitsAtZero(operand: Dice, op: DiceOperation, arg: Dice | number): number {
+function landedHitsAtZero(operand: Dice, op: DiceOperation, arg: Dice | number, gate: boolean): number {
   let landed = 0;
   for (const [face, count] of Object.entries(operand.calculateHitDistribution())) {
     if (!(count > 0)) continue;
     const hit = new Dice();
     hit.setFace(Number(face), count);
-    landed += op.call(hit, arg).get(0);
+    landed += applyToLanded(hit, op, arg, Number(face) === 0 ? count : 0, gate).get(0);
   }
   return landed;
 }
