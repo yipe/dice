@@ -7,6 +7,7 @@ import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionErro
 import type { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { astFromRollConfigs, pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { configTerms, joinTerms, nodeRange, printScale, rootDieExpression, type ExpressionTerm } from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
@@ -75,33 +76,6 @@ export const defaultConfig: RollConfig = {
   bestOf: 0,
   keep: undefined,
   rollType: "flat",
-};
-
-const rollConfigsEqual = (a: RollConfig, b: RollConfig) => {
-  return (
-    a.count === b.count &&
-    a.sides === b.sides &&
-    a.modifier === b.modifier &&
-    a.reroll === b.reroll &&
-    a.explode === b.explode &&
-    a.explodePoolBudget === b.explodePoolBudget &&
-    a.minimum === b.minimum &&
-    a.bestOf === b.bestOf &&
-    a.keep === b.keep &&
-    a.rollType === b.rollType
-  );
-};
-
-const configComplexityScore = (config: RollConfig) => {
-  return (
-    (config.reroll > 0 ? 1 : 0) +
-    (config.explode > 0 ? 1 : 0) +
-    (config.explodePoolBudget > 0 ? 1 : 0) +
-    (config.minimum > 0 ? 1 : 0) +
-    (config.bestOf > 0 ? 1 : 0) +
-    (config.keep !== undefined ? 1 : 0) +
-    (config.rollType !== "flat" ? 1 : 0)
-  );
 };
 
 // Fluent builder for dice to create PMFs with an AST
@@ -419,10 +393,11 @@ export class RollBuilder {
       count,
       child: trialPool,
     };
-    const currentExpr = this.toExpression();
-    const expression = `${total}kh${count}(${currentExpr})`;
-    return new PooledRollBuilder(keepNode, expression, [], (scale) =>
-      this.scaleDice(scale).keepHighestAll(total, count)
+    return new PooledRollBuilder(
+      keepNode,
+      () => (Math.floor(total) <= 0 || count <= 0 ? "0" : `${total}kh${count}(${this.toExpression()})`),
+      [],
+      (scale) => this.scaleDice(scale).keepHighestAll(total, count)
     );
   }
 
@@ -441,10 +416,11 @@ export class RollBuilder {
       count,
       child: trialPool,
     };
-    const currentExpr = this.toExpression();
-    const expression = `${total}kl${count}(${currentExpr})`;
-    return new PooledRollBuilder(keepNode, expression, [], (scale) =>
-      this.scaleDice(scale).keepLowestAll(total, count)
+    return new PooledRollBuilder(
+      keepNode,
+      () => (Math.floor(total) <= 0 || count <= 0 ? "0" : `${total}kl${count}(${this.toExpression()})`),
+      [],
+      (scale) => this.scaleDice(scale).keepLowestAll(total, count)
     );
   }
 
@@ -543,110 +519,7 @@ export class RollBuilder {
   }
 
   toExpression(): string {
-    const originalDiceConfigs = this.subRollConfigs.filter(
-      (config) => config.sides && config.sides > 0
-    );
-
-    type Group = { config: RollConfig; totalCount: number };
-    const configGroups = new Map<string, Group>();
-
-    for (const config of originalDiceConfigs) {
-      const keyConfig: Partial<RollConfig> = { ...config };
-      delete keyConfig.count;
-      delete keyConfig.modifier;
-      const key = JSON.stringify(keyConfig);
-
-      const existingGroup = configGroups.get(key);
-      if (existingGroup) {
-        existingGroup.totalCount += config.count;
-      } else {
-        configGroups.set(key, { config, totalCount: config.count });
-      }
-    }
-
-    const rootConfig = this.getRootDieConfig();
-    const groupedConfigs = Array.from(configGroups.values());
-    let rootD20Group: Group | undefined;
-
-    if (rootConfig && rootConfig.sides === 20) {
-      const rootIndex = groupedConfigs.findIndex(
-        ({ config }) =>
-          rollConfigsEqual(config, rootConfig) &&
-          JSON.stringify(config.keep) === JSON.stringify(rootConfig.keep)
-      );
-
-      if (rootIndex !== -1) {
-        rootD20Group = groupedConfigs.splice(rootIndex, 1)[0];
-      }
-    }
-
-    const sortedDiceConfigs = groupedConfigs
-      .map(({ config, totalCount }) => ({
-        ...config,
-        count: totalCount,
-      }))
-      .sort((a, b) => {
-        const aHasPriority = a.reroll > 0 || a.minimum > 0;
-        const bHasPriority = b.reroll > 0 || b.minimum > 0;
-        if (aHasPriority !== bHasPriority) return aHasPriority ? -1 : 1;
-        if (b.sides !== a.sides) return b.sides - a.sides;
-        return configComplexityScore(b) - configComplexityScore(a);
-      });
-
-    const diceConfigs = rootD20Group
-      ? [
-          { ...rootD20Group.config, count: rootD20Group.totalCount },
-          ...sortedDiceConfigs,
-        ]
-      : sortedDiceConfigs;
-
-    const totalModifier = this.subRollConfigs.reduce(
-      (sum, config) => sum + config.modifier,
-      0
-    );
-    if (diceConfigs.length === 0) return totalModifier.toString();
-
-    const rootDieConfig = this.getRootDieConfig();
-    const newRootConfig = rootDieConfig
-      ? diceConfigs.find((c) => rollConfigsEqual(c, rootDieConfig))
-      : undefined;
-
-    // Generate dice expressions without individual modifiers
-    const diceExpressions = diceConfigs.map((config) =>
-      this.configToSingleExpressionWithoutModifier(
-        config,
-        config === newRootConfig
-      )
-    );
-
-    // Join dice expressions with appropriate operators based on their count
-    let result = "";
-    for (let i = 0; i < diceExpressions.length; i++) {
-      const config = diceConfigs[i];
-      const expression = diceExpressions[i];
-
-      if (i === 0) {
-        result = (config.isSubtraction ? "-" : "") + expression;
-
-        // Add constants right after the root d20 die (if it's a d20)
-        if (config.sides === 20 && totalModifier !== 0) {
-          if (totalModifier > 0) result += ` + ${totalModifier}`;
-          else result += ` - ${Math.abs(totalModifier)}`;
-        }
-      } else {
-        // Use minus sign for negative subtraction, plus sign otherwise
-        const operator = config.isSubtraction ? " - " : " + ";
-        result += operator + expression;
-      }
-    }
-
-    // If constants weren't added after d20, add them at the end
-    if (diceConfigs.length === 0 || diceConfigs[0].sides !== 20) {
-      if (totalModifier > 0) result += ` + ${totalModifier}`;
-      else if (totalModifier < 0) result += ` - ${Math.abs(totalModifier)}`;
-    }
-
-    return result.replace(/\+ -/g, "-");
+    return joinTerms(configTerms(this.subRollConfigs, this.getRootDieConfig()));
   }
 
   // Main AST entry point. Cached by the cheap config key across identical rebuilds; see `rollPMFCache`.
@@ -675,162 +548,6 @@ export class RollBuilder {
       astFromRollConfigs(configs) ||
       ({ type: "constant", value: 0 } as ExpressionNode)
     );
-  }
-
-  private configToSingleExpressionWithoutModifier(
-    config: RollConfig,
-    isRootDie: boolean
-  ): string {
-    if (!config.sides || config.sides <= 0) return "";
-
-    // The string grammar has no explode token at all (see parser.ts/dice.ts) -- there is no
-    // representable syntax that round-trips an exploding die's distribution. Silently rendering
-    // a plain (non-exploding) die here would re-parse to a materially different, WRONG
-    // distribution with no indication anything was lost. Fail loudly instead.
-    if (config.explode && Number.isFinite(config.explode) && config.explode > 0) {
-      throw new Error(
-        `toExpression() cannot represent an exploding die (d${config.sides} explode(${config.explode})): the string grammar has no explode syntax. Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
-      );
-    }
-    if (config.explodePoolBudget && config.explodePoolBudget > 0) {
-      throw new Error(
-        `toExpression() cannot represent a pool-wide exploding-dice budget (d${config.sides} explodePool(${config.explodePoolBudget})): the string grammar has no explode syntax. Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
-      );
-    }
-
-    let baseDie = `d${config.sides}`;
-
-    // A reroll(k) config means "reroll faces 1..k once, must keep" (see resolveSingleDie) — a
-    // THRESHOLD, not a literal face value. The parser's `reroll <n>` for a bare number n rerolls
-    // ONLY face value n (matches k=1, where the threshold and the literal face coincide); for
-    // k>=2 the threshold must be expressed as `reroll d{k}`, using a k-sided die's face SET
-    // {1..k} as the reroll operator's argument — chaining `reroll 1 reroll 2 ... reroll k` as
-    // separate clauses re-parses as k SEQUENTIAL reroll passes, a different (and wrong)
-    // distribution. `rerollClause` is shared by every placement below (with/without minimum,
-    // with/without explode) since the clause's own content never depends on where it sits.
-    const rerollClause = config.reroll > 0 ? (config.reroll === 1 ? " reroll 1" : ` reroll d${config.reroll}`) : "";
-
-    if (config.reroll > 0) {
-      if (config.minimum > 0 && config.explode > 0) {
-        // Complex single roll case: minimum + explode + reroll
-        // Apply reroll after minimum is applied
-      } else {
-        baseDie += rerollClause;
-      }
-    }
-
-    if (config.minimum > 0) {
-      if (config.reroll > 0 && !config.explode) {
-        baseDie = `${config.minimum}>(${baseDie})`;
-      } else {
-        baseDie = `${config.minimum}>${baseDie}`;
-      }
-      if (config.reroll > 0 && config.explode > 0) {
-        baseDie += rerollClause;
-      }
-    }
-
-    // Check for hd20 shorthand AFTER adding explode
-    if (baseDie === "d20 reroll 1" && config.minimum <= 1) baseDie = "hd20";
-
-    let mainExpression = "";
-    switch (config.rollType) {
-      case "advantage":
-        mainExpression = `${baseDie} > ${baseDie}`;
-        break;
-      case "disadvantage":
-        mainExpression = `${baseDie} < ${baseDie}`;
-        break;
-      case "elven accuracy":
-        mainExpression = `${baseDie} > ${baseDie} > ${baseDie}`;
-        break;
-      case "flat":
-        if (config.keep) {
-          const mode = config.keep.mode === "highest" ? "kh" : "kl";
-
-          // The inner expression must match astFromRollConfigs' own per-trial shape (see
-          // resolve()'s "keep" case, which reads it back out as `node.child.child`), not just
-          // echo `config.count`. astFromRollConfigs collapses to "N individual dice, keep top K"
-          // (a bare per-trial die) exactly when the die count equals the trial count (`baseCount
-          // === trials`) -- UNLESS it's the kh1 case (count 1, highest), which always keeps its
-          // per-trial die multiplied by baseCount even when baseCount happens to equal trials
-          // (`3kh1` on 3d6-per-trial means "max of three 3d6 sums", not "max of 3 individual
-          // d6"). Getting this wrong previously serialized `roll(4,d6).keepHighest(4,3)` as
-          // `4kh3(4d6)` ("keep 3 of four 4d6 sums") instead of the correct `4kh3(1d6)` ("keep 3
-          // of four individual d6 rolls") -- a ~3.7x overstatement on re-parse.
-          const baseCount = Math.max(1, Math.floor(Math.abs(config.count || 1)));
-          const trials = Math.max(1, Math.floor(config.keep.total));
-          const isMaxOfShape = config.keep.count === 1 && config.keep.mode === "highest";
-          const innerCount = trials === baseCount && !isMaxOfShape ? 1 : baseCount;
-
-          const baseDieExpression =
-            this.configToSingleExpressionWithoutModifier(
-              {
-                ...config,
-                count: innerCount,
-                modifier: 0,
-                rollType: "flat",
-                keep: undefined,
-              },
-              false
-            );
-          mainExpression = `${config.keep.total}${mode}${config.keep.count}(${baseDieExpression})`;
-        } else {
-          const isComplex = baseDie.length > `d${config.sides}`.length;
-          const isHalflingShorthand = baseDie === "hd20";
-          const isD20Shorthand = baseDie === "d20" && isRootDie;
-          const hasMinimum = config.minimum > 0;
-          const hasReroll = config.reroll > 0;
-          // For negative subtraction, use absolute value for display
-          // For negative counts from factory function, treat as 1 (legacy behavior)
-          const effectiveCount = config.isSubtraction
-            ? Math.abs(config.count)
-            : config.count < 0
-            ? 1
-            : Math.abs(config.count);
-
-          if (effectiveCount > 1) {
-            const shouldAddParentheses = isComplex;
-            mainExpression = shouldAddParentheses
-              ? `${effectiveCount}(${baseDie})`
-              : `${effectiveCount}${baseDie}`;
-          } else if (effectiveCount === 1) {
-            const needsParens = hasReroll && hasMinimum;
-            if (config.isSubtraction) {
-              mainExpression = needsParens ? `1(${baseDie})` : `1${baseDie}`;
-            } else if (
-              isComplex ||
-              isHalflingShorthand ||
-              isD20Shorthand ||
-              config.count < 0
-            ) {
-              mainExpression = needsParens ? `1(${baseDie})` : baseDie;
-            } else {
-              mainExpression = needsParens ? `1(${baseDie})` : `1${baseDie}`;
-            }
-          } else {
-            mainExpression = baseDie;
-          }
-        }
-        if (config.bestOf && config.count && config.bestOf < config.count) {
-          const pool = Math.max(1, Math.floor(Math.abs(config.count)));
-          const baseDieExpression = this.configToSingleExpressionWithoutModifier(
-            {
-              ...config,
-              count: 1,
-              modifier: 0,
-              bestOf: 0,
-              keep: undefined,
-              rollType: "flat",
-            },
-            false
-          );
-          mainExpression = `${pool}kh${Math.floor(config.bestOf)}(${baseDieExpression})`;
-        }
-        break;
-    }
-
-    return mainExpression;
   }
 
   getRootDieConfig(): RollConfig | undefined {
@@ -973,8 +690,8 @@ export class HalfRollBuilder extends RollBuilder {
 
 /**
  * A roll whose result is scaled by `numerator / denominator` and rounded — the composable
- * generalization of {@link HalfRollBuilder}. Renders as `N * (inner)`, `(inner) // D`, or
- * `(inner) * N // D`. Terminal (like `half`): use {@link sumRolls} to combine with other rolls.
+ * generalization of {@link HalfRollBuilder}. Renders as `N ** (inner)`, `(inner) // D`, or
+ * `(inner) ** N // D`. Terminal (like `half`): use {@link sumRolls} to combine with other rolls.
  */
 export class ScaleRollBuilder extends RollBuilder {
   constructor(
@@ -1003,22 +720,7 @@ export class ScaleRollBuilder extends RollBuilder {
   }
 
   toExpression(): string {
-    const inner = this.innerRoll.toExpression();
-    const denominator = this.denominator === 0 ? 1 : this.denominator;
-    if (denominator === 1) return `${this.numerator} ** (${inner})`;
-    // The grammar has only floor (`//`) and ceil (`/`) division; there is no round-half token.
-    if (this.rounding === "round") {
-      throw new Error(
-        `toExpression() cannot represent scaleResult(${this.numerator}, ${this.denominator}, "round"): the string grammar has only floor (//) and ceil (/) division. Use the builder's own PMF (.toPMF()/.pmf) instead.`
-      );
-    }
-    const div = this.rounding === "ceil" ? "/" : "//";
-    // `*` in this grammar is `conditionalApply` (an attack-gate operator: "if the left side is
-    // nonzero, take the right side"), NOT multiplication -- `**` is. A scale of e.g. `2/1`
-    // (vulnerability) previously rendered as `2 * (inner)`, which re-parsed as "if 2 (always
-    // nonzero) then take `inner`", silently dropping the multiplier entirely on round-trip.
-    if (this.numerator === 1) return `(${inner}) ${div} ${denominator}`;
-    return `(${inner}) ** ${this.numerator} ${div} ${denominator}`;
+    return printScale(this.innerRoll.toExpression(), this.numerator, this.denominator, this.rounding);
   }
 
   toAST(): ExpressionNode {
@@ -1085,14 +787,11 @@ export class MaxOfRollBuilder extends RollBuilder {
     return this.innerRoll.getSubRollConfigs();
   }
 
+  /** `NkhK(X)` keeps the highest K of N independent copies of X: the max of N rolls is `Nkh1(X)`. */
   toExpression(): string {
-    // Use the stored dice info to create the expression directly
-    if (this.diceCount && this.diceSides) {
-      return `max${this.count}(${this.diceCount}d${this.diceSides})`;
-    }
-
-    // If no stored dice info, fallback to simple max expression
-    return `max${this.count}(?d?)`;
+    const count = Math.max(1, Math.floor(this.count));
+    const inner = this.innerRoll.toExpression();
+    return count === 1 ? inner : `${count}kh1(${inner})`;
   }
 
   toAST(): ExpressionNode {
@@ -1211,10 +910,9 @@ export class AlwaysHitBuilder extends RollBuilder {
     return new AlwaysCritBuilder(this, undefined, true);
   }
 
-  // Legacy expressions
+  /** The check's natural roll, which is all this builder's own PMF reads (see {@link toPMF}). */
   override toExpression(): string {
-    const configs = this.getSubRollConfigs();
-    return new RollBuilder(configs).toExpression();
+    return rootDieExpression(this) ?? super.toExpression();
   }
 
   override toPMF(): PMF {
@@ -1283,10 +981,9 @@ export class AlwaysCritBuilder extends RollBuilder {
     return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
   }
 
-  // Legacy expressions
+  /** The check's natural roll, which is all this builder's own PMF reads (see {@link toPMF}). */
   override toExpression(): string {
-    const configs = this.getSubRollConfigs();
-    return new RollBuilder(configs).toExpression();
+    return rootDieExpression(this) ?? super.toExpression();
   }
 
   override toPMF(): PMF {
@@ -1386,7 +1083,8 @@ type RepoolScaled = (scale: number) => PooledRollBuilder;
 export class PooledRollBuilder extends RollBuilder {
   constructor(
     private readonly baseAST: ExpressionNode,
-    private readonly baseExpression: string,
+    /** Prints the pool itself; called only when the expression is asked for. */
+    private readonly baseExpression: () => string,
     configs: readonly RollConfig[] = [],
     private readonly repoolScaled?: RepoolScaled
   ) {
@@ -1474,20 +1172,8 @@ export class PooledRollBuilder extends RollBuilder {
   }
 
   override toExpression(): string {
-    const configsExpression = super.toExpression();
-
-    // If no configs added, just return base expression
-    if (configsExpression === "0") {
-      return this.baseExpression;
-    }
-
-    // Clean up the join
-    if (configsExpression.startsWith("-")) {
-      // If it's a negative number/expression, format as " - value"
-      // configsExpression is like "-2" or "-1d6"
-      return `${this.baseExpression} - ${configsExpression.substring(1)}`;
-    }
-    return `${this.baseExpression} + ${configsExpression}`;
+    const base: ExpressionTerm = { text: this.baseExpression(), sign: 1, range: nodeRange(this.baseAST) };
+    return joinTerms([base, ...configTerms(this.subRollConfigs, this.getRootDieConfig())]);
   }
 
   override copy(): PooledRollBuilder {
@@ -1518,18 +1204,15 @@ export class PooledRollBuilder extends RollBuilder {
     if (count < 0) throw new Error("times() requires a non-negative integer");
 
     // Wraps the current state (base + modifiers) into a new pool repeated N times.
-    const currentAST = this.toAST();
-    const currentExpr = this.toExpression();
-
     const sumNode: SumNode = {
       type: "sum",
       count,
-      child: currentAST,
+      child: this.toAST(),
     };
+    const expression = () =>
+      count === 0 ? "0" : count === 1 ? this.toExpression() : `${count}(${this.toExpression()})`;
 
-    const newExpr = count === 1 ? currentExpr : `${count}(${currentExpr})`;
-
-    return new PooledRollBuilder(sumNode, newExpr, [], (scale) => this.scaleDice(scale).times(count));
+    return new PooledRollBuilder(sumNode, expression, [], (scale) => this.scaleDice(scale).times(count));
   }
 }
 
@@ -1537,8 +1220,8 @@ export class PooledRollBuilder extends RollBuilder {
  * An additive composite of independent rolls that preserves each part's AST — the piece
  * that lets a scaled/halved sub-roll (which the flat `.plus()` merge would otherwise drop)
  * sit beside plain rolls in one damage payload. Its PMF convolves the parts; its expression
- * joins them with ` + `. Built via {@link sumRolls}; terminal (used as an onHit/onCrit/
- * onSaveFailure payload), so it reports hidden state to reject accidental flat merges.
+ * sums them, each part one term of the sum. Built via {@link sumRolls}; terminal (used as an
+ * onHit/onCrit/onSaveFailure payload), so it reports hidden state to reject accidental flat merges.
  */
 class CompositeSumRollBuilder extends RollBuilder {
   constructor(private readonly parts: readonly RollBuilder[]) {
@@ -1568,16 +1251,17 @@ class CompositeSumRollBuilder extends RollBuilder {
   }
 
   override toExpression(): string {
-    const exprs = this.parts
-      .map((p) => p.toExpression())
-      .filter((e) => e && e !== "0");
-    if (exprs.length === 0) return "0";
-    let result = exprs[0];
-    for (let i = 1; i < exprs.length; i++) {
-      const e = exprs[i];
-      result += e.startsWith("-") ? ` - ${e.substring(1)}` : ` + ${e}`;
-    }
-    return result.replace(/\+ -/g, "-");
+    return joinTerms(
+      this.parts.map((part) => {
+        let range: [number, number] | undefined;
+        try {
+          range = nodeRange(part.toAST());
+        } catch {
+          // A parsed part has no AST: its range is unknown, so the next part always adds (`~+`).
+        }
+        return { text: part.toExpression(), sign: 1, range };
+      })
+    );
   }
 
   override toPMF(eps: number = 0): PMF {
@@ -1603,7 +1287,7 @@ class CompositeSumRollBuilder extends RollBuilder {
 
 /**
  * Combine several rolls into one additive payload whose PMF is their convolution and whose
- * expression is them joined with ` + `. Unlike `a.plus(b)`, this preserves parts that carry
+ * expression is their sum. Unlike `a.plus(b)`, this preserves parts that carry
  * hidden state (e.g. `roll.scaleResult(1, 2)` / `roll.half()`), so per-damage-type resistance
  * and vulnerability survive into both the distribution and the rendered expression.
  * Empty parts collapse to `0`; a single part is returned unwrapped.

@@ -28,7 +28,7 @@ export const testCases: {
   {
     label: "Reroll with minimum",
     config: { sides: 4, reroll: 2, minimum: 2 },
-    expected: "1(2>(d4 reroll d2))",
+    expected: "2>(d4 reroll d2)",
   },
   {
     label: "Reroll with minimum and multiple dice",
@@ -172,7 +172,7 @@ describe("RollBuilder", () => {
 
   it("should handle negative base dice", () => {
     const builder = roll(-1).d8();
-    expect(builder.toExpression()).toBe("-1d8");
+    expect(builder.toExpression()).toBe("0 - 1d8");
   });
 
   describe("RollBuilder toExpression", () => {
@@ -870,7 +870,7 @@ describe("RollBuilder", () => {
     it("should correctly subtract a roll that includes a subtraction", () => {
       const subtractedRoll = roll(1, 8).minus(d4); // 1d8 - 1d4
       const builder = roll(1, 20).minus(subtractedRoll);
-      expect(builder.toExpression()).toBe("d20 - 1d8 + 1d4");
+      expect(builder.toExpression()).toBe("d20 - 1d8 ~+ 1d4");
       expect(builder.toPMF().mean()).toBeCloseTo(10.5 - 4.5 + 2.5);
     });
   });

@@ -216,7 +216,7 @@ describe("Builder/index.ts - Roll Factory", () => {
       it("should create flat amount with negative number", () => {
         const builder = roll.flat(-3);
         expect(builder).toBeInstanceOf(RollBuilder);
-        expect(builder.toExpression()).toBe("-3");
+        expect(builder.toExpression()).toBe("0 - 3");
       });
 
       it("should handle decimal numbers", () => {
@@ -284,13 +284,13 @@ describe("Builder/index.ts - Roll Factory", () => {
     it("should handle negative count", () => {
       const builder = roll(-2, 6, 3);
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("-2d6 + 3");
+      expect(builder.toExpression()).toBe("3 - 2d6");
     });
 
     it("should handle negative modifier with zero sides", () => {
       const builder = roll(3, 0, -5);
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("-5"); // No dice added, only modifier
+      expect(builder.toExpression()).toBe("0 - 5"); // No dice added, only modifier
     });
   });
 
