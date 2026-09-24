@@ -357,14 +357,13 @@ describe("semantics (§7.2)", () => {
     ).toBe("unknown-id");
   });
 
-  it("a flag no step reads leaves the state count unchanged (R31, the reroll turn)", () => {
+  it("a flag no step reads leaves the state count unchanged", () => {
+    // The last attack's grant has no later attack roll to read it. (A grant from an
+    // any-miss reroll is refused instead: in play the reroll lands mid-turn.)
     const musket = d20.plus(9).ac(15).onHit(roll(1, d12).plus(1, d4).plus(18));
-    const base = turn([musket, musket])
-      .onAnyMiss(musket, { id: "reroll" })
-      .onFirstHit(roll(1, d10), { of: ["attack 1", "attack 2", "reroll"] });
-    const unread = base.onEveryHit(advantage().untilNextAttack(), { of: ["reroll"] });
-    expect(inspectTurn(base).stateCounts).toEqual([3, 6, 7, 3]);
-    expect(inspectTurn(unread).stateCounts).toEqual([3, 6, 7, 3]);
+    const base = turn([musket, musket]).onFirstHit(roll(1, d10));
+    const unread = base.onEveryHit(advantage().untilNextAttack(), { of: ["attack 2"] });
+    expect(inspectTurn(unread).stateCounts).toEqual(inspectTurn(base).stateCounts);
     expect(unread.mean()).toBeCloseTo(base.mean(), 12);
   });
 });

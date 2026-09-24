@@ -74,6 +74,11 @@ class SubstituteTransform implements Transform {
  * policy against 16.1889 for the optimal hold/use policy (14.7000 without the
  * transform); {@link Transform.ifBelow} with `{ hit: 10, crit: 18 }` reaches the
  * optimum on that turn.
+ *
+ * **Ties.** When the fresh total ties the original, the original roll is kept. The
+ * total is the same either way, but a `dice-match` trigger reading the attack sees
+ * the kept dice's match status: a player who would take a tied roll because its
+ * dice matched is not modelled.
  */
 export function keepBestDamage(): Transform {
   return new SubstituteTransform("reroll-keep-higher", { kind: "always" });

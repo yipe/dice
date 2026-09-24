@@ -112,15 +112,15 @@ describe("dice-match trigger — MATCH_BIT sharing a group with a first-hit trig
 
     const t = turn(attack)
       .onFirstHit(roll(1, 4), { of: ["attack 1"] }) // crit-doubles to 2d4 (mean 5) on a crit
-      .onDiceMatch(["attack 1"], roll(1, 1), { id: "match-marker" }); // deterministic +1 when matched
+      .onDiceMatch(["attack 1"], roll(1, 1), { id: "match-marker" }); // +2 when matched: 1d1 doubles on a crit
 
     // attack mean(6d8)=27 + firstHit ALWAYS crit-mode mean(2d4)=5 + match-marker fires w.p. pMatch
-    const expectedMean = 27 + 5 + pMatch * 1;
+    const expectedMean = 27 + 5 + pMatch * 2;
     expect(t.mean()).toBeCloseTo(expectedMean, 9);
 
     // The buggy decode instead read a matched crit as non-crit, undercounting toward
-    // 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch — a materially different, WRONG total.
-    const buggyMean = 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch * 1;
+    // 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + 2·pMatch — a materially different, WRONG total.
+    const buggyMean = 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch * 2;
     expect(t.mean()).not.toBeCloseTo(buggyMean, 2);
   });
 });

@@ -7,7 +7,15 @@ import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import { isGrant, isTransform } from "./effects";
 import type { StepOutcome } from "./state";
-import { advance, CRIT_BIT, FIRST_CRIT, FIRST_NONE, MATCH_BIT, MISS_BIT } from "./state";
+import {
+  advance,
+  CRIT_BIT,
+  CRIT_MATCH_BIT,
+  FIRST_CRIT,
+  FIRST_NONE,
+  MATCH_BIT,
+  MISS_BIT,
+} from "./state";
 import type {
   Attack,
   AttackTriggerOn,
@@ -54,7 +62,8 @@ export interface TurnPlan {
   /**
    * Ids of the attack-shaped `any-miss` / `first-miss` riders, in declaration
    * order: a reroll continues the attacks it watches, so `Turn`'s chaining
-   * methods add these to a later rider's defaulted `of`.
+   * methods add these to a later rider's defaulted `of`. A list of several
+   * attacks is not attack-shaped, so it is never among them.
    */
   rerollIds: readonly string[];
   /**
@@ -320,10 +329,11 @@ export function fireMode(
       // the first one to see a miss fires, and the rest see the slot taken.
       return (code & MISS_BIT) !== 0 && fired[step.slot] === null ? "hit" : null;
     case "dice-match":
-      // An attack-shaped rider (the only kind a `dice-match` trigger can fire —
-      // it always has variants, never `step.damage`) ignores the returned
-      // mode entirely; "hit" is just the truthy sentinel meaning "fires".
-      return (code & MATCH_BIT) !== 0 ? "hit" : null;
+      // Crit mode when a crit's dice matched, so damage-shaped rider dice double
+      // like every other rider's on a crit. An attack-shaped rider rolls its own
+      // attack and reads the mode only as "it fired".
+      if ((code & MATCH_BIT) === 0) return null;
+      return (code & CRIT_MATCH_BIT) !== 0 ? "crit" : "hit";
     default:
       // `every-hit` never becomes a step — it is folded into its sources' slices.
       return null;
@@ -405,6 +415,18 @@ function diceMatchInfoOf(
 }
 
 /**
+ * How many parts of a list payload roll their own attack: their PMF carries hit or crit
+ * outcomes. A parsed string whose dice can double is damage despite its 'hit' label.
+ */
+function attackPartCount(damage: readonly Damage[], eps: number, id = ""): number {
+  return damage.filter((part) => {
+    if (part instanceof ParsedRollBuilder && part.canDoubleDice()) return false;
+    const labels = toPMF(part, eps, id).outcomes();
+    return labels.includes("hit") || labels.includes("crit");
+  }).length;
+}
+
+/**
  * Split a source into hit / crit / miss sub-mass PMFs, or return null when the
  * source is not attack-shaped (a plain damage roll is not an attack).
  *
@@ -414,6 +436,11 @@ function diceMatchInfoOf(
  * the equivalent builder). In a list, only the other parts' labels decide. A parsed
  * string with a check stays label-shaped, as do attack builders and labelled PMFs; so
  * does one `canDoubleDice()` rejects for another reason (a dice-valued repeat count, `d4d6`).
+ *
+ * A list holding more than one attack is not one attack: convolving it averages its
+ * attacks' outcome labels, so its slices would describe a single strike landing at the
+ * mean per-strike chance. It returns null — its damage is still the exact sum of its
+ * parts, but nothing can watch it as a source.
  */
 function sliceSource(
   pmf: PMF,
@@ -424,6 +451,7 @@ function sliceSource(
   let shapeLabels = labels;
   if (damage !== undefined) {
     const parts = Array.isArray(damage) ? damage : [damage as Damage];
+    if (Array.isArray(damage) && attackPartCount(parts, eps) > 1) return null;
     const others = parts.filter((part) => !(part instanceof ParsedRollBuilder && part.canDoubleDice()));
     if (others.length < parts.length) {
       shapeLabels = others.length === 0 ? [] : toPMF(others, eps).outcomes();
@@ -647,6 +675,15 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     }
     return riderSlices[riderIndex] as SourceSlices | null;
   };
+  /**
+   * Per rider: whether its payload is a list of more than one attack (a flurry's two
+   * strikes). It rolls attacks, so it crits on its own terms and reads grants, but it
+   * is no single source: nothing can watch it, and it never joins a default `of`.
+   */
+  const attackLists = riders.map(
+    (rider, index) =>
+      Array.isArray(rider.damage) && attackPartCount(rider.damage, eps, riderIds[index]) > 1
+  );
   /** The damage a source id rolls: a declared attack's source or a rider's payload. */
   const damageOf = (sourceId: string): Damage | readonly Damage[] => {
     const attackIndex = attackIndexById.get(sourceId);
@@ -710,6 +747,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           `"${ownerId}" triggers on "${sourceId}", an every-hit rider. Those are folded into their own sources rather than resolved separately, so they cannot be triggered on — point at the attacks instead.`
         );
       }
+      if (riderIndex !== undefined && attackLists[riderIndex]) {
+        fail(
+          "not-an-attack",
+          sourceId,
+          `"${ownerId}" watches "${sourceId}", a list of several attacks. A list rider resolves as one payload, not as attacks that each land, so it cannot be watched. Declare each attack as its own rider with its own id, and name those.`
+        );
+      }
       const slices = slicesOf(sourceId);
       if (!slices) {
         fail(
@@ -733,6 +777,22 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     return unique;
   };
 
+  // Attack-shaped `any-miss` / `first-miss` riders: a reroll continues the attacks it
+  // watches, so an omitted `of` includes it (see `Trigger`).
+  const isReroll = riders.map(
+    (rider, index) =>
+      (rider.on === "any-miss" || rider.on === "first-miss") && slicesOf(riderIds[index]) !== null
+  );
+  const rerollIds = riderIds.filter((_, index) => isReroll[index]);
+  /**
+   * An omitted `of`: every declared attack, plus the rerolls among the first `before`
+   * riders — for a rider, those listed before it, as `Turn`'s chaining methods snapshot.
+   */
+  const defaultOf = (before: number): string[] => [
+    ...attackIds,
+    ...riderIds.filter((_, index) => index < before && isReroll[index]),
+  ];
+
   // Nodes of the dependency graph: riders first, then substitutes.
   const riderCount = riders.length;
   const nodeIds = [...riderIds, ...substituteIds];
@@ -744,7 +804,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     ...riders.map((rider, index) => {
       const id = riderIds[index];
       if (rider.on !== "not-fired") {
-        return resolveSources(id, rider.of ?? attackIds, rider.on === "dice-match");
+        return resolveSources(id, rider.of ?? defaultOf(index), rider.on === "dice-match");
       }
       const target = rider.of;
       if (target === id) {
@@ -768,12 +828,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       return [target];
     }),
     ...substitutes.map((substitute, index) =>
-      resolveSources(substituteIds[index], substitute.of ?? attackIds, false)
+      resolveSources(substituteIds[index], substitute.of ?? defaultOf(riderCount), false)
     ),
   ];
   // Per condition: the source ids whose outcomes apply its grants.
   const conditionSources = conditions.map((condition, index) =>
-    resolveSources(conditionIds[index], condition.of ?? attackIds, false)
+    resolveSources(conditionIds[index], condition.of ?? defaultOf(riderCount), false)
   );
 
   // --- ordering ------------------------------------------------------------
@@ -896,8 +956,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // onSave grants, keyed by (condition, grant) rather than by step, so `next-attack`
   // and `end-of-turn` are distinct flags even for the same modifier. A flag read by
   // no later step gets no bit at all: setting it could change nothing.
+  // A list of several attacks rolls attacks too, so a grant does not skip it silently.
   const rollsAttack = sequence.map((entry) =>
-    entry.attack !== -1 ? attackSlices[entry.attack] !== null : slicesOf(entry.id) !== null
+    entry.attack !== -1
+      ? attackSlices[entry.attack] !== null
+      : slicesOf(entry.id) !== null || attackLists[entry.rider]
   );
   const conditionFlags = conditions.map((condition, index) => {
     const id = conditionIds[index];
@@ -931,8 +994,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const onSave = (condition.onSave ?? []).map((grant, grantIndex) =>
       flagOf(grant, `onSave grant ${grantIndex + 1}`)
     );
-    // An application whose end-of-turn grants are all in force is skipped, onSave
-    // with it. With an onSave to skip, that check reads the grants at every source.
+    // An application whose grants are all end-of-turn and all in force is skipped,
+    // onSave with it. With an onSave to skip, that check reads the grants at every source.
     const lastingOnly = main.length > 0 && main.every((flag) => flag.grant.until === "end-of-turn");
     if (lastingOnly && onSave.length > 0) {
       for (const flag of main) flag.lastRead = Math.max(flag.lastRead, applyAt[applyAt.length - 1]);
@@ -1181,7 +1244,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           })
         : slicesOf(entry.id);
 
-    if (rider && slices && rider.critDamage !== undefined) {
+    if (rider && (slices || attackLists[entry.rider]) && rider.critDamage !== undefined) {
       // An attack-shaped rider rolls its own d20 and crits on its own terms —
       // a bonus attack triggered by a crit does not deal doubled dice — so
       // there is nothing for `critDamage` to mean. Silently dropping it would
@@ -1191,6 +1254,20 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         entry.id,
         `Rider "${entry.id}" rolls its own attack, so its critDamage would never be used. Remove it, or pass plain damage dice instead.`
       );
+    }
+
+    const readMask = readMaskAt[stepIndex];
+    if (rider?.on === "any-miss" && slices) {
+      // Its step runs after every declared attack, but in play the reroll happens right
+      // after the miss: it would read, or grant to, the wrong attack rolls.
+      const grantSource = conditionSources.some((sources) => sources.includes(entry.id));
+      if (readMask !== 0 || grantSource) {
+        fail(
+          "unsupported-trigger",
+          entry.id,
+          `Rider "${entry.id}" rerolls on any miss and ${readMask !== 0 ? "reads a granted modifier" : "applies a condition's grants"}. An any-miss rider resolves after every declared attack, so it would see the grants in force at the end of the turn instead of right after the miss. Use onFirstMiss (on: "first-miss"), which resolves directly after the attack that missed.`
+        );
+      }
     }
 
     const updates = updatesById.get(entry.id) ?? [];
@@ -1243,7 +1320,6 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       };
     };
 
-    const readMask = readMaskAt[stepIndex];
     if (slices && readMask === 0) {
       ({ variants, select } = table(slices));
     } else if (slices) {
@@ -1317,6 +1393,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         const index = tableOfKey[key];
         return offsets[index] + tables[index].select(codes, fired);
       };
+    } else if (readMask !== 0) {
+      fail(
+        "no-rebindable-source",
+        entry.id,
+        `"${entry.id}" reads a granted modifier, but it is a list of several attacks, with no single attack check to re-derive. Declare each attack as its own rider, or scope the grant with \`to\`.`
+      );
     }
 
     const hit = rider && !slices ? riderPMF(entry.rider) : null;
@@ -1350,11 +1432,6 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   for (const group of perHitGroups.values()) {
     groupLastReadStep[group] = steps.length;
   }
-
-  const rerollIds = riderIds.filter((id, index) => {
-    const on = riders[index].on;
-    return (on === "any-miss" || on === "first-miss") && slicesOf(id) !== null;
-  });
 
   return {
     steps,
