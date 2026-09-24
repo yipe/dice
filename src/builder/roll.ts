@@ -477,8 +477,15 @@ export class RollBuilder {
       if (!config.sides || config.sides <= 0) return config;
       const ambiguity = ambiguousScaling(config, scaleInt);
       if (ambiguity !== undefined) {
+        // An exploding die has no string form; the ambiguity, not the missing spelling, is the error.
+        let shown = "this roll";
+        try {
+          shown = `"${this.toExpression()}"`;
+        } catch {
+          // keep the generic name
+        }
         throw new AmbiguousCritDoublingError(
-          `Cannot double the dice of "${this.toExpression()}" on a crit: ${ambiguity}. ` +
+          `Cannot double the dice of ${shown} on a crit: ${ambiguity}. ` +
             `Give the crit explicitly: onCrit(...) on an attack, critDamage on a rider, or noCrit().`
         );
       }

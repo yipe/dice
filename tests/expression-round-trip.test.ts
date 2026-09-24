@@ -3,6 +3,7 @@ import "../src/builder/ac";
 import { d4, d6, d8, d20, roll } from "../src/builder/factory";
 import { sumRolls, type RollBuilder } from "../src/builder/roll";
 import { parse } from "../src/parser/parser";
+import { AmbiguousCritDoublingError } from "../src/parser/scaleDice";
 import type { PMF } from "../src/pmf/pmf";
 
 /**
@@ -166,6 +167,10 @@ describe("pools print only when the expression is asked for", () => {
     const worst = roll(1, d8).explode(1).keepLowestAll(2, 1).times(2);
     expectBins(worst.toPMF(), repeat(2, min(exploding, exploding)), "times");
     expect(() => worst.toExpression()).toThrow(/cannot represent an exploding die/);
+  });
+
+  it("doubling an exploding die with no single doubled meaning still names the ambiguity", () => {
+    expect(() => roll(1, d8).explode(1).withAdvantage().doubleDice()).toThrow(AmbiguousCritDoublingError);
   });
 
   it("a pool of zero trials prints 0", () => {
