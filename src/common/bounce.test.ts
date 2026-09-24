@@ -54,26 +54,29 @@ describe("jointSumAndMatch — exact P(sum ∧ match), K=2", () => {
 });
 
 describe("explodingPoolMatchProbability — match composed with a pool-wide exploding budget", () => {
-  it("2d8 budget 1: exact P(match) = 0.179688, not the realized-size-i.i.d. figure 0.176270", () => {
-    const p = explodingPoolMatchProbability(1 / 8, 8, 2, 1);
-    expect(p).toBeCloseTo(0.179688, 6);
+  const uniformD8 = new Array(8).fill(1 / 8);
+
+  it("2d8 budget 1: exact P(match) = 23/128, not the realized-size-i.i.d. figure 0.176270", () => {
+    const p = explodingPoolMatchProbability(uniformD8, 2, 1);
+    expect(p).toBeCloseTo(23 / 128, 14);
     expect(p).not.toBeCloseTo(0.176270, 5);
   });
 
   it("reduces to the plain formula's marginal when budget is 0 (no explosion)", () => {
-    const p = explodingPoolMatchProbability(1 / 8, 8, 3, 0);
+    const p = explodingPoolMatchProbability(uniformD8, 3, 0);
     expect(p).toBeCloseTo(calculateBounceOdds(3, 8), 10);
   });
 
-  it("a single die can never match regardless of budget", () => {
-    expect(explodingPoolMatchProbability(1 / 8, 8, 1, 5)).toBe(0);
-    expect(explodingPoolMatchProbability(1 / 8, 8, 0, 5)).toBe(0);
+  it("a single die matches only its own explosion: max, then max again", () => {
+    expect(explodingPoolMatchProbability(uniformD8, 1, 5)).toBeCloseTo(1 / 64, 15);
+    expect(explodingPoolMatchProbability(uniformD8, 1, 0)).toBe(0);
+    expect(explodingPoolMatchProbability(uniformD8, 0, 5)).toBe(0);
   });
 
   it("more budget never decreases match probability (monotone in budget)", () => {
     let previous = 0;
     for (const budget of [0, 1, 2, 3, 5]) {
-      const p = explodingPoolMatchProbability(1 / 8, 8, 2, budget);
+      const p = explodingPoolMatchProbability(uniformD8, 2, budget);
       expect(p).toBeGreaterThanOrEqual(previous - 1e-12);
       previous = p;
     }
