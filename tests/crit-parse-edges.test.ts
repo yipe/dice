@@ -41,8 +41,8 @@ function expectSameParse(a: string, b: string): void {
 }
 
 describe("a trailing hit-only term is part of the hit payload: its dice double on a crit, its flats do not", () => {
-  it("`+` after the payload adds to non-zero totals only, exactly like parenthesising it into the payload", () => {
-    // The grammar associates left to right and `+` is add-if-non-zero, so a miss (0) stays 0.
+  it("`+` after the payload adds to every landed hit and never to a miss", () => {
+    // The grammar associates left to right; a miss (0) stays 0. 1d8 is never 0, so this is the payload `(1d8) + 1d6`.
     const trailing = parse("(d20 + 5 AC 15) * (1d8) + 1d6");
     expectSamePMF(trailing, parse("(d20 + 5 AC 15) * ((1d8) + 1d6)"));
     expect(trailing.outcomeProbability("missNone")).toBeCloseTo(9 / 20, 12);
@@ -85,7 +85,7 @@ describe("a trailing hit-only term is part of the hit payload: its dice double o
     expectSameAttack("(d20 + 5 AC 15) * (1d8) crit (2d8) + 1d6", built);
   });
 
-  it("a miss clause keeps its label, and a trailing `+` adds to its non-zero damage too", () => {
+  it("a miss clause keeps its label, and a trailing `+` adds to its damage too", () => {
     const built = d20.plus(5).ac(15).onHit(roll(2, d6).plus(3)).onMiss(roll(1, d6).plus(3));
     expectSameAttack("(d20 + 5 AC 15) * (2d6) miss (1d6) + 3", built);
     expect(parse("(d20 + 5 AC 15) * (2d6) miss (1d6) + 3").mean()).toBeCloseTo(351 / 40, 12);
