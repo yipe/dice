@@ -5,7 +5,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.12.0] - 2026-09-22
+## [0.12.1] - 2026-09-24
+
+Two string-parser fixes: `parse()` now agrees with the builder, bin for bin and label for label, on
+an attack check that lands at a total of exactly 0 and on a trailing `+` after a payload that rolls 0.
+
+### Fixed
+
+- **An attack check that totals exactly 0 against an AC of 0 or less now lands.** The AC gate reads
+  a miss as 0, so a landing at a total of 0 was lost with the misses: `(d20 - 5 AC 0) * (1d6)`
+  missed on a natural 5, mean 2.8 (hit 0.7, missNone 0.25), where
+  `d20.minus(5).ac(0).onHit(roll(1, d6))` means 2.975 (hit 0.75, crit 0.05, missNone 0.2). The gate
+  now records its landings at 0, and the `*` payload, the crit (`crit`, `xcritN`, `xcrit0`),
+  `&` mixes and the `miss`, `pc` and `save half` clauses treat them as hits, whether the 0 comes
+  from a negative flat, a subtracted die or a bonus die: `(d20 - 20 AC 0) * (1d6)` crits on its
+  natural 20 (mean 0 → 0.35), and `((d20 - 5 AC 0) & (d20 AC 10)) * (1d6)` goes from 2.45 to
+  2.5375. An attack's miss clauses now also take its misses at 0 rather than its lowest total, which
+  with a negative AC was a landed hit: `(d20 - 10 AC -5) * (1d6) crit (2d6) miss (1)` labelled a
+  natural 5 `missDamage` (mean 2.675 → 3.175, missDamage 0.05 → 0.2). The check on its own labels
+  a landed total of 0 `hit`. Saving throws (`DC`) were already exact.
+- **A trailing `+` after an attack's payload now adds to a hit whose payload rolled 0.** The README
+  says a term after the payload is part of it, but `+` adds only to a non-zero total, so it skipped
+  the 0-damage hits: `(d20 + 5 AC 12) * (1d4 - 1) + 1d6` meant 3.23125, where
+  `onHit(roll(1, d4).minus(1).plus(d6))` means 3.8 (its crit is `2d4 - 1 + 2d6`). The term is now
+  added to every landed hit and crit, a landing at a total of 0 included, and to a `miss (…)`
+  clause's damage, while a miss stays 0: `+ 3` goes from 2.7875 to 3.275,
+  `crit (1d4 - 1) + 1d6` from 2.8875 to 3.5, and `miss (1d4 - 1) + 3` from 5.85 to 6.075. `*`, `**`,
+  `/` and `//` after the payload act on its value as before, so a hit that deals 0 still deals 0.
+
+## [0.12.0] - 2026-09-24
 
 A once-per-turn damage-reroll substitution, a `first-miss` trigger that schedules a reroll where
 the miss happened, conditions (advantage, disadvantage and crit-on-hit granted to later attack
