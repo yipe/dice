@@ -221,6 +221,31 @@ describe("AttackBuilder.rerollDamage / minimumDamageDie (R16, R24, S1 steps 2/8)
     expect(() => parsed.rerollDamage(2)).toThrow(/dice descriptor/);
     expect(() => parsed.minimumDamageDie(3)).toThrow(/dice descriptor/);
   });
+
+  it("an explicit onCrit gets the same transforms whether it is set before or after them", () => {
+    const critBefore = d20
+      .plus(5)
+      .ac(15)
+      .onHit(roll(2, d6))
+      .onCrit(roll(4, d6))
+      .rerollDamage(2)
+      .minimumDamageDie(2);
+    const critAfter = d20
+      .plus(5)
+      .ac(15)
+      .onHit(roll(2, d6))
+      .rerollDamage(2)
+      .minimumDamageDie(2)
+      .onCrit(roll(4, d6));
+    expectSamePMF(critAfter.resolve().critBase, critBefore.resolve().critBase);
+    // 4d6 untransformed is 14; the rerolled-and-floored crit is higher.
+    expect(critAfter.resolve().critBase.mean()).toBeGreaterThan(14.5);
+  });
+
+  it("an explicit onCrit with no dice descriptor is refused once a transform is set", () => {
+    const attack = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5)).rerollDamage(2);
+    expect(() => attack.onCrit("4d6+5")).toThrow(/dice descriptor/);
+  });
 });
 
 describe("AttackBuilder.halfOnMiss (R28, S1 step 4c)", () => {
@@ -260,6 +285,15 @@ describe("AttackBuilder.halfOnMiss (R28, S1 step 4c)", () => {
       expect(e).toBeInstanceOf(Error);
       expect((e as Error).constructor).toBe(Error);
     }
+  });
+});
+
+describe("AttackBuilder.toExpression refuses what the grammar cannot express", () => {
+  it("throws for a plusSeparateDamage channel or halfOnMiss instead of dropping it", () => {
+    const plain = d20.plus(9).ac(16).onHit(roll(2, d6).plus(5));
+    expect(plain.toExpression()).toBe("(d20 + 9 AC 16) * (2d6 + 5) crit (4d6 + 5)");
+    expect(() => plain.plusSeparateDamage(roll(2, d6)).toExpression()).toThrow(/plusSeparateDamage/);
+    expect(() => plain.halfOnMiss().toExpression()).toThrow(/halfOnMiss/);
   });
 });
 

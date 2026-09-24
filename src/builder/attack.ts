@@ -59,7 +59,9 @@ export class AttackBuilder implements CheckBuilder {
   onCrit(count: number, die: RollBuilder, modifier: number): AttackBuilder;
   onCrit(count: number, sides: number, modifier: number): AttackBuilder;
   onCrit(...args: any[]): AttackBuilder {
-    const damageRoll = RollBuilder.fromArgs(...args);
+    // The explicit crit is base payload: carry any rerollDamage/minimumDamageDie already set, so
+    // the result does not depend on whether onCrit() came before or after them.
+    const damageRoll = this.withStoredBaseTransforms(RollBuilder.fromArgs(...args));
     return new AttackBuilder(
       this.check,
       this.hitEffect,
@@ -146,10 +148,7 @@ export class AttackBuilder implements CheckBuilder {
         `Conflicting rerollDamage() threshold: already set to ${this.rerollThreshold}, cannot change to ${threshold}. Repeating the same value is a no-op.`
       );
     }
-    const capped = (config: RollConfig): RollConfig => ({
-      ...config,
-      reroll: Math.min(threshold, Math.floor(config.sides / 2)),
-    });
+    const capped = AttackBuilder.rerollCap(threshold);
     return new AttackBuilder(
       this.check,
       this.hitEffect
@@ -179,7 +178,7 @@ export class AttackBuilder implements CheckBuilder {
         `Conflicting minimumDamageDie() value: already set to ${this.minimumDieValue}, cannot change to ${minimum}. Repeating the same value is a no-op.`
       );
     }
-    const floored = (config: RollConfig): RollConfig => ({ ...config, minimum });
+    const floored = AttackBuilder.minimumFloor(minimum);
     return new AttackBuilder(
       this.check,
       this.hitEffect
@@ -294,6 +293,27 @@ export class AttackBuilder implements CheckBuilder {
     return next.critOnHit ? ac.alwaysCrits() : ac;
   }
 
+  /** R24: the per-group reroll threshold is `min(threshold, floor(sides / 2))`. */
+  private static rerollCap(threshold: number): (config: RollConfig) => RollConfig {
+    return (config) => ({ ...config, reroll: Math.min(threshold, Math.floor(config.sides / 2)) });
+  }
+
+  private static minimumFloor(minimum: number): (config: RollConfig) => RollConfig {
+    return (config) => ({ ...config, minimum });
+  }
+
+  /** Applies the `rerollDamage`/`minimumDamageDie` values already set on this builder to `effect`. */
+  private withStoredBaseTransforms(effect: ActionEffect): ActionEffect {
+    let out = effect;
+    if (this.rerollThreshold !== undefined) {
+      out = AttackBuilder.mapEveryDieGroup(out, "rerollDamage", AttackBuilder.rerollCap(this.rerollThreshold));
+    }
+    if (this.minimumDieValue !== undefined) {
+      out = AttackBuilder.mapEveryDieGroup(out, "minimumDamageDie", AttackBuilder.minimumFloor(this.minimumDieValue));
+    }
+    return out;
+  }
+
   /**
    * Shared by `rerollDamage`/`minimumDamageDie`: rewrite every die-bearing `RollConfig` of a
    * base-payload effect. Refuses (rather than silently no-oping) an effect with no real dice
@@ -316,6 +336,13 @@ export class AttackBuilder implements CheckBuilder {
 
   // Legacy expressions
   toExpression(): string {
+    // The string grammar has no separate-damage channel and no "half the hit payload on a miss"
+    // clause; rendering without them would round-trip to a different distribution.
+    if (this.separateDamage.length > 0 || this.halfOnMissFlag) {
+      throw new Error(
+        "toExpression() cannot represent plusSeparateDamage() or halfOnMiss(): the expression grammar has no separate damage channel or half-on-miss clause. Use toPMF() instead."
+      );
+    }
     const checkPart = this.check.toExpression();
 
     let effectPart = "";

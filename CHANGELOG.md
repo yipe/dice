@@ -68,7 +68,8 @@ changes that turn silent wrong answers into errors.
   a `dice-match` trigger reads the base dice only. `onHit(roll(2, d6).plus(5)).plusSeparateDamage(roll(2, d6))`
   equals `onHit(roll(2, d6).plus(5).plus(2, d6))` bin for bin, hit and crit; several calls
   accumulate. `resolve()` exposes the two parts as `hitBase` / `critBase` and `hitSeparate` /
-  `critSeparate`.
+  `critSeparate`. `toExpression()` throws on an attack with a channel, because the string grammar
+  has none and dropping it would change the numbers.
 - **`AttackBuilder.rerollDamage(k)` and `minimumDamageDie(v)`** apply `reroll` / `minimum` to every
   die group of the base payload (the hit, and an explicit crit), never to the separate channels, so
   they read in any order: `onHit(roll(1, d8).plus(2, d6)).rerollDamage(1)` means 12.7708, not
@@ -76,11 +77,12 @@ changes that turn silent wrong answers into errors.
   `min(k, floor(sides / 2))`, so the result never falls as `k` grows. `rerollDamage(5)` on `2d6`
   means 8.5, like `reroll(3)`; `RollBuilder.reroll(5)` stays an obligation at 7.8333. Repeating
   either call with a different value throws (the same value is a no-op), and a payload with no dice
-  descriptor (a parsed string) throws.
+  descriptor (a parsed string) throws. An `onCrit()` set after either call gets the same transform,
+  so call order does not matter.
 - **`AttackBuilder.halfOnMiss()`** — a miss deals `floor(hit payload / 2)`: the base plus every
   separate channel, never the crit payload. The branch is labelled `missDamage`, so no trigger
   counts it as a landing and no substitution rerolls it. Combining it with `onMiss()`, in either
-  order, throws.
+  order, throws. `toExpression()` throws on a `halfOnMiss()` attack; the grammar cannot express it.
 - **`AttackBuilder.withCheck(fn)`** — the one way to re-derive an attack's hit, crit and miss odds.
   `fn` maps a `Check` (`roll`, `ac`, `critThreshold`, `rollType`, `advantageDice`, `critOnHit`) to a
   new one and the damage is kept: `withCheck(c => ({ ...c, rollType: "advantage" }))` equals
