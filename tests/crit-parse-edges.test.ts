@@ -381,9 +381,9 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
   });
 
   it("a check with no die in it has no natural roll: crit mass exactly 0, no throw, as on main", () => {
-    // The builder has no AC spelling for a dieless check: `roll.flat(15).ac(12)` rolls an implicit
-    // d20 for its natural 1 and 20. With nothing to crit, a certain hit is `alwaysHits().noCrit()`.
+    // The builder's dieless check agrees: `roll.flat(15).ac(12)` hits for certain and never crits.
     expectSameAttack("(15 AC 12) * (1d6)", roll.flat(15).alwaysHits().onHit(roll(1, d6)).noCrit());
+    expectSameAttack("(15 AC 12) * (1d6)", roll.flat(15).ac(12).onHit(roll(1, d6)));
     expectSameAttack("(10 + 5 AC 12) * (2d6) + 3", roll.flat(15).alwaysHits().onHit(roll(2, d6).plus(3)).noCrit());
     // A die on the AC side is the target's roll, never the attack's natural roll.
     expectSameAttack("(25 AC d20) * (1d6)", roll.flat(25).alwaysHits().onHit(roll(1, d6)).noCrit());

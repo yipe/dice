@@ -92,7 +92,7 @@ export const singleD20ExprExpected = "d20";
 
 /** Adding a bunch */
 export const addAWholeBunch = d6.plus(d8).plus(d10).plus(d12).plus(d20);
-export const addAWholeBunchExprExpected = "1d20 + 1d12 + 1d10 + 1d8 + 1d6";
+export const addAWholeBunchExprExpected = "d20 + 1d12 + 1d10 + 1d8 + 1d6";
 
 /** Subtracting a bunch */
 export const subtractAWholeBunch = d6

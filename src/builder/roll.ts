@@ -104,6 +104,28 @@ const configComplexityScore = (config: RollConfig) => {
   );
 };
 
+/**
+ * Index of the config holding a check's natural roll — the die whose 1 misses and whose 20 hits and
+ * crits — or -1 when no config can be one. Only a rolled, added die can: a subtracted or zero-count
+ * group never is. A d20 outranks every other die (a d30 or d100 beside it is a bonus die); with no
+ * d20 the largest die does, and the first of equal dice wins. The same rule the string parser uses
+ * to pick a check's natural roll, so `d4.plus(d20)` and `(1d4 + d20 AC n)` agree.
+ */
+export function naturalRollIndex(configs: readonly RollConfig[]): number {
+  let best = -1;
+  for (let i = 0; i < configs.length; i++) {
+    const { sides, count, isSubtraction } = configs[i];
+    if (!(sides > 0) || !(count > 0) || isSubtraction) continue;
+    if (best === -1) {
+      best = i;
+      continue;
+    }
+    const top = configs[best].sides;
+    if (top !== 20 && (sides === 20 || sides > top)) best = i;
+  }
+  return best;
+}
+
 // Fluent builder for dice to create PMFs with an AST
 export class RollBuilder {
   protected readonly subRollConfigs: readonly RollConfig[];
@@ -449,14 +471,23 @@ export class RollBuilder {
   }
 
   withAdvantage(): RollBuilder {
-    const newConfigs = this.getSubRollConfigs();
-    newConfigs[newConfigs.length - 1].rollType = "advantage";
-    return this.create(newConfigs);
+    return this.withRollType("advantage");
   }
 
   withDisadvantage(): RollBuilder {
+    return this.withRollType("disadvantage");
+  }
+
+  /**
+   * Sets a roll type. On a roll with a natural d20 (a check: see {@link naturalRollIndex}) it
+   * applies to that d20 whatever the call order, so `d20.plus(d4).withAdvantage()` advantages the
+   * d20, not the Bless die. Otherwise it applies to the last group.
+   */
+  private withRollType(rollType: RollType): RollBuilder {
     const configs = this.getSubRollConfigs();
-    configs[configs.length - 1].rollType = "disadvantage";
+    const rootIdx = naturalRollIndex(configs);
+    const idx = rootIdx !== -1 && configs[rootIdx].sides === 20 ? rootIdx : configs.length - 1;
+    configs[idx].rollType = rollType;
     return this.create(configs);
   }
 
@@ -537,9 +568,7 @@ export class RollBuilder {
   d100 = () => this.d(100);
 
   withElvenAccuracy() {
-    const newConfigs = this.getSubRollConfigs();
-    newConfigs[newConfigs.length - 1].rollType = "elven accuracy";
-    return this.create(newConfigs);
+    return this.withRollType("elven accuracy");
   }
 
   toExpression(): string {
@@ -833,9 +862,14 @@ export class RollBuilder {
     return mainExpression;
   }
 
+  /**
+   * The config carrying this roll's natural die — see {@link naturalRollIndex} — or, with no
+   * such die, the first config (so `rollType`/`baseReroll` still read a flat roll's own fields).
+   */
   getRootDieConfig(): RollConfig | undefined {
     const configs = this.subRollConfigs;
-    return configs.find((config) => config.sides > 0) || configs[0];
+    const idx = naturalRollIndex(configs);
+    return idx === -1 ? configs[0] : configs[idx];
   }
 
   getAllDieConfigs(): readonly RollConfig[] {
@@ -843,18 +877,17 @@ export class RollBuilder {
   }
 
   /**
-   * The check's dice other than its root die (Bless, Bane, Guidance), each WITHOUT its flat
+   * The check's dice other than its natural die (Bless, Bane, Guidance), each WITHOUT its flat
    * modifier. `.plus(n)` stores `n` on whichever group came last, so `d20.plus(d4).plus(5)` holds
    * the 5 on the d4 group; every check resolver already adds all flats once via {@link modifier},
    * so a bonus group that kept its own would count it twice and make the check order-dependent.
+   * A check with no natural die has every die as a bonus die.
    */
   getBonusDiceConfigs(): RollConfig[] {
     const allConfigs = this.subRollConfigs;
-    const rootConfig =
-      allConfigs.find((config) => config.sides > 0) || allConfigs[0];
-    if (!rootConfig) return [];
+    const rootIdx = naturalRollIndex(allConfigs);
     return allConfigs
-      .filter((config) => config.sides > 0 && config !== rootConfig)
+      .filter((config, i) => config.sides > 0 && i !== rootIdx)
       .map((config) => ({ ...config, modifier: 0 }));
   }
 

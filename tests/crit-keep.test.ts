@@ -253,12 +253,9 @@ describe("diceMatchInfo() on an auto-crit whose crit cannot double", () => {
     expect(() => attack.resolve()).toThrow(/4kh3/);
   });
 
-  it("the hit branch keeps its descriptor; the undoublable crit branch has none", () => {
+  it("a pool rolled with disadvantage has no descriptor on either branch instead of throwing", () => {
     const attack = d20.plus(5).ac(17).onHit(roll(2, d8).withDisadvantage());
-    const { hit, crit } = attack.diceMatchInfo();
-    expect(crit).toBeNull();
-    expect(hit).toEqual(attack.onCrit(roll(4, d8)).diceMatchInfo().hit);
-    expect(hit!.matchProbabilityByDamage.get(2)).toBe(1);
-    expect(hit!.matchProbabilityByDamage.get(4)).toBeCloseTo(1 / 3, 12);
+    expect(attack.diceMatchInfo()).toEqual({ hit: null, crit: null });
+    expect(attack.onCrit(roll(4, d8)).diceMatchInfo().hit).toBeNull();
   });
 });
