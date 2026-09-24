@@ -265,7 +265,10 @@ and `diceMatchInfo()`, whose crit descriptor is `null` for such an attack (its h
 **Builder semantics.** `roll(N, X)` is N independent copies of X, so `roll(2, d6.keepHighest(2, 1))`
 is two best-of-two d6 (161/18), and a group of zero dice rolls nothing (`roll(0, d6).plus(3)` is 3).
 A roll type applies to each die of its group: `roll(2, d6).withAdvantage()` is two advantaged d6.
-`explode(k)` needs a finite cap k. Per-die keeps have one reading each: `roll(1, d).keepHighest(T, K)`
+`explode(k)` needs a finite cap k, sides must be finite and not negative (`roll(2, 0)` is no die),
+`scaleResult()` needs a finite numerator and a non-zero finite denominator, and `ac()`, `dc()`,
+`critOn()`, `minimumDamageDie()`, `rerollDamage()` and a `withCheck()` result need finite numbers;
+each throws, naming the argument. Per-die keeps have one reading each: `roll(1, d).keepHighest(T, K)`
 keeps K of T dice, `roll(N, d).keepHighest(N, K)` keeps K of the N dice, and
 `roll(N, d).keepHighest(T, 1)` is the best of T rolls of the whole group (`keepLowest(T, 1)` with
 T ≠ N the worst); any other keep on several dice throws `AmbiguousKeepError`, so use
@@ -283,7 +286,7 @@ a fresh die's expected value, and never lowers a payload's own `reroll` or `mini
 **Strings from builders.** `toExpression()` prints a string that `parse()` reads back to the
 builder's own distribution: a term after the first is parenthesised when it is an expression of its
 own, `~+` joins a term to a running total that can be 0, and an attack always carries its crit clause
-(`noCrit()` prints `crit (<hit payload>)`). Explode, pool-wide explode, `scaleResult(…, "round")`,
+(`noCrit()` prints `xcrit0 (<hit payload>)`, which crits on no natural face). Explode, pool-wide explode, `scaleResult(…, "round")`,
 fractional scale factors, `plusSeparateDamage()` and `halfOnMiss()` have no spelling and throw.
 Strings have no natural-1 miss or natural-20 hit.
 
@@ -447,7 +450,7 @@ associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to gr
 | `X & Y` | A mix weighted by each side's count of outcomes (see the refused shapes above). |
 | `X reroll R` | Rolls X, and on a result in the face set R rolls X again and keeps the second roll. |
 | `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). |
-| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. |
+| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. `xcrit0 (Y)` never crits: every landing is a hit. |
 
 **Rerolls.** `reroll N` rerolls the face N only; `reroll dN` rerolls every face from 1 to N; the
 builder's `.reroll(N)` rerolls every face up to N, like `reroll dN`. On a d6 they differ from N = 2
@@ -461,7 +464,9 @@ The reroll decides on the raw face and a minimum applies after: `3>(d6 reroll 1)
 
 **Labels.** An attack labels its outcomes `hit`, `crit`, `missNone` and `missDamage`. A save labels a
 failed save `saveFail` (whatever the payload rolls, 0 included), a halved success `saveHalf`, and a
-success with no `save half` `missNone`, like the builder's `onSaveFailure()`.
+success with no `save half` `missNone`, like the builder's `onSaveFailure()`. A landed hit whose
+payload deals 0 is still `hit` (a 0-damage crit is `crit`), like the builder; only a miss is
+`missNone`.
 
 A `d0` has no faces: it is only a face set (`reroll d0`); rolled on its own it throws, as does a
 string the grammar cannot read, always as a `DiceParseError`.

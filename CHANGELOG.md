@@ -290,7 +290,8 @@ changes that turn silent wrong answers into errors.
   as a reroll of the whole sum); a term after a running total that can be 0 joins with `~+`; keep,
   `bestOf` and roll-type groups are never merged by count (`2kh1(1d6) + 2kh1(1d6)` printed as
   `2kh1(2d6)`); there is no leading unary minus (`0 - 1d8`); an attack always prints its crit clause
-  (`noCrit()` prints `crit (<hit>)`, which 0.12's implicit crit would otherwise double); and
+  (`noCrit()` prints `xcrit0 (<hit>)`, a clause that crits on no natural face, so the string keeps
+  the builder's labels instead of 0.12's implicit doubled crit); and
   `alwaysCrits()`, `threeDiceAdvantage()` and `maxOf()` print what they compute. Across 10,200
   random builders every printed string that parses now matches the builder bin for bin, except for
   the documented natural-1/natural-20 difference.
@@ -316,6 +317,15 @@ changes that turn silent wrong answers into errors.
   for k < 0; `PMF.variance()` of a PMF whose mass is not 1 is the conditional variance, matching
   `DiceQuery.variance()`; `power()` no longer relabels a shared cached result; an `LRUCache` with
   capacity ≤ 0 stores nothing.
+- **A parsed attack labels a landed hit that deals 0 as `hit`** (and a 0-damage crit as `crit`),
+  like the builder; it was `missNone`, so a first-hit rider on `(d20 + 5 AC 12) * (1d4 - 1)` fired
+  0.5375 of the time instead of 0.7. `xcrit0 (Y)` parses on any check and never crits.
+- **A cached PMF cannot be changed through its map**: `set`, `delete` and `clear` throw and `map`
+  cannot be reassigned. `roll(1, d6).toPMF().map.set(…)` used to corrupt every later roll of a d6.
+- **Builder arguments with no meaning throw, naming the argument**: `scaleResult()` with a
+  non-finite numerator or denominator or a denominator of 0; `ac()`, `dc()`, `critOn()`,
+  `minimumDamageDie()`, `rerollDamage()` and a `withCheck()` result with a non-finite value; and
+  `roll(n, sides)`/`d(sides)` with negative or non-finite sides, which used to give 0.
 - Smaller exactness fixes: `d6.minimum(6).explode(2)` resolves instead of throwing; save and DC PMFs
   carry no float-residue bins; `combine("elven accuracy", 2, …)` rolls three dice; `resolve().crit`
   includes the doubled `plusSeparateDamage` channels even when no roll can crit; repeats whose
