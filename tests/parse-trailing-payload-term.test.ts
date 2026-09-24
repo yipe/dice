@@ -75,3 +75,46 @@ describe("a trailing `+` adds to every landed outcome of an attack", () => {
     expectSameLabelled(parsed, d20.minus(5).ac(0).onHit(roll(1, d4).minus(1).plus(d6)).toPMF());
   });
 });
+
+describe("a trailing `+` adds to every other outcome that carries a payload, one that rolled 0 included", () => {
+  /** A parsed PMF's bins as { value: { label: p } }, labels rounded to 1e-12. */
+  const bins = (expr: string): Record<number, Record<string, number>> => {
+    const pmf = parse(expr);
+    const out: Record<number, Record<string, number>> = {};
+    for (const v of pmf.support()) {
+      const count = (pmf.map.get(v)?.count ?? {}) as Record<string, number>;
+      out[v] = Object.fromEntries(Object.entries(count).map(([k, p]) => [k, Math.round(p * 1e12) / 1e12]));
+    }
+    return out;
+  };
+
+  it("a potent-cantrip half that rounds to 0 takes the term", () => {
+    // +5 vs AC 15 lands on 10..20: hit 1/2, crit 1/20, miss 9/20 dealing half of the pc (1), i.e. 0.
+    expect(bins("(d20 + 5 AC 15) * (1d2) pc (1) + 3")).toEqual({
+      3: { pc: 0.45 },
+      4: { hit: 0.25 },
+      5: { hit: 0.25, crit: 0.0125 },
+      6: { crit: 0.025 },
+      7: { crit: 0.0125 },
+    });
+  });
+
+  it("a failed save whose payload rolled 0 takes the term, like onSaveFailure(x.plus(3)); a success stays 0", () => {
+    // d20 vs DC 15 fails on 1..14 (7/10); 1d2 - 1 is 0 or 1.
+    expect(bins("(d20 DC 15) * (1d2 - 1) + 3")).toEqual({
+      0: { missNone: 0.3 },
+      3: { saveFail: 0.35 },
+      4: { saveFail: 0.35 },
+    });
+    expect(parse("(d20 DC 15) * (1d2 - 1) + 3").mean()).toBeCloseTo(0.7 * 3.5, 12);
+  });
+
+  it("a halved save that rounds to 0 takes the term like every other halved result", () => {
+    // Success 3/10 halves 1d2 to 0 or 1; failure 7/10 deals 1d2.
+    expect(bins("(d20 DC 15) * (1d2) save half + 3")).toEqual({
+      3: { saveHalf: 0.15 },
+      4: { saveHalf: 0.15, saveFail: 0.35 },
+      5: { saveFail: 0.35 },
+    });
+  });
+});

@@ -710,12 +710,26 @@ function critPayload(text: string, n: number): Dice {
 }
 
 /**
+ * Outcomes that carry a payload, so a trailing `+` adds to them even where they rolled 0: a crit, a
+ * miss clause's damage, a potent-cantrip half, and a save's failure or half. A miss with no payload
+ * (`missNone`) never takes it.
+ */
+const PAYLOAD_OUTCOMES: Readonly<Record<string, true>> = {
+  crit: true,
+  missDamage: true,
+  pc: true,
+  saveFail: true,
+  saveHalf: true,
+};
+
+/**
  * `op(labelled, arg)` for a hit-only op, outcome by outcome, so an attack's labels survive a
  * trailing term. A doubled crit (no crit clause) takes the term into its payload and doubles the
  * whole payload again, exactly as if the term were written inside it; every other outcome,
  * an explicit crit clause's included, takes the term as written. A trailing `+` adds to every
- * outcome with a payload, one that rolled 0 included -- each hit and crit, and each miss a `miss (…)`
- * clause deals damage to -- the way the builder's `plus` does, while a miss with no payload stays 0.
+ * outcome with a payload, one that rolled 0 included -- each hit and crit, each miss a `miss (…)`
+ * clause deals damage to, a potent-cantrip half, and a save's failure or half -- the way the
+ * builder's `plus` does, while a miss with no payload stays 0.
  */
 function applyByOutcome(
   labelled: Dice,
@@ -741,7 +755,7 @@ function applyByOutcome(
       const doubled = critPayload(payload, n);
       // `op` scales every other outcome's counts by the argument's; keep the crit's share.
       applied = doubled.normalize((part.total() * argTotal) / doubled.total());
-    } else if (label === "crit" || label === "missDamage") {
+    } else if (PAYLOAD_OUTCOMES[label] === true) {
       applied = applyToLanded(part, op, arg, part.get(0), false);
     } else {
       applied = op.call(part, arg);

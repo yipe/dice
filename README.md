@@ -190,8 +190,9 @@ crit, like the attack or save builder it stands for.
 An attack string with no crit clause crits too: `"(d20 + 8 AC 16) * (2d6)"` rolls its natural 20 as
 `4d6`, like `d20.plus(8).ac(16).onHit(roll(2, d6))`; a `crit (…)` clause still wins. A term after
 the payload joined by `+`, `*`, `**`, `/` or `//` is part of the payload and never applies to a
-miss (the grammar reads left to right). `+` adds to every landed hit and crit, one whose payload
-rolled 0 included, like the builder's `plus`: `(d20 + 5 AC 12) * (1d4 - 1) + 1d6` is
+miss (the grammar reads left to right). `+` adds to every landed hit and crit, and to every
+other outcome that carries a payload (miss damage, a potent-cantrip half, a save's failure or half),
+one whose payload rolled 0 included, like the builder's `plus`: `(d20 + 5 AC 12) * (1d4 - 1) + 1d6` is
 `onHit(roll(1, d4).minus(1).plus(d6))` (mean 3.8). `*`, `**`, `/` and `//` act on the payload's
 value, so a hit that deals 0 still deals 0. `(d20 + 5 AC 15) * (1d8) + 1d6` crits as `2d8 + 2d6`,
 like `onHit(roll(1, d8).plus(roll(1, d6)))`, and keeps its hit, crit and miss labels. After a
@@ -441,7 +442,7 @@ associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to gr
 | `7`, `d6`, `3d6`, `hd20` | A number, a die, a sum of dice, a die whose 1 is rerolled once (halfling luck, `d20 reroll 1`). |
 | `N(X)`, `(X)d6` | N independent copies of X, summed. The count may be rolled: `(1d4)d6`. A count of 0 is 0 (`0d6`, `(1d4 - 1)d6` has P(0) = 1/4); a count that can be negative throws. |
 | `NkhK(X)`, `NklK(X)` | The sum of the K highest (lowest) of N independent copies of X, exact for any X: `4kh3d6`, `2kl1(1d20)`, `4kh1(2d20)`. `2kl1(2d6)` keeps the lower of two 2d6 *sums*. |
-| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0. After an attack's payload it adds to every landed hit and crit, one that deals 0 included: `(d20 + 5 AC 15) * (1d4 - 1) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
+| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0. After an attack's or a save's payload it adds to every outcome that carries a payload (a landed hit or crit, a miss clause's damage, a potent-cantrip half, a save's failure or half), one that deals 0 included: `(d20 + 5 AC 15) * (1d4 - 1) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
 | `X ~+ Y` | Always adds. |
 | `X - Y`, `-X` | Subtracts. A leading `-` negates the argument after it, repeat included: `-2d6` is `-(2d6)`, `1d6 + -3` is `1d6 - 3`, `-1d8 + 1d6` has mean -1. There is no unary `+`. |
 | `X * Y` | Y where X is not 0, else 0: the hit gate of `(check) * (damage)`. |

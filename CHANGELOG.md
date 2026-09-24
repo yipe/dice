@@ -28,10 +28,13 @@ an attack check that lands at a total of exactly 0 and on a trailing `+` after a
   says a term after the payload is part of it, but `+` adds only to a non-zero total, so it skipped
   the 0-damage hits: `(d20 + 5 AC 12) * (1d4 - 1) + 1d6` meant 3.23125, where
   `onHit(roll(1, d4).minus(1).plus(d6))` means 3.8 (its crit is `2d4 - 1 + 2d6`). The term is now
-  added to every landed hit and crit, a landing at a total of 0 included, and to a `miss (…)`
-  clause's damage, while a miss stays 0: `+ 3` goes from 2.7875 to 3.275,
-  `crit (1d4 - 1) + 1d6` from 2.8875 to 3.5, and `miss (1d4 - 1) + 3` from 5.85 to 6.075. `*`, `**`,
-  `/` and `//` after the payload act on its value as before, so a hit that deals 0 still deals 0.
+  added to every landed hit and crit, a landing at a total of 0 included, and to every other outcome
+  that carries a payload (a `miss (…)` clause's damage, a potent-cantrip half, a save's failure or
+  half), while a miss with no payload stays 0: `+ 3` goes from 2.7875 to 3.275,
+  `crit (1d4 - 1) + 1d6` from 2.8875 to 3.5, `miss (1d4 - 1) + 3` from 5.85 to 6.075, and
+  `(d20 DC 15) * (1d2 - 1) + 3` from 1.4 to 2.45, like `onSaveFailure(roll(1, 2).minus(1).plus(3))`.
+  `*`, `**`, `/` and `//` after the payload act on its value as before, so a hit that deals 0 still
+  deals 0.
 
 ## [0.12.0] - 2026-09-24
 
