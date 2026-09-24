@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculateBounceOdds, explodingPoolMatchProbability, jointSumAndMatch } from "./bounce";
 
-// Oracles from docs/superpowers/plans/2026-09-21-native-bounce-and-explode.md, §2.2/§2.3 and
-// spec appendix. Ground truth — NEVER adjust these to match an implementation.
+// Ground-truth oracles from brute-force enumeration. NEVER adjust these to match an implementation.
 
 describe("jointSumAndMatch — exact P(sum ∧ match), K=2", () => {
   const uniformD8 = new Array(8).fill(1 / 8);

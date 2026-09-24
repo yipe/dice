@@ -21,7 +21,7 @@ describe("AttackBuilder.plusSeparateDamage (R14, S1 step 2)", () => {
     const foldedRes = folded.resolve();
     expectSamePMF(splitRes.hit, foldedRes.hit);
     expectSamePMF(splitRes.crit, foldedRes.crit);
-    expect(splitRes.hit.mean()).toBeCloseTo(19, 10); // O10 "plain"
+    expect(splitRes.hit.mean()).toBeCloseTo(19, 10); // no reroll: 2d6 + 5 + 2d6
     expect(splitRes.crit.mean()).toBeCloseTo(33, 10);
   });
 
@@ -329,7 +329,7 @@ describe("AttackBuilder.withCheck (R30, S1 step 4c)", () => {
 
 describe("ACBuilder.threeDiceAdvantage / combine (R30, S6 step 1)", () => {
   it("is numerically unchanged from the legacy withElvenAccuracy() path, bin for bin", () => {
-    // The S6 card specifies d20+5 vs AC 12; AC 15 stays too, for the crit-band coverage.
+    // d20+5 vs AC 12 exercises the crit band; AC 15 stays too, for coverage.
     for (const ac of [12, 15]) {
       const legacy = d20.withElvenAccuracy().plus(5).ac(ac).onHit(1, d8, 3);
       const viaThreeDice = d20

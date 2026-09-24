@@ -60,7 +60,7 @@ export interface ToPMF {
 
 /**
  * Rider or attack damage. Raw strings are not accepted; wrap one in `d("…")`. On a
- * crit, a rider's dice double and its flats do not (R33): a builder through
+ * crit, a rider's dice double and its flats do not: a builder through
  * `doubleDice()`, a `d("…")` string by rewriting its dice terms (`d("2d6+5")` crits
  * as `4d6+5`), a pool inside, then pooled. A bare `PMF` is a fixed distribution with
  * no dice to double, so it is added as-is on a crit. A `d("…")` attack string crits on

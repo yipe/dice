@@ -49,7 +49,7 @@ describe("combinedDamageStats", () => {
   });
 
   it("should return zeros for impossible outcomes", () => {
-    // No miss clause, so no miss damage. (Every attack string crits, R33.)
+    // No miss clause, so no miss damage. (Every attack string crits.)
     const query = createQuery("(d20 + 10 AC 15) * (2d6 + 4)");
     const stats = query.combinedDamageStats("missDamage");
 

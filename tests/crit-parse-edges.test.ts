@@ -8,7 +8,7 @@ import type { PMF } from "../src/pmf/pmf";
 import { turn } from "../src/turn";
 
 /**
- * R33 edge shapes of parse(): the builder is the oracle, bin for bin (≤1e-12) and label by label.
+ * Edge shapes of parse(): the builder is the oracle, bin for bin (≤1e-12) and label by label.
  * Exact fractions come from an independent enumeration over the natural d20 and the bonus dice.
  */
 
@@ -164,7 +164,7 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
   });
 
   it("keep-spelled advantage, disadvantage and elven accuracy keep one natural d20, like `d20 > d20`", () => {
-    // With a clause these are main's exact figures.
+    // With a clause, these are the engine's exact figures.
     for (const [expression, crit, mean] of [
       ["(2kh1(1d20) + 5 AC 15) * (2d6) crit (4d6)", 39 / 400, 1253 / 200],
       ["(2kh1d20 + 5 AC 15) * (2d6) crit (4d6)", 39 / 400, 1253 / 200],
@@ -233,8 +233,8 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
   });
 
   it("`&` mixes checks by count: a crit is a d20 branch's natural 20, at that branch's share, in either order", () => {
-    // Main's exact figures for the bare forms (a clause is needed on main): 2.1, 2.275, 119/48, 13/6.
-    // Main read the mixed sums from their highest totals: 1.8375 and 1.435 where these are exact.
+    // Exact figures for the bare forms, which need a crit clause: 2.1, 2.275, 119/48, 13/6.
+    // (Reading the mixed sums from their highest totals would instead give 1.8375 and 1.435.)
     for (const [expression, hit, crit, mean] of [
       ["(d20 & d20 AC 10) * (1d6) crit (2d6)", 1 / 2, 1 / 20, 21 / 10],
       ["(d20 & d20 AC 10) * (1d6)", 1 / 2, 1 / 20, 21 / 10],
@@ -257,7 +257,7 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
       ["(d4 & (d20 AC 5)) * (1d6) crit (2d6)", 19 / 24, 1 / 24, 49 / 16],
       ["(4 & (d20 AC 15)) * (1d6)", 2 / 7, 1 / 21, 4 / 3],
       ["((d20 AC 15) & 4) * (1d6)", 2 / 7, 1 / 21, 4 / 3],
-      // A max, advantage, keep or reroll over a mix: main's exact figures.
+      // A max, advantage, keep or reroll over a mix: exact figures.
       ["((d20 & d4) > d20 AC 15) * (1d6) crit (2d6)", 37 / 96, 43 / 480, 1897 / 960],
       ["((d20 & d4) > d20 AC 15) * (1d6)", 37 / 96, 43 / 480, 1897 / 960],
       ["(d20 > (d20 & d4) AC 15) * (1d6)", 37 / 96, 43 / 480, 1897 / 960],
@@ -293,12 +293,12 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
       "((d20 + d20) & d20 AC 15) * (1d6) crit (2d6)",
       "(d20 & (d20 + d20) AC 15) * (1d6)",
       "(2d20 & d20 AC 15) * (1d6)",
-      // A reroll draws again from the whole mix, not per branch. (Main's 1.1088 is not exact either:
+      // A reroll draws again from the whole mix, not per branch. (1.1088 is not exact either:
       // Dice.reroll weights a mix's faces as if each were one face of a die. Exact: 637/576.)
       "((d20 & d4) reroll 1 AC 15) * (1d6) crit (2d6)",
       // A repeat, keep or advantage of a mix with a smaller die in it has no one natural roll to
-      // replay per branch, so it is refused rather than approximated. These were exact before:
-      // 119/48 and 2093/1152 on main, and 1951145/663552 for `!!` earlier on this branch.
+      // replay per branch, so it is refused rather than approximated. Formerly exact: 119/48 and
+      // 2093/1152, and 1951145/663552 for `!!`.
       "(1(d20 & d4) AC 5) * (1d6) crit (2d6)",
       "(2kh1(d20 & d4) AC 15) * (1d6) crit (2d6)",
       "((d20 & d4)!! AC 15) * (1d6)",

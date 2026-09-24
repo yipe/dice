@@ -1,5 +1,5 @@
 /**
- * Crit doubling for parsed damage strings (R33): scale every dice term's count, keep every
+ * Crit doubling for parsed damage strings: scale every dice term's count, keep every
  * operator and flat. A dice term is a die together with its per-die modifiers, so the rewrite
  * reads the string with the same grammar `parse()` uses:
  *
@@ -34,11 +34,11 @@ const isDigitOrN = (c: string | undefined): boolean =>
 const isPerDieOp = (op: string): boolean =>
   op === "reroll" || op === ">" || op === "<" || op === "!";
 
-/** Why a parsed string's dice cannot double (R33): it is not a damage expression `scaleParsedDice` can rewrite. */
+/** Why a parsed string's dice cannot double: it is not a damage expression `scaleParsedDice` can rewrite. */
 export class UndoubleableExpressionError extends Error {}
 
 /**
- * Why a damage payload's dice cannot double on a crit (R33): it is damage, but "double the dice"
+ * Why a damage payload's dice cannot double on a crit: it is damage, but "double the dice"
  * has more than one reading for it (a keep other than keep-highest-of-1, a `bestOf()`, a die rolled
  * with advantage, an `&` mix with dice). Never caught as {@link UndoubleableExpressionError}: no
  * crit is approximated.

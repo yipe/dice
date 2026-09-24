@@ -86,7 +86,7 @@ export function parse(expression: string, n: number = 0): PMF {
   // When creating the PMF, do not epsilon prune
   const resultPMF = result.toPMF(-1);
   if (cachingEnabled) {
-    // store using the same cleaned key we used for lookup
+    // Store under the same cleaned key used for the lookup above.
     const cacheKey = `${cleaned}:${n}`;
     parseCache.set(cacheKey, resultPMF);
   }
@@ -148,7 +148,7 @@ function parseExpression(arr: string[], n: number): Dice {
 
   while (op != null) {
     // An AC check times a payload is an attack's hit: keep the payload's text, so its crit can
-    // double the dice when the string has no crit clause (R33). Joined only for that case.
+    // double the dice when the string has no crit clause. Joined only for that case.
     const pending =
       op === Dice.prototype.conditionalApply && finalResult.privateData.isACCheck ? arr.join("") : undefined;
     const arg = !op.unary ? parseArgument(arr, n) : finalResult;
@@ -158,7 +158,7 @@ function parseExpression(arr: string[], n: number): Dice {
     if (op === Dice.prototype.combine) assertMixable(before, arg, arr);
 
     // Handle crit (e.g. xcrit, crit). With no clause, an attack's crit is its hit payload with
-    // every dice term doubled, at the check's natural-max rate, like the builder's (R33). A check
+    // every dice term doubled, at the check's natural-max rate, like the builder's. A check
     // with no die in it has no natural roll: its crit mass is exactly 0, so it takes no crit, and a
     // crit clause on it can never fire -- it is read and ignored, and the hit payload applies.
     let crit: Dice | undefined;
@@ -552,7 +552,7 @@ function splitCrit(check: Dice, count: number): { crit: Dice; rest: Dice } {
 }
 
 /**
- * R33: the crit payload of an attack string with no crit clause is its hit payload `text` with
+ * The crit payload of an attack string with no crit clause is its hit payload `text` with
  * every dice term doubled and its flats kept -- the rewrite the parsed builder's `doubleDice()`
  * uses, so `(d20 + 5 AC 12) * (1d8 + 3)` crits as `(2d8 + 3)`, exactly like the builder. A payload
  * that rewrite cannot double (a dice-valued count like `d4d6`, a nested check) is added as-is,
@@ -577,7 +577,7 @@ function critPayload(text: string, n: number): Dice {
 /**
  * `op(labelled, arg)` for a hit-only op, outcome by outcome, so an attack's labels survive a
  * trailing term. A doubled crit (no crit clause) takes the term into its payload and doubles the
- * whole payload again, exactly as if the term were written inside it (R33); every other outcome,
+ * whole payload again, exactly as if the term were written inside it; every other outcome,
  * an explicit crit clause's included, takes the term as written.
  */
 function applyByOutcome(

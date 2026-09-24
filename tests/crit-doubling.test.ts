@@ -8,7 +8,7 @@ import type { PooledRollBuilder, RollBuilder } from "../src/builder/roll";
 import type { PMF } from "../src/pmf/pmf";
 import { turn, type Damage, type Rider } from "../src/turn";
 
-/** R33: every damage payload with dice doubles those dice on a crit; flats never double. */
+/** Every damage payload with dice doubles those dice on a crit; flats never double. */
 
 function expectSamePMF(actual: PMF, expected: PMF): void {
   const support = new Set([...actual.support(), ...expected.support()]);
@@ -17,11 +17,11 @@ function expectSamePMF(actual: PMF, expected: PMF): void {
   }
 }
 
-/** O4: `2d6+3`, roll it all twice and keep the better. */
+/** `2d6+3`, roll it all twice and keep the better. */
 const pool = (): PooledRollBuilder => roll(2, d6).plus(3).keepHighestAll(2, 1);
-/** O4-crit: the dice double inside the pool, then it pools. */
+/** The dice double inside the pool, then it pools. */
 const poolCrit = (): PooledRollBuilder => roll(4, d6).plus(3).keepHighestAll(2, 1);
-/** Defect B: the whole pool rolled twice, which also doubles the +3 and the pooling. */
+/** The wrong reading: the whole pool rolled twice, which also doubles the +3 and the pooling. */
 const DEFECT_B = 22.7438;
 
 /** Two attacks, `d20+8` vs AC 16: P(at least one crit) = 1 - 0.95². */
@@ -32,8 +32,8 @@ describe("R33 pooled payloads: a crit doubles the dice inside the pool, then poo
   it("onHit(pool) crits bin for bin as roll(4,d6).plus(3).keepHighestAll(2,1) — O4-crit, never Defect B", () => {
     const res = d20.plus(5).ac(12).onHit(pool()).resolve();
     expectSamePMF(res.crit, poolCrit().toPMF());
-    expect(res.hit.mean()).toBeCloseTo(11.3719, 4); // O4-hit
-    expect(res.crit.mean()).toBeCloseTo(18.9334, 4); // O4-crit
+    expect(res.hit.mean()).toBeCloseTo(11.3719, 4); // best of two 2d6 + 3
+    expect(res.crit.mean()).toBeCloseTo(18.9334, 4); // best of two 4d6 + 3
     expect(res.crit.mean()).not.toBeCloseTo(DEFECT_B, 4);
   });
 
@@ -273,7 +273,7 @@ describe("R33 parsed save and attack riders: each rides like its builder and nev
   });
 
   it("a parsed attack string rides bin for bin like its AttackBuilder on every trigger, every-hit included", () => {
-    // With no crit clause the string crits its hit dice doubled (R33), so it pairs with the
+    // With no crit clause the string crits its hit dice doubled, so it pairs with the
     // plain auto-doubling builder; a crit clause pairs with the builder's explicit onCrit.
     const pairs = [
       ["(d20+5 AC 12) * (1d8+3) crit (2d8+3)", () => d20.plus(5).ac(12).onHit(roll(1, d8).plus(3)).onCrit(roll(2, d8).plus(3))],
@@ -296,7 +296,7 @@ describe("R33 parsed save and attack riders: each rides like its builder and nev
       // hit/crit split, which a value-only comparison of the rider PMFs cannot see.
       expectSamePMF(watchedParsed.pmf, watchedBuilt.pmf);
     }
-    // The audit's exact enumeration (R33 reading): 2671/400. 6.51125 was the old nat 20 folded into 'hit'.
+    // Exact enumeration: 2671/400. (6.51125 is the result when the natural 20 folds into 'hit'.)
     expect(watch(d(pairs[1][0])).mean()).toBeCloseTo(6.6775, 10);
   });
 
@@ -387,7 +387,7 @@ describe("R33 parsed attack strings: no crit clause crits at the check's crit ra
     expect(parsed.toPMF().outcomeProbability("crit")).toBeCloseTo(0.05, 12);
     expectSamePMF(parsed.toPMF().filterOutcome("crit"), roll(2, d6).toPMF().scaleMass(0.05));
     expectSamePMF(watch(parsed).pmf, watch(built).pmf);
-    expect(watch(parsed).mean()).toBeCloseTo(6.555, 10); // the audit's reading (a), 1311/200
+    expect(watch(parsed).mean()).toBeCloseTo(6.555, 10); // 1311/200
   });
 
   it("an always-hit string crits on a natural 20 too: 0.95 hit, 0.05 crit (parse() has no natural-1 miss)", () => {

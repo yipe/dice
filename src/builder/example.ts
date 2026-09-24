@@ -16,7 +16,7 @@ import type { SaveBuilder } from "./save";
 
 //const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
 
-/* A basic attack. Note that it auto-creates a crit roll. */
+/* A basic attack; its crit defaults to the doubled hit dice. */
 export const fullAttack = d20.plus(5).ac(10).onHit(2, d6);
 export const fullAttackExprExpected = "(d20 + 5 AC 10) * (2d6) crit (4d6)";
 
@@ -38,9 +38,7 @@ export const fullAttackWithCritAndMissExprExpected =
 export const basicDamageRoll = d6.plus(3);
 export const basicDamageRollExprExpected = "1d6 + 3";
 
-/** Basic 2d6 + 3 damage roll
- * For multiple dice, you need to use roll().
- */
+/** Basic 2d6 + 3 damage roll; multiple dice use roll(). */
 export const basic2d6Plus3 = roll(2, d6).plus(3);
 export const basic2d6Plus3ExprExpected = "2d6 + 3";
 
@@ -64,9 +62,8 @@ export const basicShorthandD6RollExprExpected = "2d6 + 3";
 export const shortcutDie = d8.plus(2);
 export const shortcutDieExprExpected = "1d8 + 2";
 
-/** Flat modifier only (no dice)
- * You can also use roll.flat(n) if you prefer.
- * Many methods take pure numbers, so this may not even be needed in many cases.
+/** Flat modifier only (no dice); roll.flat(n) is the same. Pure-number args are accepted
+ * directly, so a bare flat is rarely needed.
  * */
 export const flatFive = flat(5);
 export const flatFiveExprExpected = "5";
@@ -157,8 +154,7 @@ export const disD20ExprExpected = "d20 < d20";
 export const advHd20 = hd20.withAdvantage();
 export const advHd20ExprExpected = "hd20 > hd20";
 
-/** Complex chain: 2d6 + 1d8 + 4(d4 reroll 1) + 5
- * Note that reroll(1) applies to the immediate roll before it.
+/** Complex chain: 2d6 + 1d8 + 4(d4 reroll 1) + 5; reroll(1) applies to the roll before it.
  */
 export const complexDamage = roll(2, d6).plus(d8).plus(4, d4).reroll(1).plus(5);
 export const complexDamageExprExpected = "4(d4 reroll 1) + 1d8 + 2d6 + 5";
@@ -182,7 +178,7 @@ export const bestOfExampleExprExpected = "4kh3(1d6)";
 export const doubleD6 = roll(2, d6);
 export const doubleD6ExprExpected = "2d6";
 
-/** Double a d6+1 roll, resulting in 2d6+2. Note that modifiers are also doubled. */
+/** Double a d6+1 roll, resulting in 2d6+2 — modifiers double too. */
 export const doubleD6Plus1 = roll(2, d6.plus(1));
 export const doubleD6Plus1ExprExpected = "2d6 + 2";
 
@@ -434,7 +430,6 @@ export function analyzeSave(save: SaveBuilder) {
   };
 }
 
-// TODO make some of these interactive UI examples?
 export function demoAnalyses() {
   const damage = roll(2, d6).plus(4);
   const advCompare = compareAdvantageStates(6, 16, damage);

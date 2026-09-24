@@ -530,7 +530,7 @@ describe("DPR Flow Mathematical Invariants", () => {
         expect(Math.abs(totalLabelCount - bin.p)).toBeLessThan(EPS);
       }
 
-      // 0.55 × 1d6 on a hit, 0.05 × 2d6 on a natural 20 (R33), 0.40 × floor(1d6 / 2) on a miss.
+      // 0.55 × 1d6 on a hit, 0.05 × 2d6 on a natural 20, 0.40 × floor(1d6 / 2) on a miss.
       const query = toQuery(expr);
       expect(query.mean()).toBeCloseTo(2.875, 10);
       expect(query.variance()).toBeCloseTo(4.084375, 10);

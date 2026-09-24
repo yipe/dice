@@ -379,7 +379,7 @@ export class PMF {
       return PMF.emptyMass(); // not PMF.zero(): we want "no mass" mixture
     }
 
-    // No need to normalize up front; we accumulate and blend by relative weight
+    // No need to normalize up front; accumulation blends by relative weight
     let acc: PMF | null = null;
     let sum = 0;
 
@@ -398,10 +398,8 @@ export class PMF {
     return acc ?? PMF.emptyMass();
   }
 
-  // This is a convenience method for when we use power
-  // TODO: It can be smarter in the future, and we can also add it to query
-  // That way statistics operations on invalid PMFs can throw an error
-  // TODO… how can we detect if manually merging two queries' combined PMFs, as that loses provenance?
+  // One-way latch: `power()` folds independent attacks into one PMF and loses provenance, which
+  // cannot be restored — setting it back to true throws.
   private setPreservedProvenance(preserved: boolean) {
     if (!this._preservedProvenance && preserved) {
       throw new Error(
@@ -429,14 +427,12 @@ export class PMF {
   }
 
   /**
-   * Efficiently computes this PMF convolved with itself `n` times.
-   * Uses exponentiation by squaring to reduce total convolutions.
-   * n must be a positive integer.
-   * *
-   * * NOTE: This folds multiple independent attacks into a single PMF.
-   * As a result, The power() method causes a loss of data provenance.
-   * This is ONLY SAFE if you are trying to calculate masses.
-   * If you want to query any atLeast probabilities, you should use the DiceQuery class instead without power().
+   * Convolves this PMF with itself `n` times, by exponentiation by squaring. `n` must be a
+   * positive integer.
+   *
+   * NOTE: this folds `n` independent, identical attacks into one PMF, so it loses data
+   * provenance. It is only safe when computing masses; for `atLeast`-style queries use a
+   * `DiceQuery` instead of `power()`.
    */
   power(n: number, eps = this.epsilon): PMF {
     if (!Number.isInteger(n) || n <= 0) {
@@ -725,11 +721,9 @@ export class PMF {
   }
 
   /**
-   * Returns a new PMF with a scaled branch added to this one.
-   * The branch PMF is scaled by the given probability before merging
-   * This will be very useful for conditional effects and for being
-   * able to model "I can probably have this opportunity attack 40% of rounds"
-   * Example: `pmf.addScaled(critBranch, 0.05)` → PMF including 5% crit outcomes
+   * Returns a new PMF with `branch` added to this one, scaled by `probability` before merging —
+   * the primitive for conditional effects. Example: `pmf.addScaled(critBranch, 0.05)` → a PMF
+   * including a 5% crit slice.
    */
   addScaled(branch: PMF, probability: number): PMF {
     if (probability === 0) return this;
@@ -1052,7 +1046,7 @@ export class PMF {
     return result;
   }
 
-  // 3) Nice wrapper so you can call pmf.combineRaw(other)
+  // Convolve without renormalizing (raw = true), for callers that combine raw counts.
   combineRaw(other: PMF, eps?: number): PMF {
     return this.convolve(other, eps, true);
   }
@@ -1606,8 +1600,8 @@ export class PMF {
 
         let newAttr: OutcomeLabelMap | undefined;
         if (bin.attr && bin.attr[outcome] !== undefined) {
-          // If attr is a count-like accumulator, scale it too.
-          // If attr is already per-outcome only, you can just carry it over.
+          // A count-like attr accumulator is scaled by the same proportion; a per-outcome-only
+          // attr carries over as-is.
           newAttr = { [outcome]: (bin.attr[outcome] as number) * proportion };
         }
 

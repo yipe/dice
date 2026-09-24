@@ -42,7 +42,7 @@ describe("DiceQuery Comprehensive", () => {
   describe("Probability Queries", () => {
     it("should calculate hit probabilities correctly", () => {
       // Attack with known hit rate (d20+5 vs AC 15 = hits on 10+, so 55% hit rate), of which
-      // the natural 20 is a crit (R33): 50% hit, 5% crit.
+      // the natural 20 is a crit: 50% hit, 5% crit.
       const pmf = parse("(d20 + 5 AC 15) * (1d6)");
       const query = new DiceQuery([pmf]);
 
@@ -518,7 +518,7 @@ describe("DiceQuery Comprehensive", () => {
     expect(pMissSubset + pMissSuccess).toBeCloseTo(pMissAny, 12);
     expect(pMissAny + pMissNone).toBeCloseTo(1, 12);
 
-    // No crits scenario: noCrit() on the builder (a parsed attack string crits on a natural 20, R33)
+    // No crits scenario: noCrit() on the builder (a parsed attack string crits on a natural 20).
     const noCrit = d20.plus(8).ac(16).onHit(roll(1, d8).plus(4)).noCrit().toPMF();
     const dqNoCrit1 = new DiceQuery([noCrit]);
     const dqNoCrit2 = new DiceQuery([noCrit, noCrit]);

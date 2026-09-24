@@ -203,7 +203,7 @@ describe("PooledRollBuilder", () => {
       const pool = d6.plus(d8).keepHighestAll(4, 3);
       const attack = d20.plus(5).ac(15).onHit(pool);
 
-      // R33: the auto-crit doubles the dice inside the pool, then pools.
+      // The auto-crit doubles the dice inside the pool, then pools.
       expect(attack.toExpression()).toBe(
         "(d20 + 5 AC 15) * (4kh3(1d8 + 1d6)) crit (4kh3(2d8 + 2d6))"
       );

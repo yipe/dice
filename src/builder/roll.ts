@@ -21,7 +21,7 @@ function validateScaleInt(scale: number): number {
 }
 
 /**
- * Why scaling `config`'s dice by `scale` has no single meaning (R33), or `undefined` when it has one.
+ * Why scaling `config`'s dice by `scale` has no single meaning, or `undefined` when it has one.
  * `astFromRollConfigs` reads a per-die keep through the die count, so multiplying that count only
  * means "double the dice" for keep-highest-of-1 ("roll it N times, keep the best", which then
  * doubles its dice inside each trial). Any other keep, a `bestOf()` that is (or becomes) a keep, and
@@ -490,7 +490,7 @@ export class RollBuilder {
   }
 
   /**
-   * Multiplies every die group's count by `scale` (R33 crit doubling); flats stay. Throws an
+   * Multiplies every die group's count by `scale` (crit doubling); flats stay. Throws an
    * {@link AmbiguousCritDoublingError} for a group whose scaled meaning is ambiguous (see
    * {@link ambiguousScaling}): the caller must give the crit explicitly.
    */
@@ -930,16 +930,8 @@ export class HalfRollBuilder extends RollBuilder {
     return null; // half-of transform not captured by subRollConfigs
   }
 
-  // No need to override create if we don't expose RollBuilder methods that use it,
-  // but HalfRollBuilder extends RollBuilder so it does.
-  // However, HalfRollBuilder seems to just wrap another roll.
-  // If we call .plus() on HalfRollBuilder, it returns a HalfRollBuilder?
-  // No, RollBuilder.plus returns RollBuilder.
-  // The inheritance here is a bit tricky.
-  // Existing code for HalfRollBuilder doesn't seem to implement plus/etc.
-  // So .plus() on a HalfRollBuilder would return a RollBuilder (base class).
-  // Which is fine.
-  // The only issue is if we want it to return HalfRollBuilder, but it doesn't seem designed for that.
+  // Inherits `create()` and the `.plus()` family from `RollBuilder`, so chaining one of those on
+  // a HalfRollBuilder returns a plain `RollBuilder` rather than a HalfRollBuilder.
 
   override get lastConfig(): RollConfig {
     // `lastConfig` is protected on the base class; reach it on the wrapped
@@ -1209,7 +1201,7 @@ export class AlwaysHitBuilder extends RollBuilder {
     return base === null ? null : `H|${this.attackConfig.critThreshold}|${base}`;
   }
 
-  // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
+  /** Sets the crit threshold for this always-hitting check: a natural roll at or above it crits. */
   critOn(critThreshold: number): AlwaysHitBuilder {
     const newConfig = { critThreshold };
     return new AlwaysHitBuilder(this, newConfig);
@@ -1332,8 +1324,7 @@ export class ParsedRollBuilder extends RollBuilder {
   }
 
   override toPMF(_eps: number = 0): PMF {
-    // Return the pre-computed PMF, ignoring epsilon for now
-    // The parse() function was already called with eps=0
+    // The PMF is pre-computed at construction with eps=0; epsilon is not re-applied here.
     return this.cachedPMF;
   }
 
@@ -1342,8 +1333,8 @@ export class ParsedRollBuilder extends RollBuilder {
   }
 
   override toAST(): ExpressionNode {
-    // Since we don't have the actual AST structure, return a constant node
-    // This is a limitation but shouldn't matter for terminal damage expressions
+    // Parsed expressions carry no AST; they are terminal damage payloads, so AST conversion is
+    // unsupported rather than reconstructed.
     throw new Error(
       "ParsedRollBuilder does not support AST conversion. Use the builder API instead."
     );
@@ -1354,7 +1345,7 @@ export class ParsedRollBuilder extends RollBuilder {
   }
 
   /**
-   * Whether this is a damage expression whose dice a crit doubles (R33): false for one with an AC/DC
+   * Whether this is a damage expression whose dice a crit doubles: false for one with an AC/DC
    * check or a crit/save/pc/miss clause, or a dice-valued repeat count (`d4d6`), which a crit adds
    * as-is. True for every other expression, including one whose doubling is ambiguous (a keep other
    * than keep-highest-of-1, a min of two dice terms): that is still damage, and {@link doubleDice}
@@ -1373,7 +1364,7 @@ export class ParsedRollBuilder extends RollBuilder {
   }
 
   /**
-   * R33: a crit doubles every dice term of the expression; flats and operators stay. Throws when
+   * A crit doubles every dice term of the expression; flats and operators stay. Throws when
    * {@link canDoubleDice} is false, and for an ambiguous keep (see {@link canDoubleDice}).
    */
   override doubleDice(): ParsedRollBuilder {
@@ -1387,7 +1378,7 @@ export class ParsedRollBuilder extends RollBuilder {
 
 /**
  * Rebuilds a pool from its pre-pool roll with that roll's dice scaled. This is how a pool's dice
- * double on a crit (R33): `roll(2,d6).plus(3).keepHighestAll(2,1)` crits as
+ * double on a crit: `roll(2,d6).plus(3).keepHighestAll(2,1)` crits as
  * `roll(4,d6).plus(3).keepHighestAll(2,1)`, never as the whole pool rolled twice.
  */
 type RepoolScaled = (scale: number) => PooledRollBuilder;
@@ -1404,8 +1395,7 @@ export class PooledRollBuilder extends RollBuilder {
   }
 
   protected create(configs: readonly RollConfig[]): PooledRollBuilder {
-    // This is the key fix: we preserve the baseAST and baseExpression
-    // and only update the configs
+    // Preserves the base AST and expression; only the configs change.
     return new PooledRollBuilder(this.baseAST, this.baseExpression, configs, this.repoolScaled);
   }
 
@@ -1505,9 +1495,9 @@ export class PooledRollBuilder extends RollBuilder {
   }
 
   /**
-   * R33: scales the dice inside the pool, then pools — the pool is rebuilt from its own pre-pool
-   * roll with that roll's dice scaled, so its trial count and flats never multiply. Dice added
-   * after pooling (`pool.plus(roll(1, d4))`) scale too; flat modifiers do not.
+   * Scales the dice inside the pool, then pools — the pool is rebuilt from its own pre-pool roll
+   * with that roll's dice scaled, so its trial count and flats never multiply. Dice added after
+   * pooling (`pool.plus(roll(1, d4))`) scale too; flat modifiers do not.
    */
   override scaleDice(scale: number): PooledRollBuilder {
     const scaleInt = validateScaleInt(scale);
@@ -1527,7 +1517,7 @@ export class PooledRollBuilder extends RollBuilder {
       throw new Error("times() requires an integer");
     if (count < 0) throw new Error("times() requires a non-negative integer");
 
-    // We wrap the current state (base + modifiers) into a new pool repeated N times
+    // Wraps the current state (base + modifiers) into a new pool repeated N times.
     const currentAST = this.toAST();
     const currentExpr = this.toExpression();
 

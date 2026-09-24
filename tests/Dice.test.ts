@@ -130,7 +130,7 @@ describe("Dice Parser Tests", () => {
       const result = parse("(d20 + 6 AC 15) * (2d6 + 4)");
       // AC expressions with damage return 0 for minFace in the original parser
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(28); // a natural 20 crits as 4d6 + 4 (R33)
+      expect(result.max()).toBe(28); // a natural 20 crits as 4d6 + 4
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(5, "hit")).toBe(0);
       expect(result.outcomeAt(6, "hit")).toBeGreaterThan(0);
@@ -141,7 +141,7 @@ describe("Dice Parser Tests", () => {
       const result = parse("(d20 > d20 + 6 AC 15) * (2d6 + 4)");
       // Same behavior as above
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(28); // crit: 4d6 + 4 = 24 + 4 (R33); a hit tops out at 16
+      expect(result.max()).toBe(28); // crit: 4d6 + 4 = 24 + 4; a hit tops out at 16
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(5, "hit")).toBe(0);
       expect(result.outcomeAt(6, "hit")).toBeGreaterThan(0);
@@ -605,7 +605,7 @@ describe("Dice Parser Tests", () => {
         "(d20 > d20 > d20 +8 AC 10) * (8d8 + 6d6 + 2d4 + 7)"
       );
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(223); // crit doubles every die: 16d8 + 12d6 + 4d4 + 7 (R33)
+      expect(result.max()).toBe(223); // crit doubles every die: 16d8 + 12d6 + 4d4 + 7
     });
 
     it("handles bonus to-hit dice with complex crit", () => {
@@ -627,7 +627,6 @@ describe("Dice Parser Tests", () => {
 
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
 
     it("handles multiple keeps with complex dice", () => {
@@ -639,7 +638,6 @@ describe("Dice Parser Tests", () => {
 
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
 
     it("handles max operations with complex crits", () => {
@@ -728,7 +726,6 @@ describe("Dice Parser Tests", () => {
       expect(result.max()).toBe(20);
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
   });
 

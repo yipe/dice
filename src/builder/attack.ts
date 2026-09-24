@@ -39,13 +39,13 @@ export class AttackBuilder implements CheckBuilder {
     private readonly hitEffect?: ActionEffect,
     private readonly critEffect?: ActionEffect | null,
     private readonly missEffect?: ActionEffect,
-    // R14: extra damage channels convolved into hit AND crit (doubling like any attack damage
-    // on a crit) but excluded from base-payload transforms (rerollDamage/minimumDamageDie here;
-    // the turn-level reroll substitution). Several `plusSeparateDamage()` calls accumulate.
+    // Extra damage channels convolved into hit AND crit — their dice double on a crit like any
+    // attack damage — but excluded from base-payload transforms (rerollDamage/minimumDamageDie
+    // here; the turn-level reroll substitution). Several `plusSeparateDamage()` calls accumulate.
     private readonly separateDamage: readonly RollBuilder[] = [],
-    // The raw (pre-R24-cap) argument each was last called with — tracked separately from the
-    // transformed dice so a second call with a DIFFERENT value can be refused (R23) while a
-    // repeat of the SAME value stays a no-op.
+    // The raw (uncapped) argument rerollDamage() was last called with, tracked separately from
+    // the transformed dice so a second call with a DIFFERENT value is refused while a repeat of
+    // the SAME value stays a no-op.
     private readonly rerollThreshold?: number,
     private readonly minimumDieValue?: number,
     private readonly halfOnMissFlag: boolean = false
@@ -114,10 +114,10 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   /**
-   * R14: a second damage channel, convolved into the hit AND crit payloads (its dice double on
-   * a crit like any attack damage) but excluded from base-payload transforms — a separate
-   * damage channel that base-payload rerolls and once-per-turn reroll substitutions never
-   * touch. Chainable; several calls accumulate into one convolved channel.
+   * Adds a second damage channel, convolved into the hit AND crit payloads (its dice double on
+   * a crit like any attack damage) but excluded from base-payload transforms — base-payload
+   * rerolls and once-per-turn reroll substitutions never touch it. Chainable; several calls
+   * accumulate into one convolved channel.
    */
   plusSeparateDamage(damage: RollBuilder): AttackBuilder {
     return new AttackBuilder(
@@ -133,12 +133,12 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   /**
-   * R16/R24: applies `reroll(k)` to every die group of the BASE payload (hit, and the crit
-   * branch when it is explicit), leaving `plusSeparateDamage` channels untouched — so a weapon
-   * reads in whichever order the caller likes. The threshold is a PERMISSION CAP, not an
-   * obligation: the effective per-group threshold is `min(threshold, floor(sides / 2))`, so the
-   * result is monotone in `threshold` and always describes optimal play (R24).
-   * `RollBuilder.reroll()` keeps its own obligation semantics; this is the attack-level verb.
+   * Applies `reroll(k)` to every die group of the BASE payload (hit, and the crit branch when
+   * it is explicit), leaving `plusSeparateDamage` channels untouched — so a weapon reads in
+   * whichever order the caller likes. The threshold is a permission cap, not an obligation: the
+   * effective per-group threshold is `min(threshold, floor(sides / 2))`, so the result is
+   * monotone in `threshold` and always describes optimal play. `RollBuilder.reroll()` keeps its
+   * own obligation semantics; this is the attack-level verb.
    */
   rerollDamage(threshold: number): AttackBuilder {
     if (isNaN(threshold)) throw new Error("Invalid NaN value for rerollDamage threshold");
@@ -166,9 +166,9 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   /**
-   * R16: applies `minimum(v)` to every die group of the BASE payload (hit, and the crit branch
-   * when it is explicit), leaving `plusSeparateDamage` channels untouched. Order-independent
-   * with respect to `plusSeparateDamage` and `rerollDamage` (R16).
+   * Applies `minimum(v)` to every die group of the BASE payload (hit, and the crit branch when
+   * it is explicit), leaving `plusSeparateDamage` channels untouched. Order-independent with
+   * respect to `plusSeparateDamage` and `rerollDamage`.
    */
   minimumDamageDie(minimum: number): AttackBuilder {
     if (isNaN(minimum)) throw new Error("Invalid NaN value for minimumDamageDie");
@@ -196,7 +196,7 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   /**
-   * R28: the miss payload becomes `floor(resolved hit payload / 2)` — base plus every
+   * The miss payload becomes `floor(resolved hit payload / 2)` — base plus every
    * `plusSeparateDamage` channel, never the crit payload. Labelled `missDamage`: it is not a
    * landing, so no `first-hit`/`every-hit`/condition trigger reads it, and no reroll
    * substitution touches it. Mutually exclusive with `onMiss()`.
@@ -221,9 +221,9 @@ export class AttackBuilder implements CheckBuilder {
   }
 
   /**
-   * R30: the ONE way to re-derive hit/crit/miss probabilities for an existing attack. `vsAC`
-   * and every §7 condition variant are both callers. Throws if this attack's check has no AC
-   * (an `AlwaysHitBuilder`, or a crit-from-always-hit override) — there is nothing to rebind.
+   * The one way to re-derive hit/crit/miss probabilities for an existing attack: `vsAC` and the
+   * turn-level condition variants are both callers. Throws if this attack's check has no AC (an
+   * `AlwaysHitBuilder`, or a crit-from-always-hit override) — there is nothing to rebind.
    */
   withCheck(fn: (check: Check) => Check): AttackBuilder {
     const next = fn(this.toCheck());
@@ -293,7 +293,7 @@ export class AttackBuilder implements CheckBuilder {
     return next.critOnHit ? ac.alwaysCrits() : ac;
   }
 
-  /** R24: the per-group reroll threshold is `min(threshold, floor(sides / 2))`. */
+  /** The per-group reroll threshold is `min(threshold, floor(sides / 2))`. */
   private static rerollCap(threshold: number): (config: RollConfig) => RollConfig {
     return (config) => ({ ...config, reroll: Math.min(threshold, Math.floor(config.sides / 2)) });
   }
@@ -350,7 +350,7 @@ export class AttackBuilder implements CheckBuilder {
     if (this.hitEffect) {
       effectPart = `(${this.hitEffect.toExpression()})`;
       if (this.critEffect !== null) {
-        // R33: auto-crit doubles the hit payload's dice — parsed and pooled payloads included.
+        // A crit doubles the hit payload's dice — parsed and pooled payloads included.
         const crit: RollBuilder = this.critEffect ?? this.hitEffect.copy().doubleDice();
 
         const critThreshold = this.check.critThreshold;
@@ -393,8 +393,8 @@ export class AttackBuilder implements CheckBuilder {
         return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
       }
 
-      // If fromAlwaysHit is false (came from ACBuilder), we need to check AC
-      // Natural 1s always miss, everything else that would hit becomes a crit
+      // fromAlwaysHit false (built from an ACBuilder): the roll still checks AC.
+      // Natural 1s always miss; every other roll that would hit becomes a crit.
       const ac = check.attackConfig.ac ?? 0;
       const staticMod = this.check.modifier;
       const bonusDicePMFs = this.check.getBonusDicePMFs(this.check, eps);
@@ -509,8 +509,8 @@ export class AttackBuilder implements CheckBuilder {
       phit += pcrit;
       pcrit = 0;
     } else {
-      // R33: every damage payload with dice doubles them on a crit — a parsed string by rewriting
-      // its dice terms, a pool by doubling inside then pooling. Throws for a parsed payload that
+      // Every damage payload with dice doubles them on a crit — a parsed string by rewriting its
+      // dice terms, a pool by doubling inside then pooling. Throws for a parsed payload that
       // contains an attack check, which is not damage.
       const critBuilder = this.critEffect ?? this.hitEffect?.copy().doubleDice();
 
@@ -519,12 +519,12 @@ export class AttackBuilder implements CheckBuilder {
       }
     }
 
-    // R14: `plusSeparateDamage` channels convolve into hit AND crit — their dice double on a
-    // crit like any attack damage (including under an explicit `onCrit`, which overrides only
-    // the base payload's crit branch, not the channel) — but never feed the base-payload
-    // transforms above. When the attack has no crit mass at all (`noCrit()`, or a check whose
-    // crit weight resolves to 0), the crit branch is unreachable, so a channel that cannot be
-    // doubled unambiguously must not be forced through `doubleDice()` for a branch nobody reads.
+    // `plusSeparateDamage` channels convolve into hit AND crit — their dice double on a crit like
+    // any attack damage (including under an explicit `onCrit`, which overrides only the base
+    // payload's crit branch, not the channel) — but never feed the base-payload transforms above.
+    // When the attack has no crit mass at all (`noCrit()`, or a check whose crit weight resolves
+    // to 0), the crit branch is unreachable, so a channel that cannot be doubled unambiguously
+    // must not be forced through `doubleDice()` for a branch nobody reads.
     const hasChannels = this.separateDamage.length > 0;
     const hasCritMass = critBasePMF !== null && pcrit > 0;
     const hitChannelsPMF = hasChannels
@@ -548,7 +548,7 @@ export class AttackBuilder implements CheckBuilder {
     let missPMF: PMF;
     let missIsDamage: boolean;
     if (this.halfOnMissFlag) {
-      // R28: half of the RESOLVED hit payload (base + every separate channel), never the crit
+      // Half of the RESOLVED hit payload (base + every separate channel), never the crit
       // payload — computed after `hitPMF` above, not from `hitBasePMF`.
       missPMF = hitPMF.scaleDamage(0.5, "floor");
       missIsDamage = true;
@@ -560,7 +560,7 @@ export class AttackBuilder implements CheckBuilder {
       missIsDamage = false;
     }
 
-    // Mix them up
+    // Weight the hit/crit/miss PMFs into the final mixture.
     const mix = new Mixture<OutcomeType>(eps);
     if (phit > 0) mix.add("hit", hitPMF, phit);
     if (critPMF && pcrit > 0) mix.add("crit", critPMF, pcrit);
@@ -593,8 +593,8 @@ export class AttackBuilder implements CheckBuilder {
    * `onCrit` roll, or the hit dice auto-doubled via `copy().doubleDice()`), so its descriptor
    * reflects the crit branch's REAL doubled pool, not the hit pool re-used blindly.
    *
-   * R14: reads ONLY `hitEffect`/`critEffect` (the base pool) — `plusSeparateDamage` channels are
-   * a separate channel, so exempt dice never count toward a match.
+   * Reads ONLY `hitEffect`/`critEffect` (the base pool) — `plusSeparateDamage` channels are a
+   * separate channel, so their dice never count toward a match.
    */
   diceMatchInfo(_eps: number = EPS): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
     const hit = this.matchInfoForEffect(this.hitEffect);

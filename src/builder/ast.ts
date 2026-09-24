@@ -14,7 +14,7 @@ import type {
 import type { RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
-// For now, default to 0 epsilon. Later we can tighten to EPS.
+// Default epsilon 0: single-die PMFs resolve without pruning.
 const defaultEps = 0;
 
 const singleDiePMFCache = new LRUCache<string, PMF>(1000);
@@ -35,7 +35,6 @@ export function dieNodeFromConfig(cfg: RollConfig): DieNode {
 export function astFromRollConfigs(
   configs: readonly RollConfig[]
 ): ExpressionNode | undefined {
-  // TODO add cache for this
   if (!configs || configs.length === 0) return undefined;
 
   const children: { node: ExpressionNode; sign: 1 | -1 }[] = [];
@@ -360,7 +359,7 @@ export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
   let probs = new Map<number, number>();
   for (let v = 1; v <= s; v++) probs.set(v, 1 / s);
 
-  // TODO - check if this is correct. Sequential reroll passes? Or at once?
+  // One-pass reroll: faces 1..k reroll once, and the reroll is kept (see `RollConfig.reroll`).
   const r = Math.max(0, Math.floor(die.reroll || 0));
   if (r > 0) {
     const k = Math.min(r, s);
@@ -391,8 +390,8 @@ export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
     // the roll wasn't max, what was it" distribution — exactly the shape `PMF.branch` requires
     // for its failure argument. It must NOT be rescaled again afterward: `PMF.branch` weights
     // each branch's bins by (p, 1-p) directly, so a `nonMaxPMF` still holding raw mass (1-pMax)
-    // would contribute (1-pMax)^2 instead of (1-pMax) to the result — the source of the
-    // previously measured 0.861 total mass on `d6.explode(1)`.
+    // would contribute (1-pMax)^2 instead of (1-pMax) to the result — `d6.explode(1)` would total
+    // 0.861 mass instead of 1.
     const nonMax = new Map<number, number>();
     const pMax = pmf.pAt(maxFace);
     for (const v of pmf.support()) {
@@ -518,7 +517,7 @@ function computeMaxOfPMF(
   const support = pmf.support();
   const out = new Map<number, number>();
 
-  // For small counts, we can enumerate all outcomes
+  // For small counts, enumerate all outcomes exactly.
   if (count <= 6 && support.length <= 20) {
     function dfs(
       rollsLeft: number,

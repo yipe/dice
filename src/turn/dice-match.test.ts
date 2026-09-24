@@ -23,7 +23,7 @@ function chromaticOrb(baseDice: number, attackBonus = 5, targetAC = 17): AttackB
 }
 
 describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds", () => {
-  // Oracles from the plan: baseDice(level) = level + 2, crit dice = 2 * baseDice.
+  // Oracle rule: baseDice(level) = level + 2, crit dice = 2 * baseDice.
   const rows: { level: number; baseDice: number; hitP: number; critP: number }[] = [
     { level: 1, baseDice: 3, hitP: 0.343750, critP: 0.923096 },
     { level: 2, baseDice: 4, hitP: calculateBounceOdds(4, 8), critP: 0.997597 },
@@ -54,7 +54,7 @@ describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds",
   });
 
   it("a keep()/bestOf() pool has no match info (ambiguous under crit doubling)", () => {
-    // Its crit cannot auto-double (R33 refuses an ambiguous keep), so it states one explicitly.
+    // Its crit cannot auto-double (an ambiguous keep), so it states one explicitly.
     const attack = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3)).onCrit(roll(8, d8).keepHighest(8, 6));
     const { hit, crit } = attack.diceMatchInfo();
     expect(hit).toBeNull();
@@ -197,10 +197,9 @@ describe("bounce() sugar and two-beam correlation", () => {
   });
 
   it("two-beam chain at pHit=0.6, 3d8: mean 9.770625, variance 92.944 (not the scalar-gate 74.902)", () => {
-    // The oracle (spec D3b) is the SIMPLE two-outcome model: X1 = 1{hit}*S1 where S1 is a plain
-    // 3d8 sum, no crit-doubling. noCrit() folds crit mass into hit at the same 3d8 dice, matching
-    // that model exactly. An AC where exactly 12 of 20 face values (9-20) succeed gives pHit = 0.6
-    // precisely.
+    // The oracle is the simple two-outcome model: X = 1{hit}·(plain 3d8 sum), no crit-doubling.
+    // noCrit() folds crit mass into hit at the same 3d8 dice, matching that model exactly. An AC
+    // where exactly 12 of 20 face values (9-20) succeed gives pHit = 0.6 precisely.
     const attack = d20.plus(0).ac(9).onHit(roll(3, d8)).noCrit();
     const resolution = attack.resolve();
     expect(resolution.weights.hit).toBeCloseTo(0.6, 10);

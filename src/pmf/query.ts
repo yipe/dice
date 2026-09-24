@@ -580,7 +580,8 @@ export class DiceQuery {
     const wanted = Array.isArray(labels) ? labels : [labels];
 
     let total = 0;
-    // By linearity of expectation, we can sum the expected damages from each individual PMF. This avoids issues with the `count` aggregation during
+    // By linearity of expectation, sum the wanted-label damage over each single PMF directly,
+    // avoiding the `count` aggregation issues a merged PMF would introduce.
     for (const single of this.singles) {
       for (const [dmg, bin] of single) {
         let p = 0;
@@ -945,8 +946,7 @@ export class DiceQuery {
     const ccdfData: number[] = [];
 
     for (const damage of support) {
-      // For CCDF at point x, we want P(X ≥ x) = 1 - P(X < x)
-      // which is the total probability minus cumulative up to (but not including) x
+      // P(X ≥ x) is the total mass minus the cumulative up to (not including) x.
       const ccdf = 1 - cumulativeProbability;
       ccdfData.push(asPercentages ? ccdf * 100 : ccdf);
 
@@ -963,10 +963,6 @@ export class DiceQuery {
     };
   }
 
-  /*
-        Statistics snapshot of the query.
-            */
-
   /** Probability of doing strictly more than threshold damage (default >0). */
   probDamageGreaterThan(threshold = 0): number {
     let acc = 0;
@@ -974,7 +970,7 @@ export class DiceQuery {
     return acc;
   }
 
-  /** All outcome keys actually present (typed & ordered if you pass an order). */
+  /** All outcome keys present in the PMF, ordered by `order` when given. */
   outcomeKeys(order?: OutcomeType[]): OutcomeType[] {
     const found = new Set<string>();
     for (const [, bin] of this.combined.map) {

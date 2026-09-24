@@ -25,7 +25,7 @@ function outcomeOdds(bonus: number, ac: number): Record<Mode, number> {
 }
 
 /**
- * O16 by enumerating the rules text: two muskets (`d20+9`, `1d12+18`), then two unarmed
+ * Enumerating the rules text: two muskets (`d20+9`, `1d12+18`), then two unarmed
  * strikes (`d20+11`, `1d10+5`), one reroll of the first missed musket, and a `1d10` rider on
  * the first landing among the muskets and the reroll — plus the unarmed strikes when
  * `riderWatchesUnarmed` — doubled on a crit. `firstMiss` places the reroll directly after the
@@ -102,8 +102,8 @@ describe("first-miss (R27)", () => {
       expect(pair.onFirstHit(roll(1, d10)).mean()).toBeCloseTo(row.base, 4);
       const anyMiss = pair.onAnyMiss(musket).onFirstHit(roll(1, d10));
       const firstMiss = pair.onFirstMiss(musket).onFirstHit(roll(1, d10));
-      // Exact rational value (no /3 term survives a dice-total mean); the plan's 4dp figure
-      // sits exactly 5e-5 from it at AC 15, a toBeCloseTo(…, 4) boundary that passes or fails on
+      // Exact rational value (no /3 term survives a dice-total mean); the mean sits exactly
+      // 5e-5 from the 4dp figure at AC 15, a toBeCloseTo(…, 4) boundary that passes or fails on
       // float noise. Assert precisely.
       expect(anyMiss.mean()).toBeCloseTo(row.withReroll, 10);
       expect(firstMiss.mean()).toBeCloseTo(row.withReroll, 10);
@@ -116,8 +116,8 @@ describe("first-miss (R27)", () => {
     for (const ac of [15, 18, 21]) {
       const anyMiss = o16Turn(ac, false);
       const firstMiss = o16Turn(ac, true);
-      // Exact rational value; AC 15 sits exactly 5e-5 from the plan's 4dp figure (69.7563),
-      // a toBeCloseTo(…, 4) boundary that passes or fails on float noise. Assert precisely.
+      // Exact rational value; AC 15 sits exactly 5e-5 from the 4dp figure (69.7563), a
+      // toBeCloseTo(…, 4) boundary that passes or fails on float noise. Assert precisely.
       expect(anyMiss.mean()).toBeCloseTo(planAnyMiss[ac], 10);
       expect(Math.abs(anyMiss.mean() - o16Mean(ac, false))).toBeLessThan(1e-9);
       expect(Math.abs(firstMiss.mean() - o16Mean(ac, true))).toBeLessThan(1e-9);

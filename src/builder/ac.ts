@@ -7,18 +7,18 @@ import type { RollConfig, RollType } from "./types";
 export interface AttackConfig {
   ac: number;
   critThreshold: number;
-  // Attacker property (R30), not a roll type: how many dice a NET advantage rolls. Persists
-  // across `withCheck` re-derivations, whether the advantage came from this source's own roll
-  // type or was granted later (`combine()` below). Default 2.
+  // An attacker property, not a roll type: how many dice a NET advantage rolls. Persists across
+  // `withCheck` re-derivations, whether the advantage came from this source's own roll type or
+  // was granted later (`combine()` below). Default 2.
   advantageDice: 2 | 3;
 }
 
 /**
- * R30: combine a source's own roll type with granted advantage/disadvantage flags by
- * cancellation — `{advantage, disadvantage}` from any combination of source and grants resolve
- * to `advantage` / `disadvantage` / `flat`. `advantageDice` governs how many dice a NET
- * advantage rolls, whether the advantage came from `rollType` itself or from `flags`. Pure;
- * independently testable against the full 3×2×4 table.
+ * Combines a source's own roll type with granted advantage/disadvantage flags by cancellation —
+ * `{advantage, disadvantage}` from any combination of source and grants resolve to `advantage` /
+ * `disadvantage` / `flat`. `advantageDice` governs how many dice a NET advantage rolls, whether
+ * the advantage came from `rollType` itself or from `flags`. Pure; independently testable against
+ * the full 3×2×4 table.
  */
 export function combine(
   rollType: RollType,
@@ -49,10 +49,6 @@ export class ACBuilder extends RollBuilder {
     }
   }
 
-  //   onHit(effect: RollBuilder): AttackBuilder {
-  //     return new AttackBuilder(this).onHit(effect)
-  //   }
-
   onHit(val: number): AttackBuilder;
   onHit(val: string): AttackBuilder;
   onHit(val: RollBuilder): AttackBuilder;
@@ -70,7 +66,7 @@ export class ACBuilder extends RollBuilder {
   }
 
   /**
-   * R30: three-dice advantage is an attacker property, not a roll type. Setting it now applies
+   * Three-dice advantage is an attacker property, not a roll type. Setting it now applies
    * whenever the NET result later resolves to advantage — whether this source already has
    * advantage baked in, or advantage is granted afterward (via `withCheck`).
    */
@@ -118,7 +114,7 @@ export class ACBuilder extends RollBuilder {
       : `A|${this.attackConfig.ac}|${this.attackConfig.critThreshold}|${this.attackConfig.advantageDice}|${base}`;
   }
 
-  // TODO - move this to AC Builder… or if we create a DC builder that has critOn, throw an error?
+  /** Sets the crit threshold: a natural roll at or above it is a crit. */
   critOn(threshold: number): ACBuilder {
     const newConfig: AttackConfig = {
       ...this.attackConfig,
@@ -172,7 +168,7 @@ export class ACBuilder extends RollBuilder {
     return PMF.fromMap(out, eps);
   }
 
-  /** R18: accepts a replacement AC (today's took no argument — `vsAC` needs to rebind it). */
+  /** Accepts a replacement AC, so `vsAC` can rebind the check without rebuilding the roll. */
   override copy(ac?: number): ACBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const newConfig: AttackConfig = {

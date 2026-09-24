@@ -86,7 +86,7 @@ export interface TurnPlan {
   /**
    * The LAST step index that reads each flag bit, the twin of `groupLastReadStep`:
    * past it the bit no longer changes any decision, so the walk drops it from the
-   * merge key (R31). A turn with no conditions has no bits.
+   * merge key. A turn with no conditions has no bits.
    */
   flagLastReadStep: readonly number[];
 }
@@ -123,7 +123,7 @@ export type StepVariant = readonly Draw[];
 /**
  * An above-threshold landing of a substitute's watched step: `hold` keeps the
  * roll, `spend` rerolls it. Which one a variant carries depends on whether a
- * later watched step can still land (R25).
+ * later watched step can still land.
  */
 interface HoldChoice {
   outcome: "hit" | "crit";
@@ -161,9 +161,9 @@ function advanced(
 }
 
 /**
- * One condition, applied at one of its source steps (R29, §7.5). When the drawn
- * outcome qualifies, the draw splits by `chance`: `grants` are set on one part,
- * `onSave` on the other.
+ * One condition, applied at one of its source steps. When the drawn outcome
+ * qualifies, the draw splits by `chance`: `grants` are set on one part, `onSave`
+ * on the other.
  */
 export interface GrantApplication {
   /** Index into {@link TurnPlan.conditionIds}. */
@@ -365,7 +365,7 @@ function toPMF(
 }
 
 /**
- * Crit payload for a rider (R33): an explicit `critDamage` wins; otherwise every part with dice
+ * Crit payload for a rider: an explicit `critDamage` wins; otherwise every part with dice
  * doubles them — a builder via `doubleDice()`, which for a pool doubles inside then pools and for
  * a parsed string rewrites its dice terms. A part with no dice to double is added as-is on a crit,
  * like the builder it stands for: a bare `PMF`, a `ToPMF` without `doubleDice()` (an attack or save
@@ -410,7 +410,7 @@ function diceMatchInfoOf(
  *
  * The shape comes from the PMF's outcome labels, with one exception for a rider's
  * `damage`: a parsed string whose dice can double is damage, although `parse()` labels
- * its whole PMF 'hit' (R33 — so it doubles on a crit and takes `critDamage`, exactly like
+ * its whole PMF 'hit' (so it doubles on a crit and takes `critDamage`, exactly like
  * the equivalent builder). In a list, only the other parts' labels decide. A parsed
  * string with a check stays label-shaped, as do attack builders and labelled PMFs; so
  * does one `canDoubleDice()` rejects for another reason (a dice-valued repeat count, `d4d6`).
@@ -446,7 +446,7 @@ function sliceSource(
 
 /**
  * A source's payload split at the base: what transforms and match odds may read,
- * and the `plusSeparateDamage` channels convolved in after them (R14).
+ * and the `plusSeparateDamage` channels convolved in after them.
  *
  * Duck-typed like {@link diceMatchInfoOf}: an `AttackBuilder` resolves to
  * `hitBase`/`critBase`/`hitSeparate`/`critSeparate`; anything else (a bare `PMF`,
@@ -853,8 +853,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     readsByRider.set(node, group);
     if (rider.on === "every-hit") perHitGroups.set(riderIds[node], group);
   }
-  // A condition reuses the group its `of` already has (R29): a first-hit grant and a
-  // first-hit rider over the same attacks share one. Only first-hit / first-miss read it.
+  // A condition reuses the group its `of` already has: a first-hit grant and a first-hit
+  // rider over the same attacks share one. Only first-hit / first-miss read it.
   const conditionGroups = conditions.map((condition, index) =>
     GRANT_TRIGGERS[condition.on].readsGroup ? groupOf(conditionSources[index]) : -1
   );
@@ -869,7 +869,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // --- sequence --------------------------------------------------------------
   // Declared attacks in order, then riders in dependency order — except that a
   // `first-miss` rider gets one slot directly after each step of every source it
-  // watches, so its reroll lands where the miss happened (R27).
+  // watches, so its reroll lands where the miss happened.
   type Entry = { id: string; attack: number; rider: number };
   const sequence: Entry[] = attackIds.map((id, index) => ({ id, attack: index, rider: -1 }));
   for (const node of order) {
@@ -892,7 +892,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   }
 
   // --- flags -------------------------------------------------------------------
-  // One flag per granted modifier (R31): each of a condition's grants and each of its
+  // One flag per granted modifier: each of a condition's grants and each of its
   // onSave grants, keyed by (condition, grant) rather than by step, so `next-attack`
   // and `end-of-turn` are distinct flags even for the same modifier. A flag read by
   // no later step gets no bit at all: setting it could change nothing.
@@ -1034,11 +1034,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
    * when a `dice-match` trigger reads it, and into spend/hold parts under a
    * substitute's `policy`; then the separate channels; then the `every-hit` fold;
    * then miss. Every split happens on the base payload, so neither the match odds
-   * nor the transform ever see a separate channel's or the fold's dice (R14, O21).
+   * nor the transform ever see a separate channel's or the fold's dice.
    *
    * `fixed` draws belong to every variant. Each of `choices` is an above-threshold
-   * landing that is held or spent depending on the walk state (R25), so a variant
-   * takes either its `hold` or its `spend` draws.
+   * landing that is held or spent depending on the walk state, so a variant takes
+   * either its `hold` or its `spend` draws.
    */
   const drawsFor = (
     sourceId: string,
@@ -1085,7 +1085,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         continue;
       }
       // The threshold reads the base payload total as it stands — dice plus the
-      // payload's own flat bonus — so each mode splits on its own values (R25).
+      // payload's own flat bonus — so each mode splits on its own values.
       const threshold = policy[outcome];
       const [below, above] = base.splitByFactor((value) => (value < threshold ? 1 : 0));
       if (below.mass() > 0) {
@@ -1131,7 +1131,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
    * state (`codes`, `fired`)? Exact reachability over the walk's own transitions —
    * every positive-mass draw of each later step's plain variant — memoized on the
    * state. It reads the same group codes and fire slots the walk keys on, so a
-   * threshold never holds for a watched step that can no longer fire (R25).
+   * threshold never holds for a watched step that can no longer fire.
    */
   const steps: Step[] = [];
   const laterLandings = substitutes.map((_, substitute) => {
@@ -1247,9 +1247,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     if (slices && readMask === 0) {
       ({ variants, select } = table(slices));
     } else if (slices) {
-      // Read flags select a roll context (R26, R30): the source re-derived through
-      // `withCheck` with the granted modifiers combined into its own roll type. One
-      // table per distinct resolved context the read flags can reach, not per flag set.
+      // Read flags select a roll context: the source re-derived through `withCheck` with
+      // the granted modifiers combined into its own roll type. One table per distinct
+      // resolved context the read flags can reach, not per flag set.
       const source = damageOf(entry.id);
       const rebindable = source as { withCheck?: (fn: (check: Check) => Check) => Damage };
       /** The source re-derived under modifier key `key`, and its resolved context. */
@@ -1338,14 +1338,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     });
   });
 
-  // The LAST step index (in final walk order) that reads each group. Once the walk has passed
-  // that step, the group's specific code stops discriminating any future decision — a group read
-  // by exactly one downstream step (the common `dice-match` chain shape: group N is read only by
-  // step N+1) becomes dead weight in the merge key for every step after that read. This was the
-  // dominant cost in a long `bounce()` chain (measured: fixing it turned 1.8s at a 9-deep chain
-  // into ~40ms). `perHitGroups` groups are read only at the very end (after every step, for
-  // `every-hit` fire probability), so they stay live through the whole walk — `steps.length`
-  // sentinel.
+  // Group last-read indices (see the `groupLastReadStep` field docs). `perHitGroups` groups are
+  // read only at the final collapse, so they stay live the whole walk.
   const groupLastReadStep = new Array<number>(groupSources.length).fill(-1);
   steps.forEach((step, stepIndex) => {
     // A first-hit / first-miss grant reads its group's pre-draw code at its source step.

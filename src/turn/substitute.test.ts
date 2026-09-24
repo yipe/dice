@@ -119,10 +119,10 @@ function pathMean(
 }
 
 /**
- * O20/O27 by exact enumeration: two `d20+5` vs AC 12 attacks, a once-per-turn
- * keep-the-better reroll spent under a threshold policy. Attack 1 can always be
- * followed by attack 2; attack 2 is the last. `strictLast` applies the threshold
- * on the last attack too — the wrong reading of the policy.
+ * Exact enumeration: two `d20+5` vs AC 12 attacks, a once-per-turn keep-the-better
+ * reroll spent under a threshold policy. Attack 1 can always be followed by attack 2;
+ * attack 2 is the last. `strictLast` applies the threshold on the last attack too — the
+ * wrong reading of the policy.
  */
 function exactPolicyMean(
   thresholds: { hit: number; crit: number } | null,
@@ -199,7 +199,7 @@ describe("keepBestDamage() — exactness", () => {
     const pmf = turn(o20Attack).onFirstHit(keepBestDamage()).pmf;
     expect(conditionalMean(pmf, "hit")).toBeCloseTo(11.3719, 4);
     expect(conditionalMean(pmf, "crit")).toBeCloseTo(18.9334, 4);
-    expect(conditionalMean(pmf, "crit")).not.toBeCloseTo(22.7438, 1); // Defect B
+    expect(conditionalMean(pmf, "crit")).not.toBeCloseTo(22.7438, 1); // the whole pool rolled twice
   });
 
   it("leaves the miss slice untouched and total mass at 1", () => {
@@ -247,9 +247,9 @@ describe("O9: split equivalence (R14) — onHit(2d6+5+2d6) vs onHit(2d6+5) + onE
 describe("O20: optimal-vs-first-hit gain ratio at P(hit)=0.65 (R25, no-crit reading)", () => {
   // The engine has no direct P(hit) knob, so build an attack that lands on exactly 13 of 20
   // rolls (65%) with crit weight forced to 0 via noCrit() — miss 0.35, hit 0.65, crit 0. That is
-  // the reading the plan's headline ratio actually uses: the audit's re-derivation confirmed
-  // counting the O20 setup's own crit slice (hit 0.65, crit 0.05) instead gives
-  // 1.158736 / 1.339681 / 1.510045, which does not match the plan's 1.136 / 1.300 / 1.456.
+  // the no-crit reading the headline ratio uses: counting the setup's own crit slice
+  // (hit 0.65, crit 0.05) instead gives 1.158736 / 1.339681 / 1.510045, which does not match the
+  // 1.136 / 1.300 / 1.456 below.
   const noCritAttack = d20.plus(0).ac(8).onHit(roll(2, d6)).noCrit();
 
   it("crit weight is exactly 0 and hit is exactly 0.65", () => {
@@ -264,7 +264,7 @@ describe("O20: optimal-vs-first-hit gain ratio at P(hit)=0.65 (R25, no-crit read
   const p = 0.65;
 
   /**
-   * Backward induction (R25): the expected value the unspent reroll still adds with `k` future
+   * Backward induction: the expected value the unspent reroll still adds with `k` future
    * landing opportunities (including the one about to resolve) left, under optimal play.
    * `optimalValueAdd(0) = 0` makes the last opportunity always spend — the spend-now gain
    * `keepBetter(x, payload) - x` is never negative.
@@ -576,7 +576,7 @@ describe("keepBestDamage().ifBelow() — hold semantics (R25, O27)", () => {
   });
 
   /**
-   * Two O20 attacks, a `first-miss` reroll of the same attack, and the transform
+   * Two identical attacks, a `first-miss` reroll of the same attack, and the transform
    * watching all three, by exact enumeration of the rules. Turn order: attack 1;
    * the reroll right after it if it missed; attack 2; the reroll right after it if
    * it missed and the reroll is unused. Attack 1 and a reroll after it are always
@@ -656,14 +656,8 @@ describe("keepBestDamage() — errors (R17, R23)", () => {
   it("an `of` naming nothing in the turn is unknown-id; naming a save is not-an-attack", () => {
     expect(codeOf(() => o20Turn.onFirstHit(keepBestDamage(), { of: ["nope"] }))).toBe("unknown-id");
     const save = d20.dc(13).onSaveFailure(roll(3, d6)).saveHalf();
-    // `not-an-attack` here predates S1: `resolveSources`'s "has no hit/crit outcomes" check
-    // (plan.ts) is the same mechanism riders used on `main` before this branch — S1 only
-    // extended it to substitutes (R23: "a substitute or rider watching a save/bare-PMF source
-    // ... already throws `has no hit/crit outcomes` ... unchanged — verified working"). The
-    // plan's Tests bullet ("unknown-id for an `of` naming a non-attack") undersells this: a
-    // *declared* non-attack source (like this save-shaped rider) is `not-an-attack`, not
-    // `unknown-id` — a plan-text inaccuracy, reported rather than "fixed" by changing
-    // pre-existing, verified-working behavior.
+    // A save-shaped rider named in `of` is `not-an-attack` (it has no hit/crit outcomes), not
+    // `unknown-id` — the same `resolveSources` check riders and substitutes both pass through.
     expect(
       codeOf(() => o20Turn.onFirstHit(save, { id: "poison" }).onFirstHit(keepBestDamage(), { of: ["poison"] }))
     ).toBe("not-an-attack");
@@ -774,10 +768,10 @@ describe("state count (R31)", () => {
     const t = turn([musket, musket])
       .onAnyMiss(musket, { id: "reroll" })
       .onFirstHit(roll(1, d10), { of: ["attack 1", "attack 2", "reroll"] });
-    // 8997/160 exactly; the plan prints 56.2313 (4dp), which sits exactly 5e-5 from this value —
-    // a toBeCloseTo(…, 4) boundary that passes or fails on float noise. Pin the exact figure.
+    // 8997/160 exactly; the mean sits exactly 5e-5 from 56.23125 — a toBeCloseTo(…, 4)
+    // boundary that passes or fails on float noise. Pin the exact figure.
     expect(t.mean()).toBeCloseTo(56.23125, 10);
-    // Measured on 0.11.0 (the published engine) with the same turn.
+    // Pinned merge-key counts for this turn shape.
     expect(inspectTurn(t).stateCounts).toEqual([3, 6, 7, 3]);
   });
 });
@@ -794,10 +788,10 @@ describe("O17: a substitution must see the reroll (R17)", () => {
       const base = turn([musket, musket])
         .onAnyMiss(musket, { id: "reroll" })
         .onFirstHit(roll(1, d10), { of: ["attack 1", "attack 2", "reroll"] });
-      // Exact rational baseline (no /3 term survives a dice-total mean), so the plan's 4dp
-      // figure can sit exactly at the toBeCloseTo(…, 4) boundary (AC 15 does). Assert precisely.
+      // Exact rational baseline (no /3 term survives a dice-total mean), so the 4dp figure can
+      // sit exactly at the toBeCloseTo(…, 4) boundary (AC 15 does). Assert precisely.
       expect(base.mean()).toBeCloseTo(row.baseline, 10);
-      // The default `of` sees the reroll (R18), so the short spelling is the right one.
+      // The default `of` sees the reroll, so the short spelling is the right one.
       expect(base.onFirstHit(keepBestDamage()).mean()).toBeCloseTo(row.withReroll, 4);
       const withoutReroll = base.onFirstHit(keepBestDamage(), { of: ["attack 1", "attack 2"] }).mean();
       expect(withoutReroll).toBeCloseTo(row.without, 4);

@@ -38,7 +38,7 @@ interface TurnState {
   last: { kind: "rider" | "substitute"; index: number } | null;
 }
 
-/** What a trigger verb accepts: damage, grants, or both in one list (R29). */
+/** What a trigger verb accepts: damage, grants, or both in one list. */
 type Effect = RiderDamage | Grant | readonly (Damage | Grant)[];
 
 /** Test seam: the plan and walk size of a turn. Not exported from the package. */
@@ -361,11 +361,10 @@ export class Turn {
    * ```
    *
    * Always binds to the *immediately* preceding rider, so the two are branches of
-   * one decision and can never both land. Note that chaining it therefore
-   * alternates rather than laddering: `a.otherwise(b).otherwise(c)` makes `c`
-   * fire whenever `b` did not, which is exactly when `a` did. For a genuine
-   * three-way priority chain, name the riders and use explicit `not-fired`
-   * triggers against the right one.
+   * one decision and can never both land. Chaining it therefore alternates rather
+   * than laddering: `a.otherwise(b).otherwise(c)` makes `c` fire whenever `b` did
+   * not, which is exactly when `a` did. For a genuine three-way priority chain,
+   * name the riders and use explicit `not-fired` triggers against the right one.
    */
   otherwise(
     damage: RiderDamage,
@@ -587,7 +586,7 @@ export class Turn {
       /**
        * Per condition, the part of `pmf`'s mass in which it was applied at least once
        * while a later step read it. Carried as mass rather than as a key bit: whether
-       * it was applied changes no later transition, so it must not split states (R31).
+       * it was applied changes no later transition, so it must not split states.
        */
       applied: number[];
     };
@@ -605,21 +604,18 @@ export class Turn {
     plan.steps.forEach((step, stepIndex) => {
       const next = new Map<string, State>();
 
-      // Groups with no reader at a LATER step are dead weight in the key: once
-      // the walk passes a group's last reader, its specific code can no longer
-      // change any future decision, so two states differing only in a dead
-      // group's code are behaviorally identical from here on. Filtering them
-      // out (recomputed per step, since "later" shifts as the walk advances)
-      // is what actually kept a long `dice-match` chain's state count from
-      // blowing up — a group read by exactly one downstream step (the common
-      // `bounce()` shape) would otherwise keep splitting states for every
-      // subsequent step even though nothing ever reads it again.
+      // Groups with no reader at a LATER step are dead weight in the key: once the walk passes a
+      // group's last reader, its specific code can no longer change any future decision, so two
+      // states differing only in a dead group's code are behaviorally identical from here on.
+      // Filtering them out (recomputed per step, since "later" shifts as the walk advances) keeps
+      // a long `dice-match` chain's state count from growing — a group read by exactly one
+      // downstream step would otherwise keep splitting states after nothing reads it again.
       const liveGroups: number[] = [];
       for (let g = 0; g < plan.groupCount; g++) {
         if (plan.groupLastReadStep[g] > stepIndex) liveGroups.push(g);
       }
       // Flags get the same treatment, and a dead flag is cleared rather than merely
-      // left out of the key, so a stale bit can never be read back (R31).
+      // left out of the key, so a stale bit can never be read back.
       let liveFlags = 0;
       plan.flagLastReadStep.forEach((last, bit) => {
         if (last > stepIndex) liveFlags |= 1 << bit;
@@ -678,7 +674,7 @@ export class Turn {
           continue;
         }
 
-        // Order at a step (§7.2): read the flags to select the variant, clear the
+        // Order at a step: read the flags to select the variant, clear the
         // `next-attack` flags this roll consumes, draw, advance the groups, then
         // apply this outcome's grants.
         const draws = step.variants[step.select(state.codes, fired, state.flags)];

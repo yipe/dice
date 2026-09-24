@@ -5,10 +5,11 @@ import type { PMF } from "../src/pmf/pmf";
 import { turn } from "../src/turn";
 
 /**
- * R33 on a per-die keep. Keep-highest-of-1 ("roll it N times, keep the best") doubles its dice
- * inside each trial, like a pool. Every other per-die keep, a bestOf() that doubling moves between
- * a plain sum and a keep, and a die rolled with advantage/disadvantage/elven accuracy have no single
- * doubled meaning, so doubling them throws until the caller gives an explicit crit.
+ * Crit doubling on a per-die keep. Keep-highest-of-1 ("roll it N times, keep the best") doubles
+ * its dice inside each trial, like a pool. Every other per-die keep, a bestOf() that doubling
+ * moves between a plain sum and a keep, and a die rolled with advantage/disadvantage/elven
+ * accuracy have no single doubled meaning, so doubling them throws until the caller gives an
+ * explicit crit.
  */
 
 function expectSamePMF(actual: PMF, expected: PMF): void {
@@ -24,8 +25,8 @@ const P_ANY_CRIT = 0.0975;
 
 /** Exact means (Python Fractions over the full enumeration). */
 const MAX_OF_TWO_2D6 = 5425 / 648; // 8.3719
-const MAX_OF_TWO_2D6_PLUS_3 = 7369 / 648; // 11.3719, O4-hit
-const MAX_OF_TWO_4D6_PLUS_3 = 7950193 / 419904; // 18.9334, O4-crit
+const MAX_OF_TWO_2D6_PLUS_3 = 7369 / 648; // 11.3719
+const MAX_OF_TWO_4D6_PLUS_3 = 7950193 / 419904; // 18.9334
 const MAX_OF_THREE_6D6 = 2968620697 / 120932352; // 24.5478
 const MAX_OF_TWO_2D12_PLUS_5 = 107755 / 5184; // 20.7861
 const MAX_OF_FOUR_2D6 = 7972693 / 839808; // 9.4935

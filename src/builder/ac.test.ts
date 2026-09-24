@@ -58,7 +58,6 @@ describe("AttackRollBuilder", () => {
         "(d20 > d20 + 7 + 1d4 AC 14)"
       );
       expect(advBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should work with elven accuracy and bonus dice", () => {
@@ -72,7 +71,6 @@ describe("AttackRollBuilder", () => {
         "(d20 > d20 > d20 + 9 + 1d4 AC 17)"
       );
       expect(elvenBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should work with disadvantage and bonus dice", () => {
@@ -82,7 +80,6 @@ describe("AttackRollBuilder", () => {
         "(d20 < d20 + 6 + 1d4 AC 13)"
       );
       expect(disBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should handle negative bonus dice", () => {
@@ -138,7 +135,6 @@ describe("AttackRollBuilder", () => {
       expect(blessedAttack.toPMF()).toBeDefined();
       const pmf = blessedAttack.toPMF();
       expect(pmf).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should add single d6 bonus (bardic inspiration)", () => {
@@ -147,7 +143,6 @@ describe("AttackRollBuilder", () => {
       expect(inspiredAttack.toPMF()).toBeDefined();
       const pmf = inspiredAttack.toPMF();
       expect(pmf).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should chain multiple different dice bonuses", () => {
@@ -157,14 +152,12 @@ describe("AttackRollBuilder", () => {
         "(d20 + 5 + 1d8 + 1d6 + 1d4 AC 15)"
       );
       expect(multiDiceAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should chain multiple identical dice bonuses", () => {
       const doubleBlessAttack = d20.plus(d4).plus(d4).plus(6).ac(16);
       expect(doubleBlessAttack.toExpression()).toBe("(d20 + 6 + 2d4 AC 16)");
       expect(doubleBlessAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should handle dice bonuses with modifiers", () => {
@@ -180,13 +173,12 @@ describe("AttackRollBuilder", () => {
         "(d20 + 5 + d6 reroll 1 AC 14)"
       );
       expect(rerollDiceAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
   });
 
   describe("Error Handling", () => {
     it("should handle invalid AC values", () => {
-      // Handles htem for now… we can always prevent it later if needed
+      // Negative AC is accepted, not validated.
       expect(() => {
         void d20.ac(-1);
       }).not.toThrow();
@@ -512,7 +504,6 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(4).ac(14).onHit(roll(3, d6).minimum(2).plus(4));
         const pmf = attack.toPMF();
 
-        // TODO: Add expression checks
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBe(0);
       });
@@ -521,14 +512,13 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(6).ac(16).onHit(roll(2, d8).reroll(1).plus(3));
         const pmf = attack.toPMF();
 
-        // TODO: add expression checks
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBeGreaterThanOrEqual(0);
         expect(pmf.mean()).toBeGreaterThan(0);
       });
 
       it("should handle attack with keep dice in damage, given an explicit crit", () => {
-        // A 4d6-drop-lowest payload has no single doubled crit (R33), so it takes an explicit one.
+        // A 4d6-drop-lowest payload has no single doubled crit, so it takes an explicit one.
         const keep = () => roll(4, d6).keepHighest(4, 3);
         const attack = d20
           .plus(5)
@@ -575,7 +565,6 @@ describe("AttackRollBuilder", () => {
         "(d20 + 5 AC 15) * (2d6 + 3) crit (5d6 + 3)"
       );
 
-      // TODO - add resolve() math checks here
     });
 
     it("can chain", () => {

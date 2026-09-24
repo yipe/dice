@@ -9,7 +9,7 @@ describe("PMF.maxOfTwo", () => {
     const viaMaxOfTwo = base.toPMF().maxOfTwo();
     const viaKeepHighestAll = base.keepHighestAll(2, 1).toPMF();
 
-    // Full-PMF equality, per bin, to the plan's stated tolerance.
+    // Full-PMF equality, per bin, to the stated tolerance.
     const support = new Set<number>([
       ...viaMaxOfTwo.support(),
       ...viaKeepHighestAll.support(),
@@ -21,7 +21,7 @@ describe("PMF.maxOfTwo", () => {
       );
     }
 
-    // O8's pinned mean.
+    // The pinned mean.
     expect(viaMaxOfTwo.mean()).toBeCloseTo(11.3719135802469, 12);
     expect(viaKeepHighestAll.mean()).toBeCloseTo(11.3719135802469, 12);
   });
@@ -48,7 +48,7 @@ describe("PMF.maxOfTwo", () => {
     expect(result.mean()).toBeCloseTo(1.75, 12);
 
     // Per-bin provenance: the winning value's original count/attr PROPORTIONS
-    // survive, only the bin's mass is rescaled (R11 / step 1 doc comment).
+    // survive, only the bin's mass is rescaled.
     // Bin 1: original count {hit:0.3, crit:0.2} summed to p=0.5; new p=0.25,
     // so the factor is 0.5 and every label scales by the same factor.
     expect(result.pAt(1)).toBeCloseTo(0.25, 12);

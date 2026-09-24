@@ -133,7 +133,7 @@ describe("String Damage Expressions", () => {
         .ac(18)
         .onHit("3kl2(1d6)+3")
         .onCrit("3kl2(2d6)+3");
-      // A keepLowest has no single doubled crit (R33), so the builder states the same crit.
+      // A keepLowest has no single doubled crit, so the builder states the same crit.
       const builderAttack = d20
         .plus(10)
         .ac(18)

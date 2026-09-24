@@ -46,9 +46,9 @@ export interface DicePrivateData {
    * mix crits where a branch does, at that branch's share. Read and written by parser.ts. */
   branches?: readonly Dice[];
   /** Set on the result of an `AC` gate: a following `*` is an attack's hit payload, which crits
-   * (R33) even with no crit clause. Read by {@link parseExpression} in parser.ts. */
+   * even with no crit clause. Read by {@link parseExpression} in parser.ts. */
   isACCheck?: boolean;
-  /** Set on an attack whose crit is its hit payload doubled (R33, no crit clause): the payload's
+  /** Set on an attack whose crit is its hit payload doubled (no crit clause): the payload's
    * text, so a trailing hit-only term joins the payload and doubles with it. See parser.ts. */
   implicitCrit?: { payload: string };
 }
@@ -129,7 +129,6 @@ export class Dice {
   getAverage(key: OutcomeType): number {
     const distribution = this.getOutcomeDistribution(key);
     if (!distribution) return 0;
-    // TODO caching opportunity
 
     const totalCount = Object.values(distribution).reduce(
       (sum, count) => sum + count,
@@ -143,7 +142,7 @@ export class Dice {
     return expectedDamage / totalCount;
   }
 
-  // TODO this can be private later if we change how testing works
+  // Public (no modifier) for direct test access.
   calculateHitDistribution(): DamageDistribution {
     const hitValues: DamageDistribution = {};
 
@@ -472,7 +471,7 @@ export class Dice {
       const numKey = Number(key);
       result.increment(numKey, value);
 
-      // If the key did not already exist in `other`, we remove it from `except`
+      // A key absent from `other` is still tracked in `except`.
       if (!(numKey in other.faces)) {
         except.increment(numKey, value); // still tracked in except
       }
