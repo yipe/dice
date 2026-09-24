@@ -8,6 +8,7 @@ import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
+import { checkExpression, rootDieExpression } from "./expression";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
@@ -353,7 +354,13 @@ export class AttackBuilder implements CheckBuilder {
     return new RollBuilder(configs);
   }
 
-  // Legacy expressions
+  /**
+   * The attack as a string `parse()` reads back to the same outcomes, up to the natural-1 miss and
+   * natural-20 hit, which the grammar does not model. The crit clause is always printed, since a
+   * string without one crits with its hit dice doubled: `noCrit()` prints `crit (<hit>)`, and a crit
+   * range keeps its `xcritN`. A check that crits on every hit (`alwaysCrits()`) prints `xcritS`, S
+   * the natural die's size; one that always hits prints just its natural roll, which never totals 0.
+   */
   toExpression(): string {
     // The string grammar has no separate-damage channel and no "half the hit payload on a miss"
     // clause; rendering without them would round-trip to a different distribution.
@@ -362,33 +369,40 @@ export class AttackBuilder implements CheckBuilder {
         "toExpression() cannot represent plusSeparateDamage() or halfOnMiss(): the expression grammar has no separate damage channel or half-on-miss clause. Use toPMF() instead."
       );
     }
-    const checkPart = this.check.toExpression();
+    const check = this.check;
+    const naturalRoll = rootDieExpression(check);
+    let checkPart: string;
+    if (check instanceof AlwaysCritBuilder && !check.fromAlwaysHit) {
+      checkPart = `(${checkExpression(check)} AC ${check.attackConfig.ac ?? 0})`;
+    } else if (check instanceof AlwaysHitBuilder || check instanceof AlwaysCritBuilder) {
+      checkPart = naturalRoll ?? check.toExpression();
+    } else {
+      checkPart = check.toExpression();
+    }
 
     let effectPart = "";
 
     if (this.hitEffect) {
-      effectPart = `(${this.hitEffect.toExpression()})`;
-      if (this.critEffect !== null) {
-        // A crit doubles the hit payload's dice — parsed and pooled payloads included.
-        const crit: RollBuilder = this.critEffect ?? this.hitEffect.copy().doubleDice();
+      const hitExpression = this.hitEffect.toExpression();
+      effectPart = `(${hitExpression})`;
+      // A crit doubles the hit payload's dice — parsed and pooled payloads included.
+      const critExpression =
+        this.critEffect === null
+          ? hitExpression
+          : (this.critEffect ?? this.hitEffect.copy().doubleDice()).toExpression();
 
-        const critThreshold = this.check.critThreshold;
-        if (critThreshold < 1 || critThreshold > 20) {
-          throw new Error(
-            `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
-          );
-        }
-
-        // Only include crit expression if crit is not zero
-        const critExpression = crit.toExpression();
-        if (critExpression !== "0") {
-          if (critThreshold === 20) {
-            effectPart += ` crit (${critExpression})`;
-          } else {
-            const xcritNumber = 21 - critThreshold;
-            effectPart += ` xcrit${xcritNumber} (${critExpression})`;
-          }
-        }
+      const critThreshold = check.critThreshold;
+      if (this.critEffect !== null && (critThreshold < 1 || critThreshold > 20)) {
+        throw new Error(
+          `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
+        );
+      }
+      if (check instanceof AlwaysCritBuilder && naturalRoll !== undefined) {
+        effectPart += ` xcrit${check.getRootDieConfig()!.sides} (${critExpression})`;
+      } else if (critThreshold === 20 || this.critEffect === null) {
+        effectPart += ` crit (${critExpression})`;
+      } else {
+        effectPart += ` xcrit${21 - critThreshold} (${critExpression})`;
       }
 
       if (this.missEffect) {

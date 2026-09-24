@@ -1,6 +1,7 @@
 import { PMF } from "../pmf/pmf";
 import { AttackBuilder } from "./attack";
 import { resolveRootD20 } from "./ast";
+import { checkExpression } from "./expression";
 import { AlwaysCritBuilder, naturalRollIndex, RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
@@ -135,13 +136,13 @@ export class ACBuilder extends RollBuilder {
     );
   }
 
-  // Legacy expressions
+  /**
+   * `(<to-hit total> AC <ac>)`: the natural roll as {@link toPMF} reads it (one root die, rolled with
+   * the resolved roll type, so three-dice advantage prints `d20 > d20 > d20`), its flats and every
+   * bonus die.
+   */
   override toExpression(): string {
-    const configs = this.getSubRollConfigs(); // This already includes bonus dice, no need to add them again
-    const expression = new RollBuilder(configs).toExpression();
-    return this.attackConfig.ac
-      ? `(${expression} AC ${this.attackConfig.ac})`
-      : expression;
+    return `(${checkExpression(this)} AC ${this.attackConfig.ac})`;
   }
 
   /**

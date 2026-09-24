@@ -70,11 +70,11 @@ export const flatFiveExprExpected = "5";
 
 /** Negative base dice */
 export const negativeBaseDieInline = roll(-1, d8);
-export const negativeBaseDieInlineExprExpected = "-1d8";
+export const negativeBaseDieInlineExprExpected = "0 - 1d8";
 
 /** Negative base dice explicit */
 export const negativeBaseDie = roll(-1).d8();
-export const negativeBaseDieExprExpected = "-1d8";
+export const negativeBaseDieExprExpected = "0 - 1d8";
 
 /** Subtracting a bonus die via negative roll part.
  * Useful for effects like Bane
@@ -101,7 +101,7 @@ export const subtractAWholeBunch = d6
   .minus(d12)
   .minus(d20);
 export const subtractAWholeBunchExprExpected =
-  "-1d20 - 1d12 - 1d10 - 1d8 + 1d6"; // For now it just sorts by die size
+  "1d6 - 1d20 - 1d12 - 1d10 - 1d8"; // For now it just sorts by die size
 
 export const addingMultipleConstants = d6.plus(2).plus(4);
 export const addingMultipleConstantsExprExpected = "1d6 + 6";
@@ -245,14 +245,14 @@ export const alwaysCritsAttack: ReturnType<ACBuilder["onHit"]> = d20
   .ac(10)
   .alwaysCrits()
   .onHit(d8);
-export const alwaysCritsAttackExprExpected = "d20 + 5 * (1d8) crit (2d8)";
+export const alwaysCritsAttackExprExpected = "(d20 + 5 AC 10) * (1d8) xcrit20 (2d8)";
 
 /** Attack that always hits and always crits (no misses at all). */
 export const alwaysHitsAlwaysCrits: ReturnType<ACBuilder["onHit"]> = d20
   .alwaysHits()
   .alwaysCrits()
   .onHit(d8);
-export const alwaysHitsAlwaysCritsExprExpected = "d20 * (1d8) crit (2d8)";
+export const alwaysHitsAlwaysCritsExprExpected = "d20 * (1d8) xcrit20 (2d8)";
 
 // ------------------------------
 // Saves (DC checks) and effects
