@@ -26,10 +26,9 @@ export interface DicePrivateData {
   isDCCheck?: boolean;
   /** The "other" distribution recorded by {@link Dice.combine}. */
   except?: Dice | Record<string, never>;
-  /** Keep-highest/lowest selector applied when a die is multiplied out. */
-  keep?: (values: number[]) => number;
-  /** How many rolls {@link keep} keeps: a keep of one (`2kh1d20`) keeps a single natural roll. */
-  keepCount?: number;
+  /** Set by a keep (`4kh3`, `2kl1`) on the dice it keeps from: how many of the repeated copies are
+   * kept, and whether the lowest or the highest. A keep of one (`2kh1d20`) keeps a single natural roll. */
+  keep?: { kept: number; lowest: boolean };
   /** The natural roll of an attack check, followed through every op applied to it, so a crit is the
    * natural-max event (or an `xcrit` range of natural faces) at any bonus roll. It is the check's one
    * d20 wherever it sits in the sum, or with no d20 its largest die; other dice are bonus dice. Read
@@ -237,21 +236,6 @@ export class Dice {
     return result;
   }
 
-  private removeFaces(facesToRemove: number[]): Dice {
-    const result = new Dice();
-
-    for (const [key, value] of Object.entries(this.faces)) {
-      const numKey = Number(key);
-      if (!facesToRemove.includes(numKey)) {
-        result.faces[numKey] = value;
-      }
-    }
-
-    result.privateData = { ...this.privateData };
-    result.outcomeData = { ...this.outcomeData };
-    return result;
-  }
-
   // PUBLIC FUNCTIONS
 
   getFaceEntries(): [number, number][] {
@@ -379,11 +363,20 @@ export class Dice {
   }
 
   public divideRoundUp(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => Math.ceil(a / b));
+    this.assertNonZeroDivisor(other);
+    return this.binaryOp(other, (a, b) => (b === 0 ? 0 : Math.ceil(a / b)));
   }
 
   public divideRoundDown(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => Math.floor(a / b));
+    this.assertNonZeroDivisor(other);
+    return this.binaryOp(other, (a, b) => (b === 0 ? 0 : Math.floor(a / b)));
+  }
+
+  /** A divisor that can be 0 has no quotient there. A 0 face with no weight is never rolled, so it passes. */
+  private assertNonZeroDivisor(other: Dice | number): void {
+    if (typeof other === "number" ? other === 0 : other.get(0) > 0) {
+      throw new DiceParseError("Division by zero: the divisor can be 0");
+    }
   }
 
   public and(other: Dice | number): Dice {
@@ -432,23 +425,21 @@ export class Dice {
     return result;
   }
 
+  /**
+   * Roll once and, on a result in `toReroll`'s faces, roll again and keep the second roll. Each
+   * result keeps its own weight: with T the total count and c_R the count on the rerolled faces,
+   * face v's new count is c_v·(T·[v∉R] + c_R), i.e. p′(v) = p(v)·[v∉R] + P(R)·p(v).
+   */
   public reroll(toReroll: Dice | number): Dice {
-    const rerollDice =
-      typeof toReroll === "number" ? Dice.scalar(toReroll) : toReroll;
+    const rerolled = new Set(typeof toReroll === "number" ? [toReroll] : toReroll.keys());
+    const total = this.total();
+    let rerolledCount = 0;
+    for (const [face, count] of this.getFaceEntries()) if (rerolled.has(face)) rerolledCount += count;
 
-    const rerollKeys = rerollDice.keys();
-    const rerollSet = new Set(rerollKeys);
-    const removed = this.removeFaces(rerollKeys);
-    let result = new Dice();
-
-    for (const face of this.keys()) {
-      const wasRerolled = rerollSet.has(face);
-      result = result.combine(removed);
-      if (wasRerolled) {
-        result = result.combine(this);
-      }
+    const result = new Dice();
+    for (const [face, count] of this.getFaceEntries()) {
+      result.increment(face, count * ((rerolled.has(face) ? 0 : total) + rerolledCount));
     }
-
     return result;
   }
 
@@ -531,13 +522,12 @@ export class Dice {
     const critDistro = this.getOutcomeDistribution("crit") || {};
     const missDistro = this.getOutcomeDistribution("missDamage") || {};
     const saveDistro = this.getOutcomeDistribution("saveHalf") || {};
+    const saveFailDistro = this.getOutcomeDistribution("saveFail") || {};
     const pcDistro = this.getOutcomeDistribution("pc") || {};
 
-    // A non-empty save distribution means the "save" mechanic was used (e.g.
-    // "save half"): its success mass is a saveHalf outcome and the remaining
-    // (full-damage) mass is a saveFail. The previous heuristic — "isSaveHalf iff
-    // 2×(a half value) appears in the hit distribution" — false-negatived on odd
-    // or constant damage, mislabeling saveHalf as saveFail and saveFail as hit.
+    // A save string records its failed saves as `saveFail` and its halved successes as
+    // `saveHalf`, a failed save that rolls 0 damage included. What is left of a save-half string
+    // is full damage on a failed save too; a bare DC check (no payload) is 1 on a failed save.
     const isSaveHalf = Object.keys(saveDistro).length > 0;
 
     const isDCCheck = this.privateData.isDCCheck === true;
@@ -598,15 +588,16 @@ export class Dice {
       if (saveDistro[face]) {
         const c = clampNonNeg(saveDistro[face] / total);
         if (c > 0) {
-          if (isSaveHalf) {
-            count.saveHalf = c; // half damage on successful save
-            attr.saveHalf = clampNonNeg((face * saveDistro[face]) / total);
-          } else {
-            count.saveFail = (count.saveFail ?? 0) + c; // regular fail
-            attr.saveFail = clampNonNeg(
-              (attr.saveFail ?? 0) + (face * saveDistro[face]) / total
-            );
-          }
+          count.saveHalf = c; // half damage on successful save
+          attr.saveHalf = clampNonNeg((face * saveDistro[face]) / total);
+        }
+      }
+
+      if (saveFailDistro[face]) {
+        const c = clampNonNeg(saveFailDistro[face] / total);
+        if (c > 0) {
+          count.saveFail = (count.saveFail ?? 0) + c;
+          attr.saveFail = clampNonNeg((attr.saveFail ?? 0) + (face * saveFailDistro[face]) / total);
         }
       }
 
@@ -618,13 +609,14 @@ export class Dice {
         }
       }
 
-      // Handle faces with no specific distribution (missNone) for non-save and non-DC checks
-      if (!isSaveHalf && !isDCCheck) {
+      // What no outcome claims deals no damage (missNone); a bare DC check's successes stay unlabelled.
+      if (!isDCCheck) {
         const distroCountRaw =
           (hitDistro[face] || 0) +
           (critDistro[face] || 0) +
           (missDistro[face] || 0) +
           (saveDistro[face] || 0) +
+          (saveFailDistro[face] || 0) +
           (pcDistro[face] || 0);
 
         const unaccountedCount = clampNonNeg(faceCount - distroCountRaw);

@@ -514,12 +514,6 @@ describe("Dice Parser Tests", () => {
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(20, "hit")).toBe(0);
     });
-
-    it("handles division by zero", () => {
-      // The parser doesn't currently throw for division by zero
-      const result = parse("d6/0");
-      expect(result.support().length).toBe(1);
-    });
   });
 
   describe("Critical Hit Handling", () => {

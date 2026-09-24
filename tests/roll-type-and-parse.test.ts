@@ -205,10 +205,11 @@ describe("tryParse and integer range", () => {
     expect(tryParse("-9007199254740991").mean()).toBe(-9007199254740991);
   });
 
-  it("covers the signed integers the grammar rejects", () => {
-    expect(() => parse("-3")).toThrow();
-    expect(tryParse("-3").mean()).toBe(-3);
+  it("reads a leading `+`, which the grammar rejects, and a leading `-` as the grammar does", () => {
+    expect(() => parse("+7")).toThrow();
     expect(tryParse("+7").mean()).toBe(7);
+    expect(parse("-3").mean()).toBe(-3);
+    expect(tryParse("-3").mean()).toBe(-3);
   });
 });
 

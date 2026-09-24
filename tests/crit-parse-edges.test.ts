@@ -213,9 +213,9 @@ describe("advantage, disadvantage and halfling luck track the natural d20 throug
       ["(d100 + d20 AC 60) * (1d6) crit (2d6)", 61 / 2000, 7637 / 4000],
       ["(d20 + 100 - d100 AC 60) * (1d6) crit (2d6)", 3 / 100, 749 / 400],
       ["(d20 + 100 - d100 AC 60) * (1d6)", 3 / 100, 749 / 400],
-      // `+` skips a 0 total: a natural 20 less a d100 of 20 stays 0 and misses.
-      ["(d20 - d100 + 100 AC 60) * (1d6) crit (2d6)", 59 / 2000, 7343 / 4000],
-      ["(d20 - d100 + 100 AC 60) * (1d6)", 59 / 2000, 7343 / 4000],
+      // `+` in a check total always adds: a natural 20 less a d100 of 20 is 0, then 100, and hits.
+      ["(d20 - d100 + 100 AC 60) * (1d6) crit (2d6)", 3 / 100, 749 / 400],
+      ["(d20 - d100 + 100 AC 60) * (1d6)", 3 / 100, 749 / 400],
       ["(d20 + d30 + 5 AC 25) * (1d6)", 1 / 20, 1071 / 400],
       ["(d20 + d30 + 5 AC 25) * (1d6) crit (2d6)", 1 / 20, 1071 / 400],
       ["(d20 + 1d30 AC 25) * (1d6) crit (2d6)", 13 / 300, 623 / 300],

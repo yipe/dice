@@ -400,6 +400,47 @@ const query = new DiceQuery(pmf);
 console.log("DPR:", query.mean());
 ```
 
+#### Grammar
+
+Spaces are ignored and letters may be any case. Every binary operator has the **same precedence and
+associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to group.
+
+| Syntax | Meaning |
+| --- | --- |
+| `7`, `d6`, `3d6`, `hd20` | A number, a die, a sum of dice, a die whose 1 is rerolled once (halfling luck, `d20 reroll 1`). |
+| `N(X)`, `(X)d6` | N independent copies of X, summed. The count may be rolled: `(1d4)d6`. A count of 0 is 0 (`0d6`, `(1d4 - 1)d6` has P(0) = 1/4); a count that can be negative throws. |
+| `NkhK(X)`, `NklK(X)` | The sum of the K highest (lowest) of N independent copies of X, exact for any X: `4kh3d6`, `2kl1(1d20)`, `4kh1(2d20)`. `2kl1(2d6)` keeps the lower of two 2d6 *sums*. |
+| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0: `(d20 + 5 AC 15) * (1d8) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
+| `X ~+ Y` | Always adds. |
+| `X - Y`, `-X` | Subtracts. A leading `-` negates the argument after it, repeat included: `-2d6` is `-(2d6)`, `1d6 + -3` is `1d6 - 3`, `-1d8 + 1d6` has mean -1. There is no unary `+`. |
+| `X * Y` | Y where X is not 0, else 0: the hit gate of `(check) * (damage)`. |
+| `X ** Y` | The product. |
+| `X / Y`, `X // Y` | Division rounding up, rounding down (toward -∞). A divisor that can be 0 throws. |
+| `X > Y`, `X < Y` | The max, the min: `d20 > d20` is advantage, `3>d6` a floor of 3. |
+| `X!` | The max of two independent copies of X. |
+| `X = Y` | 1 where X equals Y, else 0. |
+| `X & Y` | A mix weighted by each side's count of outcomes (see the refused shapes above). |
+| `X reroll R` | Rolls X, and on a result in the face set R rolls X again and keeps the second roll. |
+| `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). |
+| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. |
+
+**Rerolls.** `reroll N` rerolls the face N only; `reroll dN` rerolls every face from 1 to N; the
+builder's `.reroll(N)` rerolls every face up to N, like `reroll dN`. On a d6 they differ from N = 2
+on: `d6 reroll 2` is 15/4, `d6 reroll d2` and `d6.reroll(2)` are 25/6. `reroll d0` rerolls
+nothing. A reroll applies to the whole value on its left, so `2d6 reroll 1` rerolls the *total*,
+which is never 1 (mean 7); spell a per-die reroll as `2(d6 reroll 1)` (47/6), and several of them as
+`1(d8 reroll 1) + 2(d6 reroll 1)` (613/48). Each result keeps its own probability, so a reroll of a
+sum, a max or a floor is exact: `2d6 reroll 2` is 257/36, `(d20 > d20) reroll 1` is 221713/16000.
+The reroll decides on the raw face and a minimum applies after: `3>(d6 reroll 1)` (what
+`roll(1, d6).reroll(1).minimum(3)` prints) is 25/6.
+
+**Labels.** An attack labels its outcomes `hit`, `crit`, `missNone` and `missDamage`. A save labels a
+failed save `saveFail` (whatever the payload rolls, 0 included), a halved success `saveHalf`, and a
+success with no `save half` `missNone`, like the builder's `onSaveFailure()`.
+
+A `d0` has no faces: it is only a face set (`reroll d0`); rolled on its own it throws, as does a
+string the grammar cannot read, always as a `DiceParseError`.
+
 ### Error Handling
 
 `parse()` throws a `DiceParseError` (a subclass of `Error`) for invalid input.
@@ -418,14 +459,15 @@ try {
 ```
 
 For UI code that parses on every keystroke, `tryParse()` returns an empty PMF
-instead of throwing, and accepts a bare integer — which the grammar rejects, but
-a half-typed damage field is one for a keystroke or two:
+instead of throwing, and also reads an integer with a leading `+`, which the
+grammar rejects — a half-typed damage field is one for a keystroke or two:
 
 ```ts
 import { tryParse } from "@yipe/dice";
 
 tryParse("1d6 + 2").mean(); // 5.5
-tryParse("-3").mean(); // -3   — signed integers, which the grammar rejects
+tryParse("+7").mean(); // 7   — a leading `+`, which the grammar rejects
+tryParse("-3").mean(); // -3  — the same as parse("-3")
 tryParse("0x10").mass(); // 0  — decimal only
 tryParse("1d").mass(); // 0   — empty PMF
 ```
