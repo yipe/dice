@@ -390,9 +390,8 @@ describe("Parser crit probability with bonus to-hit dice", () => {
   // Previously a KNOWN LIMITATION: the string parser couldn't separate the natural-max slice
   // once bonus dice were convolved into the to-hit total (the d20 identity was lost), so a
   // plain `crit` clause's probability collapsed to 1/(20*prod(bonusSides)) instead of 1/20. Now
-  // fixed for a flat (no advantage/disadvantage) base die with a plain `crit` clause by tracking
-  // the base die's natural-max contribution separately through the `+`/`-`/`AC` chain -- see
-  // parser.ts's "Track a flat ... base check die" comment.
+  // every check tracks its natural die through advantage/disadvantage/rerolls and the
+  // `+`/`-`/`AC` chain, for `crit` and `xcrit` alike -- see parser.ts's `splitCrit`.
   it("builder computes crit = 0.05 with a +1d4 (bless) to-hit", () => {
     const b = d20
       .plus(5)
@@ -420,24 +419,20 @@ describe("Parser crit probability with bonus to-hit dice", () => {
     expect(q.probAtLeastOne("crit")).toBeCloseTo(0.05, 9);
   });
 
-  it("KNOWN LIMITATION: xcrit (expanded crit range) with bonus to-hit dice is still wrong (pinned)", () => {
-    // The tracked base-die path only covers a plain `crit` (natural-max only); `xcrit` needs its
-    // own AC check per natural face in the expanded range, which the tracked path doesn't
-    // attempt. Falls back to the legacy maxFace peel, still wrong with bonus dice.
+  it("xcrit (expanded crit range) with bonus to-hit dice crits on each natural face in range: 1/10", () => {
     const q = parse(
       "(d20 + 5 + 1d4 AC 15) * (1d8 + 3) xcrit2 (2d8 + 3)"
     ).query();
-    expect(q.probAtLeastOne("crit")).not.toBeCloseTo(0.1, 2);
+    expect(q.probAtLeastOne("crit")).toBeCloseTo(0.1, 9);
+    expect(q.mean()).toBeCloseTo(441 / 80, 9);
   });
 
-  it("KNOWN LIMITATION: advantage with bonus to-hit dice is still wrong (pinned)", () => {
-    // Tracking only covers a bare flat base die; advantage ("d20 > d20") isn't a single additive
-    // `+`/`-` chain from one base die, so it invalidates tracking and falls back to the legacy
-    // maxFace peel.
+  it("advantage with bonus to-hit dice crits when either natural roll is a 20: 39/400", () => {
     const q = parse(
       "(d20 > d20 + 5 + 1d4 AC 15) * (1d8 + 3) crit (2d8 + 3)"
     ).query();
-    expect(q.probAtLeastOne("crit")).not.toBeCloseTo(0.0975, 3);
+    expect(q.probAtLeastOne("crit")).toBeCloseTo(39 / 400, 9);
+    expect(q.mean()).toBeCloseTo(11397 / 1600, 9);
   });
 });
 

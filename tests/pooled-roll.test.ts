@@ -203,11 +203,9 @@ describe("PooledRollBuilder", () => {
       const pool = d6.plus(d8).keepHighestAll(4, 3);
       const attack = d20.plus(5).ac(15).onHit(pool);
 
-      // Note: AttackBuilder by default adds a crit expression that doubles the dice.
-      // For PooledRollBuilder, doubling means 2(...) wrapper.
-      const poolExpr = "4kh3(1d8 + 1d6)";
+      // The auto-crit doubles the dice inside the pool, then pools.
       expect(attack.toExpression()).toBe(
-        `(d20 + 5 AC 15) * (${poolExpr}) crit (2(${poolExpr}))`
+        "(d20 + 5 AC 15) * (4kh3(1d8 + 1d6)) crit (4kh3(2d8 + 2d6))"
       );
 
       const pmf = attack.toPMF();
@@ -272,17 +270,15 @@ describe("PooledRollBuilder", () => {
       );
     });
 
-    it("should handle doubleDice() on a pool", () => {
-      // 4kh3(d6) -> double -> 2(4kh3(d6))
+    it("should handle doubleDice() on a pool: the dice double inside, then pool (R33)", () => {
       const pool = d6.keepHighestAll(4, 3);
       const doubled = pool.doubleDice();
 
       expect(doubled).toBeInstanceOf(PooledRollBuilder);
-      expect(doubled.toExpression()).toBe("2(4kh3(1d6))");
-
-      // Verify stats - mean should be exactly double
-      const baseMean = pool.toPMF().mean();
-      expect(doubled.toPMF().mean()).toBeCloseTo(baseMean * 2);
+      expect(doubled.toExpression()).toBe("4kh3(2d6)");
+      expect(doubled.toPMF().mean()).toBeCloseTo(roll(2, d6).keepHighestAll(4, 3).toPMF().mean(), 12);
+      // The old scaled-pool reading, 2(4kh3(1d6)), rolled the whole pool twice.
+      expect(doubled.toPMF().mean()).not.toBeCloseTo(pool.toPMF().mean() * 2, 2);
     });
 
     it("should handle subtraction", () => {

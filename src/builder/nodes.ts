@@ -7,6 +7,7 @@ export type ExpressionNode =
   | D20RollNode
   | HalfNode
   | MaxOfNode
+  | MaxNode
   | ScaleNode;
 
 export type DieNode = {
@@ -55,10 +56,17 @@ export type HalfNode = {
   child: ExpressionNode;
 };
 
+/** The highest of `count` independent rolls of `child`. */
 export type MaxOfNode = {
   type: "maxOf";
   count: number;
   child: ExpressionNode;
+};
+
+/** The highest of several independent, possibly different rolls (e.g. the better of 3d8 and 2d10). */
+export type MaxNode = {
+  type: "max";
+  children: ExpressionNode[];
 };
 
 /**

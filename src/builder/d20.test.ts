@@ -110,7 +110,6 @@ describe("d20WithRollTypePMF", () => {
       expect(pmf.mean()).toBeCloseTo(hitChance * 1 + critChance * 1)
     })
     
-    // TODO - make another test to check the PMF means of basic cases
 
     it('should handle autohit with complex damage: 2kh1(1d8) + 1d8 + 1d4 + 5', () => {
       

@@ -104,22 +104,19 @@ describe("calculateBounceOdds — edges and monotonicity", () => {
 });
 
 describe("calculateBounceOdds — Empowered Spell (reroll)", () => {
-  it("rerolling ALL dice equals two independent identical rolls: 1 - (1 - pMatch)^2", () => {
-    // keptDice === 0: the only way to match is among the rerolled dice, which is a
-    // second independent roll of the same pool. (Regression guard: a former bug
-    // returned certainty of a match here.)
-    const cases: Array<[number, number, number]> = [
-      [3, 8, 0],
-      [4, 8, 0],
-      [2, 6, 0],
-      [4, 10, 0],
-      [3, 8, 2],
-      [3, 10, 3],
+  it("rerolling every die of a plain pool equals two independent identical rolls: 1 - (1 - pMatch)^2", () => {
+    // With no kept dice the only way to match is among the rerolled dice, a second
+    // independent roll of the same pool. (Regression guard: a former bug returned
+    // certainty of a match here.) For a plain die, rerolling every die is the best choice.
+    const cases: Array<[number, number]> = [
+      [3, 8],
+      [4, 8],
+      [2, 6],
+      [4, 10],
     ];
-    for (const [k, faces, min] of cases) {
-      const opts = min > 0 ? { minimumDieRoll: min } : {};
-      const base = calculateBounceOdds(k, faces, opts);
-      const rerollAll = calculateBounceOdds(k, faces, { ...opts, rerollDamageDice: k });
+    for (const [k, faces] of cases) {
+      const base = calculateBounceOdds(k, faces);
+      const rerollAll = calculateBounceOdds(k, faces, { rerollDamageDice: k });
       expect(rerollAll).toBeCloseTo(1 - (1 - base) ** 2, 12);
     }
   });
@@ -160,12 +157,13 @@ describe("calculateBounceOdds — Empowered Spell (reroll)", () => {
     }
   });
 
-  it("matches known values for the reroll model (regression guard)", () => {
-    // The reroll model is an approximation with no closed-form oracle; pin
-    // representative outputs so refactors don't silently shift it.
-    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 1 })).toBeCloseTo(0.507813, 6);
-    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 2 })).toBeCloseTo(0.560364, 6);
-    expect(calculateBounceOdds(4, 10, { rerollDamageDice: 2 })).toBeCloseTo(0.709696, 6);
-    expect(calculateBounceOdds(3, 8, { minimumDieRoll: 2, rerollDamageDice: 2 })).toBeCloseTo(0.636779, 6);
+  it("matches exact values (regression guard)", () => {
+    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 1 })).toBeCloseTo(65 / 128, 14);
+    expect(calculateBounceOdds(3, 8, { rerollDamageDice: 2 })).toBeCloseTo(583 / 1024, 14);
+    expect(calculateBounceOdds(4, 10, { rerollDamageDice: 2 })).toBeCloseTo(2243 / 3125, 14);
+    expect(calculateBounceOdds(3, 8, { minimumDieRoll: 2, rerollDamageDice: 2 })).toBeCloseTo(
+      2821 / 4096,
+      14
+    );
   });
 });

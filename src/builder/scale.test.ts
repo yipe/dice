@@ -91,16 +91,16 @@ describe("sumRolls", () => {
     expect(sumRolls([]).toExpression()).toBe("0");
   });
 
-  it("preserves a scaled part beside a plain part (which plus() would drop)", () => {
+  it("preserves a scaled part beside a plain part, as plus() does", () => {
     const base = new RollBuilder().plus(3).plus(1, d(8)); // 1d8 + 3, mean 7.5
     const resistedFire = d6().scaleResult(1, 2); // (1d6)//2, mean 1.5
     const payload = sumRolls([base, resistedFire]);
 
-    expect(payload.toExpression()).toBe("1d8 + 3 + (1d6) // 2");
+    expect(payload.toExpression()).toBe("1d8 + 3 + ((1d6) // 2)");
     expect(mean(payload.pmf)).toBeCloseTo(9.0, 10);
 
-    // Guard: the flat merge silently drops the scaled part.
-    expect(base.plus(resistedFire).toExpression()).toBe("1d8 + 3");
+    expect(base.plus(resistedFire).toExpression()).toBe("1d8 + 3 + ((1d6) // 2)");
+    expect(mean(base.plus(resistedFire).pmf)).toBeCloseTo(9.0, 10);
   });
 
   it("only scales the resisted damage type in a mixed attack (floor is per-type)", () => {
@@ -127,7 +127,7 @@ describe("sumRolls", () => {
     const attack = d20.ac(15).onHit(hit).onCrit(crit);
 
     expect(attack.toExpression()).toBe(
-      "(d20 AC 15) * (1d8 + 3 + (1d6) // 2) crit (2d8 + 3 + (2d6) // 2)"
+      "(d20 AC 15) * (1d8 + 3 + ((1d6) // 2)) crit (2d8 + 3 + ((2d6) // 2))"
     );
 
     const totals: Record<string, number> = {};

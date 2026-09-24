@@ -1,19 +1,23 @@
 import type { DiceMatchInfo, OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
 import { diceSumDistribution, faceWeights, jointSumAndMatch } from "../common/bounce";
-import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { splitAtThreshold } from "./prob";
+import { checkExpression, rootDieExpression } from "./expression";
+import { requireFinite } from "./arguments";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
+  naturalRollIndex,
   ParsedRollBuilder,
   RollBuilder,
 } from "./roll";
-import type { AttackResolution, CheckBuilder } from "./types";
+import type { AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
 
 type ActionEffect = RollBuilder;
 
@@ -25,7 +29,7 @@ type ActionEffect = RollBuilder;
  * (parsed/pooled/half/scale/max/composite) ⇒ resolve uncached. Cached PMFs are immutable (every PMF op
  * returns a new instance), so sharing is safe.
  */
-const attackPMFCache = new LRUCache<string, PMF>(4000);
+const attackPMFCache = PMF.createCache(4000);
 
 /** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
 export function clearAttackCache(): void {
@@ -37,7 +41,17 @@ export class AttackBuilder implements CheckBuilder {
     readonly check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     private readonly hitEffect?: ActionEffect,
     private readonly critEffect?: ActionEffect | null,
-    private readonly missEffect?: ActionEffect
+    private readonly missEffect?: ActionEffect,
+    // Extra damage channels convolved into hit AND crit — their dice double on a crit like any
+    // attack damage — but excluded from base-payload transforms (rerollDamage/minimumDamageDie
+    // here; the turn-level reroll substitution). Several `plusSeparateDamage()` calls accumulate.
+    private readonly separateDamage: readonly RollBuilder[] = [],
+    // The raw (uncapped) argument rerollDamage() was last called with, tracked separately from
+    // the transformed dice so a second call with a DIFFERENT value is refused while a repeat of
+    // the SAME value stays a no-op.
+    private readonly rerollThreshold?: number,
+    private readonly minimumDieValue?: number,
+    private readonly halfOnMissFlag: boolean = false
   ) {}
 
   onCrit(val: number): AttackBuilder;
@@ -48,12 +62,18 @@ export class AttackBuilder implements CheckBuilder {
   onCrit(count: number, die: RollBuilder, modifier: number): AttackBuilder;
   onCrit(count: number, sides: number, modifier: number): AttackBuilder;
   onCrit(...args: any[]): AttackBuilder {
-    const damageRoll = RollBuilder.fromArgs(...args);
+    // The explicit crit is base payload: carry any rerollDamage/minimumDamageDie already set, so
+    // the result does not depend on whether onCrit() came before or after them.
+    const damageRoll = this.withStoredBaseTransforms(RollBuilder.fromArgs(...args));
     return new AttackBuilder(
       this.check,
       this.hitEffect,
       damageRoll,
-      this.missEffect
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
     );
   }
 
@@ -65,58 +85,329 @@ export class AttackBuilder implements CheckBuilder {
   onMiss(count: number, die: RollBuilder, modifier: number): AttackBuilder;
   onMiss(count: number, sides: number, modifier: number): AttackBuilder;
   onMiss(...args: any[]): AttackBuilder {
+    if (this.halfOnMissFlag) {
+      throw new Error(
+        "onMiss() cannot be combined with halfOnMiss(): the miss branch can only be one or the other."
+      );
+    }
     const damageRoll = RollBuilder.fromArgs(...args);
     return new AttackBuilder(
       this.check,
       this.hitEffect,
       this.critEffect,
-      damageRoll
+      damageRoll,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
     );
   }
 
   noCrit(): AttackBuilder {
-    return new AttackBuilder(this.check, this.hitEffect, null, this.missEffect);
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      null,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
+    );
   }
 
-  // Legacy expressions
+  /**
+   * Adds a second damage channel, convolved into the hit AND crit payloads (its dice double on
+   * a crit like any attack damage) but excluded from base-payload transforms — base-payload
+   * rerolls and once-per-turn reroll substitutions never touch it. Chainable; several calls
+   * accumulate into one convolved channel.
+   */
+  plusSeparateDamage(damage: RollBuilder): AttackBuilder {
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      [...this.separateDamage, damage],
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
+    );
+  }
+
+  /**
+   * Lets every die group of the BASE payload (hit, and the crit branch when it is explicit)
+   * reroll low faces once, leaving `plusSeparateDamage` channels untouched — so a weapon reads in
+   * whichever order the caller likes. The threshold is a permission cap, not an obligation: a
+   * group rerolls faces `1..min(threshold, cap)`, where `cap` is the largest face whose kept value
+   * `max(face, floor)` is below the expected value of a fresh floored face (`floor` from the
+   * group's own `minimum` and {@link minimumDamageDie}; with no floor, `floor(sides / 2)`). For a
+   * die that does not explode that is optimal play, and the result is monotone in `threshold`.
+   * A group's own `reroll` is kept when it is higher. `RollBuilder.reroll()` keeps its own
+   * obligation semantics; this is the attack-level verb.
+   */
+  rerollDamage(threshold: number): AttackBuilder {
+    if (isNaN(threshold)) throw new Error("Invalid NaN value for rerollDamage threshold");
+    requireFinite(threshold, "rerollDamage() threshold");
+    if (this.rerollThreshold !== undefined) {
+      if (threshold === this.rerollThreshold) return this;
+      throw new Error(
+        `Conflicting rerollDamage() threshold: already set to ${this.rerollThreshold}, cannot change to ${threshold}. Repeating the same value is a no-op.`
+      );
+    }
+    const transform = AttackBuilder.baseTransform(threshold, this.minimumDieValue);
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect
+        ? AttackBuilder.mapEveryDieGroup(this.hitEffect, "rerollDamage", transform)
+        : this.hitEffect,
+      this.critEffect
+        ? AttackBuilder.mapEveryDieGroup(this.critEffect, "rerollDamage", transform)
+        : this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      threshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
+    );
+  }
+
+  /**
+   * Raises every die of the BASE payload (hit, and the crit branch when it is explicit) to at
+   * least `minimum`, leaving `plusSeparateDamage` channels untouched. A group's own higher
+   * `minimum` is kept. Order-independent with respect to `plusSeparateDamage` and
+   * `rerollDamage` (whose cap accounts for the floor).
+   */
+  minimumDamageDie(minimum: number): AttackBuilder {
+    if (isNaN(minimum)) throw new Error("Invalid NaN value for minimumDamageDie");
+    requireFinite(minimum, "minimumDamageDie()");
+    if (this.minimumDieValue !== undefined) {
+      if (minimum === this.minimumDieValue) return this;
+      throw new Error(
+        `Conflicting minimumDamageDie() value: already set to ${this.minimumDieValue}, cannot change to ${minimum}. Repeating the same value is a no-op.`
+      );
+    }
+    const transform = AttackBuilder.baseTransform(this.rerollThreshold, minimum);
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect
+        ? AttackBuilder.mapEveryDieGroup(this.hitEffect, "minimumDamageDie", transform)
+        : this.hitEffect,
+      this.critEffect
+        ? AttackBuilder.mapEveryDieGroup(this.critEffect, "minimumDamageDie", transform)
+        : this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      minimum,
+      this.halfOnMissFlag
+    );
+  }
+
+  /**
+   * The miss payload becomes `floor(resolved hit payload / 2)` — base plus every
+   * `plusSeparateDamage` channel, never the crit payload. Labelled `missDamage`: it is not a
+   * landing, so no `first-hit`/`every-hit`/condition trigger reads it, and no reroll
+   * substitution touches it. Mutually exclusive with `onMiss()`.
+   */
+  halfOnMiss(): AttackBuilder {
+    if (this.missEffect) {
+      throw new Error(
+        "halfOnMiss() cannot be combined with onMiss(): the miss branch can only be one or the other."
+      );
+    }
+    if (this.halfOnMissFlag) return this;
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      true
+    );
+  }
+
+  /**
+   * The one way to re-derive hit/crit/miss probabilities for an existing attack: `vsAC` and the
+   * turn-level condition variants are both callers. Throws if this attack's check has no AC (an
+   * `AlwaysHitBuilder`, or a crit-from-always-hit override) — there is nothing to rebind.
+   */
+  withCheck(fn: (check: Check) => Check): AttackBuilder {
+    const next = fn(this.toCheck());
+    return new AttackBuilder(
+      AttackBuilder.buildCheck(next),
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag
+    );
+  }
+
+  private toCheck(): Check {
+    const check = this.check;
+    if (check instanceof AlwaysHitBuilder) {
+      throw new Error(
+        "withCheck() requires an AC-bearing check; this attack always hits with no AC to rebind."
+      );
+    }
+    const ac = check.attackConfig.ac;
+    if (ac === undefined) {
+      throw new Error(
+        "withCheck() requires an AC-bearing check; this attack's crit-on-hit override carries no AC."
+      );
+    }
+    // Duck-typed rather than `instanceof ACBuilder`: importing the `ACBuilder` VALUE here would
+    // reintroduce the ac.ts <-> attack.ts <-> roll.ts load cycle at a point where `RollBuilder`
+    // is not yet defined (`ACBuilder extends RollBuilder` would throw). `advantageDice` is the
+    // one field only `AttackConfig` (ACBuilder's own attackConfig shape) declares.
+    const attackConfig = check.attackConfig;
+    const rootConfig = check.getRootDieConfig();
+    const rawRollType: RollType = rootConfig?.rollType ?? "flat";
+    const fromElvenAccuracy = rawRollType === "elven accuracy";
+    return {
+      roll: new RollBuilder(check.getSubRollConfigs()),
+      ac,
+      critThreshold: check.critThreshold,
+      rollType: fromElvenAccuracy ? "advantage" : rawRollType,
+      advantageDice: fromElvenAccuracy
+        ? 3
+        : "advantageDice" in attackConfig
+          ? attackConfig.advantageDice
+          : 2,
+      critOnHit: check instanceof AlwaysCritBuilder,
+    };
+  }
+
+  private static buildCheck(next: Check): ACBuilder | AlwaysCritBuilder {
+    if (isNaN(next.ac)) throw new Error("Invalid NaN value for AC in withCheck()");
+    requireFinite(next.ac, "AC in withCheck()");
+    requireFinite(next.critThreshold, "crit threshold in withCheck()");
+    const configs = next.roll.getSubRollConfigs();
+    let rewritten: readonly RollConfig[] = configs;
+    if (configs.length > 0) {
+      const rootIdx = naturalRollIndex(configs);
+      const idx = rootIdx === -1 ? 0 : rootIdx;
+      const updated = [...configs];
+      updated[idx] = { ...updated[idx], rollType: next.rollType };
+      rewritten = updated;
+    }
+    // `.ac()`/`.critOn()`/`.threeDiceAdvantage()` are the `RollBuilder`-prototype surface
+    // `ac.ts` augments (the same seam that already keeps roll.ts/ac.ts load-order-safe) — using
+    // it instead of `new ACBuilder(...)` avoids importing the `ACBuilder` value here.
+    let ac = new RollBuilder(rewritten).ac(next.ac).critOn(next.critThreshold);
+    if (next.advantageDice === 3) ac = ac.threeDiceAdvantage();
+    return next.critOnHit ? ac.alwaysCrits() : ac;
+  }
+
+  /**
+   * The base-payload transform for a `rerollDamage` threshold and a `minimumDamageDie` floor
+   * (either may be unset). Each only ever raises a group's own `minimum`/`reroll`, and the reroll
+   * cap reads the final floor, so applying it again after the other call lands on the same config
+   * whichever order the two calls came in.
+   */
+  private static baseTransform(
+    threshold: number | undefined,
+    minimum: number | undefined
+  ): (config: RollConfig) => RollConfig {
+    return (config) => {
+      const floor = minimum === undefined ? config.minimum : Math.max(config.minimum, minimum);
+      if (threshold === undefined) return { ...config, minimum: floor };
+      // Face f is worth rerolling iff max(f, floor) < E[max(X, floor)] = total / sides; the kept
+      // value never falls as f rises, so the worthwhile faces are exactly 1..cap. Integer-exact.
+      let total = 0;
+      for (let f = 1; f <= config.sides; f++) total += Math.max(f, floor);
+      let cap = 0;
+      for (let f = 1; f <= config.sides; f++) {
+        if (Math.max(f, floor) * config.sides < total) cap = f;
+      }
+      return { ...config, minimum: floor, reroll: Math.max(config.reroll, Math.min(threshold, cap)) };
+    };
+  }
+
+  /** Applies the `rerollDamage`/`minimumDamageDie` values already set on this builder to `effect`. */
+  private withStoredBaseTransforms(effect: ActionEffect): ActionEffect {
+    if (this.rerollThreshold === undefined && this.minimumDieValue === undefined) return effect;
+    return AttackBuilder.mapEveryDieGroup(
+      effect,
+      this.rerollThreshold !== undefined ? "rerollDamage" : "minimumDamageDie",
+      AttackBuilder.baseTransform(this.rerollThreshold, this.minimumDieValue)
+    );
+  }
+
+  /**
+   * Shared by `rerollDamage`/`minimumDamageDie`: rewrite every die-bearing `RollConfig` of a
+   * base-payload effect. Refuses (rather than silently no-oping) an effect with no real dice
+   * descriptor — a parsed string or a half/scale/maxOf/pooled/composite wrapper — matching the
+   * "refuse rather than approximate" bar the reroll substitution's `no-dice-descriptor` uses.
+   */
+  private static mapEveryDieGroup(
+    effect: ActionEffect,
+    methodName: string,
+    mapConfig: (config: RollConfig) => RollConfig
+  ): ActionEffect {
+    if (effect.cacheKey() === null) {
+      throw new Error(
+        `${methodName}() requires a dice descriptor: a parsed string or a half/scale/maxOf/pooled/composite payload has none.`
+      );
+    }
+    const configs = effect.getSubRollConfigs().map((c) => (c.sides > 0 ? mapConfig(c) : c));
+    return new RollBuilder(configs);
+  }
+
+  /**
+   * The attack as a string `parse()` reads back to the same outcomes, up to the natural-1 miss and
+   * natural-20 hit, which the grammar does not model. The crit clause is always printed, since a
+   * string without one crits with its hit dice doubled: `noCrit()` prints `xcrit0 (<hit>)` (no
+   * natural face crits, so every landing is a hit), and a crit range keeps its `xcritN`. A check
+   * that crits on every hit (`alwaysCrits()`) prints `xcritS`, S the natural die's size; one that
+   * always hits prints just its natural roll, which never totals 0.
+   */
   toExpression(): string {
-    const checkPart = this.check.toExpression();
+    // The string grammar has no separate-damage channel and no "half the hit payload on a miss"
+    // clause; rendering without them would round-trip to a different distribution.
+    if (this.separateDamage.length > 0 || this.halfOnMissFlag) {
+      throw new Error(
+        "toExpression() cannot represent plusSeparateDamage() or halfOnMiss(): the expression grammar has no separate damage channel or half-on-miss clause. Use toPMF() instead."
+      );
+    }
+    const check = this.check;
+    const naturalRoll = rootDieExpression(check);
+    let checkPart: string;
+    if (check instanceof AlwaysCritBuilder && !check.fromAlwaysHit) {
+      checkPart = `(${checkExpression(check)} AC ${check.attackConfig.ac ?? 0})`;
+    } else if (check instanceof AlwaysHitBuilder || check instanceof AlwaysCritBuilder) {
+      checkPart = naturalRoll ?? check.toExpression();
+    } else {
+      checkPart = check.toExpression();
+    }
 
     let effectPart = "";
 
     if (this.hitEffect) {
-      effectPart = `(${this.hitEffect.toExpression()})`;
-      if (this.critEffect !== null) {
-        let crit: RollBuilder;
-        if (this.critEffect) {
-          crit = this.critEffect;
-        } else {
-          // For ParsedRollBuilder, we can't double dice, so skip the crit expression
-          if (this.hitEffect instanceof ParsedRollBuilder) {
-            // Don't try to double ParsedRollBuilder - leave it out of expression
-            crit = RollBuilder.fromArgs(0);
-          } else {
-            crit =
-              this.hitEffect?.copy().doubleDice() ?? RollBuilder.fromArgs(0);
-          }
-        }
-
-        const critThreshold = this.check.critThreshold;
+      const hitExpression = this.hitEffect.toExpression();
+      effectPart = `(${hitExpression})`;
+      if (this.critEffect === null) {
+        effectPart += ` xcrit0 (${hitExpression})`;
+      } else {
+        // A crit doubles the hit payload's dice — parsed and pooled payloads included.
+        const critExpression = (this.critEffect ?? this.hitEffect.copy().doubleDice()).toExpression();
+        const critThreshold = check.critThreshold;
         if (critThreshold < 1 || critThreshold > 20) {
           throw new Error(
             `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
           );
         }
-
-        // Only include crit expression if crit is not zero
-        const critExpression = crit.toExpression();
-        if (critExpression !== "0") {
-          if (critThreshold === 20) {
-            effectPart += ` crit (${critExpression})`;
-          } else {
-            const xcritNumber = 21 - critThreshold;
-            effectPart += ` xcrit${xcritNumber} (${critExpression})`;
-          }
+        if (check instanceof AlwaysCritBuilder && naturalRoll !== undefined) {
+          effectPart += ` xcrit${check.getRootDieConfig()!.sides} (${critExpression})`;
+        } else if (critThreshold === 20) {
+          effectPart += ` crit (${critExpression})`;
+        } else {
+          effectPart += ` xcrit${21 - critThreshold} (${critExpression})`;
         }
       }
 
@@ -128,71 +419,42 @@ export class AttackBuilder implements CheckBuilder {
     return `${checkPart} * ${effectPart}`;
   }
 
+  /**
+   * Hit, crit and miss weights of `check`. A natural 1 misses; a natural 20 hits and crits
+   * whatever the AC, the crit threshold, or crit-on-hit; any other natural roll hits when the total
+   * reaches the AC, and crits when it is in the crit range (or every hit crits: `alwaysCrits()`).
+   * An always-hitting check crits on a natural 20 or in its crit range. A check with no die has no
+   * natural roll, so it hits exactly when its flat total and bonus dice reach the AC and never
+   * crits unless every hit does.
+   */
   resolveProbabilities(
     check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     eps: number = 0
   ): { pSuccess: number; pHit: number; pCrit: number; pMiss: number } {
     const critThreshold = check.critThreshold;
-    const d20 = resolveRootD20(check);
+    const natural = resolveRootD20(check);
+    // A dieless check's natural roll is a certain 0: never a natural 1 or 20, never in crit range.
+    const inCritRange = (r: number): boolean => r === 20 || (r >= 1 && r >= critThreshold);
 
-    if (check instanceof AlwaysCritBuilder) {
-      // If fromAlwaysHit is true, everything is a crit (no misses)
-      if (check.fromAlwaysHit) {
-        return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
-      }
-
-      // If fromAlwaysHit is false (came from ACBuilder), we need to check AC
-      // Natural 1s always miss, everything else that would hit becomes a crit
-      const ac = check.attackConfig.ac ?? 0;
-      const staticMod = this.check.modifier;
-      const bonusDicePMFs = this.check.getBonusDicePMFs(this.check, eps);
-      const bonusPMF = bonusDicePMFs.length
-        ? PMF.convolveMany(bonusDicePMFs, eps)
-        : PMF.delta(0, eps);
-
-      let pcrit = 0;
-      let pmiss = 0;
-
-      for (const [r, bin] of d20) {
-        const pr = bin.p;
-        if (pr <= 0) continue;
-
-        // Natural 1 always misses
-        if (r === 1) {
-          pmiss += pr;
-          continue;
-        }
-
-        // Check if this roll would hit the AC
-        const need = ac - staticMod - r;
-        const pBonusHit = bonusPMF.tailProbGE(need);
-
-        // Everything that hits becomes a crit
-        pcrit += pr * pBonusHit;
-        pmiss += pr * (1 - pBonusHit);
-      }
-
-      return { pSuccess: pcrit, pHit: 0, pCrit: pcrit, pMiss: pmiss };
+    if (check instanceof AlwaysCritBuilder && check.fromAlwaysHit) {
+      return { pSuccess: 1, pHit: 0, pCrit: 1, pMiss: 0 };
     }
 
     if (check instanceof AlwaysHitBuilder) {
-      // Preserve rollType for crit odds
       let pCrit = 0;
-      for (const [r, bin] of d20) {
-        const pr = bin.p;
-        if (pr <= 0) continue;
-        if (r >= critThreshold) pCrit += pr;
+      let pHit = 0;
+      for (const [r, bin] of natural) {
+        if (inCritRange(r)) pCrit += bin.p;
+        else pHit += bin.p;
       }
-      const pHit = 1 - pCrit;
-      const pMiss = 0;
-
-      return { pSuccess: 1, pHit, pCrit, pMiss };
+      return { pSuccess: 1, pHit, pCrit, pMiss: 0 };
     }
 
-    const ac = check.attackConfig.ac;
-    const staticMod = this.check.modifier;
-
-    const bonusDicePMFs = this.check.getBonusDicePMFs(this.check, eps);
+    // An AC check, or one where every hit crits (`alwaysCrits()` / a crit-on-hit grant).
+    const critOnHit = check instanceof AlwaysCritBuilder;
+    const ac = check.attackConfig.ac ?? 0;
+    const staticMod = check.modifier;
+    const bonusDicePMFs = check.getBonusDicePMFs(check, eps);
     const bonusPMF = bonusDicePMFs.length
       ? PMF.convolveMany(bonusDicePMFs, eps)
       : PMF.delta(0, eps);
@@ -201,93 +463,116 @@ export class AttackBuilder implements CheckBuilder {
     let phit = 0;
     let pmiss = 0;
 
-    for (const [r, bin] of d20) {
+    for (const [r, bin] of natural) {
       const pr = bin.p;
       if (pr <= 0) continue;
 
-      // Handle auto-miss
       if (r === 1) {
         pmiss += pr;
         continue;
       }
-
-      // A natural 20 always hits and always crits (RAW), independent of AC or critThreshold.
       if (r === 20) {
         pcrit += pr;
         continue;
       }
 
-      // Handle normal hit/miss, and an expanded crit range (critThreshold < 20): a non-natural-20
-      // roll in the crit range still has to beat AC to hit at all -- it is not an auto-hit.
-      const need = ac - staticMod - r;
-      const pBonusHit = bonusPMF.tailProbGE(need);
-
-      if (r >= critThreshold) {
-        pcrit += pr * pBonusHit;
+      // Any other roll has to reach the AC to hit at all, even inside an expanded crit range.
+      const { atLeast, below } = splitAtThreshold(bonusPMF, ac - staticMod - r);
+      if (critOnHit || inCritRange(r)) {
+        pcrit += pr * atLeast;
       } else {
-        phit += pr * pBonusHit;
+        phit += pr * atLeast;
       }
-      pmiss += pr * (1 - pBonusHit);
+      pmiss += pr * below;
     }
 
-    const psuccess = phit + pcrit;
-    return { pSuccess: psuccess, pHit: phit, pCrit: pcrit, pMiss: pmiss };
+    return { pSuccess: phit + pcrit, pHit: phit, pCrit: pcrit, pMiss: pmiss };
   }
 
-  resolve(eps: number = EPS): AttackResolution {
+  /** Resolves the attack into its weighted slices. `eps` defaults to 0, as for {@link toPMF}: no reachable damage value is pruned. */
+  resolve(eps: number = 0): AttackResolution {
     const {
       pHit,
       pCrit,
       pMiss: pmiss,
     } = this.resolveProbabilities(this.check, eps);
-    const hitPMF = this.hitEffect
-      ? this.hitEffect instanceof ParsedRollBuilder
-        ? this.hitEffect.toPMF(eps)
-        : pmfFromRollBuilder(this.hitEffect, eps)
-      : PMF.delta(0, eps);
 
-    let critPMF: PMF | null = null;
+    const toEffectPMF = (effect: ActionEffect): PMF =>
+      effect instanceof ParsedRollBuilder
+        ? effect.toPMF(eps)
+        : pmfFromRollBuilder(effect, eps);
+
+    const hitBasePMF = this.hitEffect ? toEffectPMF(this.hitEffect) : PMF.delta(0, eps);
+
+    let critBasePMF: PMF | null = null;
     let phit = pHit;
     let pcrit = pCrit;
 
     if (this.critEffect === null) {
-      critPMF = null;
+      critBasePMF = null;
       phit += pcrit;
       pcrit = 0;
     } else {
-      let critBuilder: RollBuilder | undefined;
-      
-      if (this.critEffect) {
-        critBuilder = this.critEffect;
-      } else if (this.hitEffect instanceof ParsedRollBuilder) {
-        // For ParsedRollBuilder, we can't automatically double dice
-        // So treat it as noCrit() - roll crit probability into hit
-        critPMF = null;
-        phit += pcrit;
-        pcrit = 0;
-        critBuilder = undefined;
-      } else {
-        critBuilder = this.hitEffect?.copy().doubleDice();
-      }
+      // Every damage payload with dice doubles them on a crit — a parsed string by rewriting its
+      // dice terms, a pool by doubling inside then pooling. Throws for a parsed payload that
+      // contains an attack check, which is not damage.
+      const critBuilder = this.critEffect ?? this.hitEffect?.copy().doubleDice();
 
       if (critBuilder) {
-        critPMF = critBuilder instanceof ParsedRollBuilder
-          ? critBuilder.toPMF(eps)
-          : pmfFromRollBuilder(critBuilder, eps);
+        critBasePMF = toEffectPMF(critBuilder);
       }
     }
-    const missPMF = this.missEffect
-      ? this.missEffect instanceof ParsedRollBuilder
-        ? this.missEffect.toPMF(eps)
-        : pmfFromRollBuilder(this.missEffect, eps)
-      : PMF.delta(0, eps);
 
-    // Mix them up
+    // `plusSeparateDamage` channels convolve into hit AND crit — their dice double on a crit like
+    // any attack damage (including under an explicit `onCrit`, which overrides only the base
+    // payload's crit branch, not the channel) — but never feed the base-payload transforms above.
+    // `crit` is the crit payload whether or not any roll reaches it, so a zero-weight crit branch
+    // still reads base ⊛ doubled channels. The one exception: when no roll can crit and a channel
+    // has no single doubled form (a die rolled with advantage, an ambiguous keep), the branch
+    // nobody reads is not forced through `doubleDice()`, and `crit`/`critSeparate` are `delta(0)`.
+    const hasChannels = this.separateDamage.length > 0;
+    const hitChannelsPMF = hasChannels
+      ? PMF.convolveMany(this.separateDamage.map((r) => toEffectPMF(r)), eps)
+      : null;
+    let critChannelsPMF: PMF | null = null;
+    let critPMF: PMF | null = critBasePMF;
+    if (critBasePMF !== null && hasChannels) {
+      try {
+        critChannelsPMF = PMF.convolveMany(
+          this.separateDamage.map((r) => toEffectPMF(r.copy().doubleDice())),
+          eps
+        );
+        critPMF = PMF.convolveMany([critBasePMF, critChannelsPMF], eps);
+      } catch (error) {
+        if (pcrit > 0 || !(error instanceof AmbiguousCritDoublingError)) throw error;
+        critPMF = null;
+      }
+    }
+
+    const hitPMF = hitChannelsPMF
+      ? PMF.convolveMany([hitBasePMF, hitChannelsPMF], eps)
+      : hitBasePMF;
+
+    let missPMF: PMF;
+    let missIsDamage: boolean;
+    if (this.halfOnMissFlag) {
+      // Half of the RESOLVED hit payload (base + every separate channel), never the crit
+      // payload — computed after `hitPMF` above, not from `hitBasePMF`.
+      missPMF = hitPMF.scaleDamage(0.5, "floor");
+      missIsDamage = true;
+    } else if (this.missEffect) {
+      missPMF = toEffectPMF(this.missEffect);
+      missIsDamage = true;
+    } else {
+      missPMF = PMF.delta(0, eps);
+      missIsDamage = false;
+    }
+
+    // Weight the hit/crit/miss PMFs into the final mixture.
     const mix = new Mixture<OutcomeType>(eps);
     if (phit > 0) mix.add("hit", hitPMF, phit);
     if (critPMF && pcrit > 0) mix.add("crit", critPMF, pcrit);
-    if (pmiss > 0)
-      mix.add(this.missEffect ? "missDamage" : "missNone", missPMF, pmiss);
+    if (pmiss > 0) mix.add(missIsDamage ? "missDamage" : "missNone", missPMF, pmiss);
 
     return {
       pmf: mix.buildPMF(eps) ?? PMF.delta(0, eps),
@@ -296,6 +581,10 @@ export class AttackBuilder implements CheckBuilder {
       crit: critPMF ?? PMF.delta(0, eps),
       miss: missPMF ?? PMF.delta(0, eps),
       weights: { hit: phit, crit: pcrit, miss: pmiss },
+      hitBase: hitBasePMF,
+      critBase: critBasePMF ?? PMF.delta(0, eps),
+      hitSeparate: hitChannelsPMF ?? PMF.delta(0, eps),
+      critSeparate: critChannelsPMF ?? PMF.delta(0, eps),
     };
   }
 
@@ -304,13 +593,18 @@ export class AttackBuilder implements CheckBuilder {
    * per-damage-value match probability for the hit and crit branches, or `null` per branch when no
    * descriptor is available — a string-parsed effect, a wrapped transform whose PMF isn't fully
    * captured by its `RollConfig`s (half/scale/maxOf/pooled — `cacheKey()` returns `null` for
-   * exactly these), a `keep`/`bestOf` pool (ambiguous "the dice" under crit doubling), a
-   * pool-wide exploding budget (composition with match not yet threaded through here), a
-   * multi-die-type pool, a single die (can never match), or (crit) `noCrit()`.
+   * exactly these), a `keep`/`bestOf` pool (ambiguous "the dice" under crit doubling), an
+   * exploding pool (per-die `explode` or a pool-wide budget: extra dice join the total), a pool
+   * rolled with advantage/disadvantage (one kept die, not a pool), a subtracted pool (its faces
+   * lower the damage), a multi-die-type pool, or (crit) `noCrit()`. A single die is supported and
+   * can never match (an empty map).
    *
    * The crit branch is built from the SAME crit-effect selection `resolve()` uses (an explicit
    * `onCrit` roll, or the hit dice auto-doubled via `copy().doubleDice()`), so its descriptor
    * reflects the crit branch's REAL doubled pool, not the hit pool re-used blindly.
+   *
+   * Reads ONLY `hitEffect`/`critEffect` (the base pool) — `plusSeparateDamage` channels are a
+   * separate channel, so their dice never count toward a match.
    */
   diceMatchInfo(_eps: number = EPS): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
     const hit = this.matchInfoForEffect(this.hitEffect);
@@ -321,9 +615,14 @@ export class AttackBuilder implements CheckBuilder {
     } else if (this.critEffect) {
       critEffect = this.critEffect;
     } else if (this.hitEffect instanceof ParsedRollBuilder) {
-      critEffect = undefined; // string-parsed hit: doubleDice() throws, crit folds into hit
+      critEffect = undefined; // string-parsed hit: no dice descriptor on either branch
     } else {
-      critEffect = this.hitEffect?.copy().doubleDice();
+      try {
+        critEffect = this.hitEffect?.copy().doubleDice();
+      } catch (error) {
+        // An ambiguous keep or advantage payload has no doubled crit, so no crit descriptor either.
+        if (!(error instanceof AmbiguousCritDoublingError)) throw error;
+      }
     }
     const crit = this.matchInfoForEffect(critEffect);
 
@@ -341,7 +640,9 @@ export class AttackBuilder implements CheckBuilder {
     if (diceConfigs.length !== 1) return null;
     const config = diceConfigs[0];
     if (config.keep || config.bestOf > 0) return null;
-    if (config.explodePoolBudget > 0) return null;
+    if (config.explode > 0 || config.explodePoolBudget > 0) return null;
+    if (config.rollType !== "flat") return null;
+    if (config.isSubtraction || config.count < 0) return null;
 
     // A single die is a SUPPORTED source that can simply never match — `null` is reserved for
     // "no descriptor available at all" (parsed/pooled/keep/bestOf/exploding). Conflating the two
@@ -398,7 +699,16 @@ export class AttackBuilder implements CheckBuilder {
       missKey = k;
     }
 
-    return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*e${eps}`;
+    let channelsKey = "";
+    for (const r of this.separateDamage) {
+      const k = r.cacheKey();
+      if (k === null) return null;
+      channelsKey += `|${k}`;
+    }
+
+    return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*S${channelsKey}*half${
+      this.halfOnMissFlag ? 1 : 0
+    }*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.

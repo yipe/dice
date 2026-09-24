@@ -83,8 +83,8 @@ describe("Mixture", () => {
       const massA = 1 * (1 / 4);
       const massB = 2 * (1 / 4);
       expect(p).toBeCloseTo((massA + massB) / totalMass, 12);
-      expect(bin.count.a).toBeCloseTo(massA, 12);
-      expect(bin.count.b).toBeCloseTo(massB, 12);
+      expect(bin.count.a).toBeCloseTo(massA / totalMass, 12);
+      expect(bin.count.b).toBeCloseTo(massB / totalMass, 12);
     }
   });
 
@@ -163,23 +163,16 @@ describe("mixLabeled", () => {
 });
 
 describe("Mixture Edge Cases", () => {
-  it("should respect custom epsilon for pruning", () => {
+  it("should respect custom epsilon for pruning, relative to the total mass", () => {
     const eps = 0.1;
-    const mix = new Mixture(eps);
-    // This mass (0.25 * 0.3 = 0.075) is < eps, should be dropped
-    mix.add("a", d4, 0.3);
-    // This mass (0.25 * 0.5 = 0.125) is > eps, should be kept
-    mix.add("b", d4, 0.5);
-
-    expect(mix.hasLabel("a")).toBe(false);
-    expect(mix.hasLabel("b")).toBe(true);
-    expect(mix.size()).toBe(4); // only from 'b'
+    // Value 10 carries 0.05 / 1.05 ≈ 0.048 of the mass, below eps: dropped at build.
+    const mix = new Mixture(eps).add("a", d4, 1).add("b", PMF.delta(10), 0.05);
 
     const pmf = mix.buildPMF();
-    expect(pmf.pAt(1)).toBeGreaterThan(0);
-    const bin = pmf.map.get(1)!;
-    expect(bin.count.a).toBeUndefined();
-    expect(bin.count.b).toBeDefined();
+    expect(pmf.support()).toEqual([1, 2, 3, 4]);
+    expect(pmf.pAt(1)).toBeCloseTo(0.25, 12);
+    expect(pmf.outcomeProbability("a")).toBeCloseTo(1, 12);
+    expect(pmf.outcomeProbability("b")).toBe(0);
   });
 
   it("should handle invalid constructor epsilon", () => {
@@ -208,20 +201,18 @@ describe("Mixture Edge Cases", () => {
     expect(mix.toJSON()).toEqual(before);
   });
 
-  it("should sum raw mass when adding same label multiple times", () => {
+  it("should sum the mass of a label added several times", () => {
     const mix = new Mixture<"a">().add("a", d4, 1).add("a", d4, 2);
     const pmf = mix.buildPMF();
 
-    // Total mass is from d4 (weight 1) + d4 (weight 2) = 3
-    // For outcome 1 (p=0.25): raw mass = 1*0.25 + 2*0.25 = 0.75
-    // Normalized p = (0.75) / 3 = 0.25
+    // Raw mass at 1 is 1·0.25 + 2·0.25 = 0.75 of a total 3, so p and count.a are 0.25.
     expect(pmf.pAt(1)).toBeCloseTo(0.25, 12);
     const bin = pmf.map.get(1)!;
-    expect(bin.count.a).toBeCloseTo(0.75, 12);
+    expect(bin.count.a).toBeCloseTo(0.25, 12);
   });
 
   it("weights() should return an empty object for a zero-mass mixture", () => {
-    const mix = new Mixture(0.1).add("a", d4, 0.01); // mass pruned
+    const mix = new Mixture().add("a", d4, 0); // zero weight is ignored
     expect(mix.weights()).toEqual({});
   });
 });

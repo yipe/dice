@@ -46,7 +46,9 @@ describe("AttackRollBuilder", () => {
       const complexBonusAttack = roll.d20().plus(2, d4).plus(1).plus(6).ac(16);
 
       expect(complexBonusAttack.toExpression()).toBe("(d20 + 7 + 2d4 AC 16)");
-      expect(complexBonusAttack.toPMF().mean()).toBe(29.5); // TODO: confirm
+      // E[(d20 + 2d4 + 7) · 1{total ≥ 16}] = 1637/80, enumerated exactly. The old 29.5 counted the
+      // +7 twice (d20 + 2d4 + 14 never misses AC 16, so its mean is the whole 10.5 + 5 + 14).
+      expect(complexBonusAttack.toPMF().mean()).toBeCloseTo(1637 / 80, 12);
     });
 
     it("should work with advantage and bonus dice", () => {
@@ -56,7 +58,6 @@ describe("AttackRollBuilder", () => {
         "(d20 > d20 + 7 + 1d4 AC 14)"
       );
       expect(advBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should work with elven accuracy and bonus dice", () => {
@@ -70,7 +71,6 @@ describe("AttackRollBuilder", () => {
         "(d20 > d20 > d20 + 9 + 1d4 AC 17)"
       );
       expect(elvenBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should work with disadvantage and bonus dice", () => {
@@ -80,7 +80,6 @@ describe("AttackRollBuilder", () => {
         "(d20 < d20 + 6 + 1d4 AC 13)"
       );
       expect(disBlessedAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should handle negative bonus dice", () => {
@@ -136,7 +135,6 @@ describe("AttackRollBuilder", () => {
       expect(blessedAttack.toPMF()).toBeDefined();
       const pmf = blessedAttack.toPMF();
       expect(pmf).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should add single d6 bonus (bardic inspiration)", () => {
@@ -145,7 +143,6 @@ describe("AttackRollBuilder", () => {
       expect(inspiredAttack.toPMF()).toBeDefined();
       const pmf = inspiredAttack.toPMF();
       expect(pmf).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should chain multiple different dice bonuses", () => {
@@ -155,14 +152,12 @@ describe("AttackRollBuilder", () => {
         "(d20 + 5 + 1d8 + 1d6 + 1d4 AC 15)"
       );
       expect(multiDiceAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should chain multiple identical dice bonuses", () => {
       const doubleBlessAttack = d20.plus(d4).plus(d4).plus(6).ac(16);
       expect(doubleBlessAttack.toExpression()).toBe("(d20 + 6 + 2d4 AC 16)");
       expect(doubleBlessAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
 
     it("should handle dice bonuses with modifiers", () => {
@@ -175,22 +170,21 @@ describe("AttackRollBuilder", () => {
     it("should handle dice bonuses with reroll", () => {
       const rerollDiceAttack = d20.plus(1, d6).reroll(1).plus(5).ac(14);
       expect(rerollDiceAttack.toExpression()).toBe(
-        "(d20 + 5 + d6 reroll 1 AC 14)"
+        "(d20 + 5 + (d6 reroll 1) AC 14)"
       );
       expect(rerollDiceAttack.toPMF()).toBeDefined();
-      // TODO - calculate exact expected value
     });
   });
 
   describe("Error Handling", () => {
     it("should handle invalid AC values", () => {
-      // Handles htem for now… we can always prevent it later if needed
+      // Negative AC is accepted, not validated.
       expect(() => {
-        d20.ac(-1);
+        void d20.ac(-1);
       }).not.toThrow();
 
       expect(() => {
-        d20.ac(0);
+        void d20.ac(0);
       }).not.toThrow();
     });
 
@@ -208,7 +202,7 @@ describe("AttackRollBuilder", () => {
     it("should handle invalid plus values", () => {
       const attack = d20.ac(15);
       expect(() => {
-        attack.plus(roll.flat(NaN));
+        void attack.plus(roll.flat(NaN));
       }).toThrow();
     });
   });
@@ -409,7 +403,7 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(5).ac(15).onHit(roll(2, d6).plus(3)).noCrit();
         const pmf = attack.toPMF();
 
-        expect(attack.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3)");
+        expect(attack.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) xcrit0 (2d6 + 3)");
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBeGreaterThanOrEqual(0);
         expect(pmf.mean()).toBeGreaterThan(0);
@@ -510,7 +504,6 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(4).ac(14).onHit(roll(3, d6).minimum(2).plus(4));
         const pmf = attack.toPMF();
 
-        // TODO: Add expression checks
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBe(0);
       });
@@ -519,21 +512,24 @@ describe("AttackRollBuilder", () => {
         const attack = d20.plus(6).ac(16).onHit(roll(2, d8).reroll(1).plus(3));
         const pmf = attack.toPMF();
 
-        // TODO: add expression checks
         expect(pmf).toBeDefined();
         expect(pmf.min()).toBeGreaterThanOrEqual(0);
         expect(pmf.mean()).toBeGreaterThan(0);
       });
 
-      it("should handle attack with keep dice in damage", () => {
+      it("should handle attack with keep dice in damage, given an explicit crit", () => {
+        // A 4d6-drop-lowest payload has no single doubled crit, so it takes an explicit one.
+        const keep = () => roll(4, d6).keepHighest(4, 3);
         const attack = d20
           .plus(5)
           .ac(15)
-          .onHit(roll(4, d6).keepHighest(4, 3).plus(2));
+          .onHit(keep().plus(2))
+          .onCrit(keep().plus(keep()).plus(2));
         const pmf = attack.toPMF();
 
-        expect(pmf).toBeDefined();
         expect(pmf.min()).toBe(0);
+        // 0.5 × (15869/1296 + 2) + 0.05 × (2 × 15869/1296 + 2)
+        expect(pmf.mean()).toBeCloseTo(8.446759259259259, 10);
       });
     });
   });
@@ -569,7 +565,6 @@ describe("AttackRollBuilder", () => {
         "(d20 + 5 AC 15) * (2d6 + 3) crit (5d6 + 3)"
       );
 
-      // TODO - add resolve() math checks here
     });
 
     it("can chain", () => {
@@ -596,7 +591,7 @@ describe("AttackRollBuilder", () => {
 
     it("can prevent auto-crit", () => {
       const action = d20.plus(5).ac(15).onHit(roll(2).d6().plus(3)).noCrit();
-      expect(action.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3)");
+      expect(action.toExpression()).toBe("(d20 + 5 AC 15) * (2d6 + 3) xcrit0 (2d6 + 3)");
       expect(action.toPMF()).toBeDefined();
       expect(action.toPMF().mean()).toBeCloseTo(5.5);
     });
@@ -733,21 +728,21 @@ describe("AttackRollBuilder", () => {
       it("should handle invalid hit effects", () => {
         const attack = d20.ac(15);
         expect(() => {
-          attack.onHit(roll.flat(NaN));
+          void attack.onHit(roll.flat(NaN));
         }).toThrow();
       });
 
       it("should handle invalid crit effects", () => {
         const attack = d20.ac(15).onHit(roll.d6());
         expect(() => {
-          attack.onCrit(roll.flat(NaN));
+          void attack.onCrit(roll.flat(NaN));
         }).toThrow();
       });
 
       it("should handle invalid miss effects", () => {
         const attack = d20.ac(15).onHit(roll.d6());
         expect(() => {
-          attack.onMiss(roll.flat(NaN));
+          void attack.onMiss(roll.flat(NaN));
         }).toThrow(); // Currently allows NaN effects, but should validate
       });
     });

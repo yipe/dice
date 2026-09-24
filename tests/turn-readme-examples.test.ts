@@ -98,7 +98,9 @@ describe("README: the goliath and the single-attack turn", () => {
       .onAnyCrit(roll(2, d8))
       .otherwise([unarmed, unarmed])
       .onEveryHit(d6);
-    expect(goliath.mean()).toBeCloseTo(39.5903, 4);
+    // Exactly 39.59025 (8.7 dagger + 9.9225 sneak + 5.1975 burn + 1.755 smite + 9.11525 flurry
+    // + 4.9 mark), which the README rounds to 39.5903.
+    expect(goliath.mean()).toBeCloseTo(39.59025, 10);
   });
 
   it("accepts a bare source as well as a list", () => {

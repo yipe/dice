@@ -26,19 +26,47 @@ export interface DicePrivateData {
   isDCCheck?: boolean;
   /** The "other" distribution recorded by {@link Dice.combine}. */
   except?: Dice | Record<string, never>;
-  /** Keep-highest/lowest selector applied when a die is multiplied out. */
-  keep?: (values: number[]) => number;
-  /** Set on a freshly parsed flat `dN`/`hdN` atom: its own face count and whether it rerolls a
-   * natural 1 once (Halfling Luck). Read by {@link parseExpression} in parser.ts to recover a
-   * base check die's natural-max identity after it has been convolved with bonus to-hit dice
-   * and modifiers, for a correct plain-`crit` probability. See parser.ts's "Track a flat ...
-   * base check die" comment. */
-  checkDie?: { sides: number; rerollOne: boolean };
-  /** Set on the result of a tracked AC gate (see parser.ts): the exact "natural max, any bonus
-   * roll" sub-distribution, already isolated from the rest of the to-hit total. A plain `crit`
-   * clause reads this directly instead of peeling the combined expression's single highest
-   * face, which is wrong whenever bonus dice are present. */
-  natMaxCritSlice?: Dice;
+  /** Set by a keep (`4kh3`, `2kl1`) on the dice it keeps from: how many of the repeated copies are
+   * kept, and whether the lowest or the highest. A keep of one (`2kh1d20`) keeps a single natural roll. */
+  keep?: { kept: number; lowest: boolean };
+  /** The natural roll of an attack check, followed through every op applied to it, so a crit is the
+   * natural-max event (or an `xcrit` range of natural faces) at any bonus roll. It is the check's one
+   * d20 wherever it sits in the sum, or with no d20 its largest die; other dice are bonus dice. Read
+   * and written by {@link parseExpression} in parser.ts; set on every freshly parsed `dN`/`hdN` atom. */
+  critTrack?: CritTrack;
+  /** Set instead of {@link critTrack} on a value whose natural die has no single natural roll to
+   * follow (`2d20`, `d20 + d20`, `(d20 + 1d4)!`, a bonus pool like `2d4`): that die's size, so a
+   * die it outranks never passes for the natural roll. Read and written by parser.ts. */
+  untrackedSides?: number;
+  /** Set on a value built from numbers alone, with no die anywhere in it but an AC or DC target. As an
+   * attack check it has no natural roll, so its crit mass is exactly 0. Read and written by parser.ts. */
+  noDie?: true;
+  /** The operands of an `&` mix, each carried through every op since with its own natural roll, so the
+   * mix crits where a branch does, at that branch's share. Read and written by parser.ts. */
+  branches?: readonly Dice[];
+  /** Set on the result of an `AC` gate: a following `*` is an attack's hit payload, which crits
+   * even with no crit clause. Read by {@link parseExpression} in parser.ts. */
+  isACCheck?: boolean;
+  /** Set on an attack whose crit is its hit payload doubled (no crit clause): the payload's
+   * text, so a trailing hit-only term joins the payload and doubles with it. See parser.ts. */
+  implicitCrit?: { payload: string };
+  /** Set on an attack's payload: the result of an AC check's `*`, and of each hit-only term after it.
+   * A landed hit that deals 0 there is recorded under `hit` at 0, where the misses also sit, and a
+   * later hit-only term keeps it (see {@link Dice.calculateHitDistribution}). Read and written by parser.ts. */
+  attackPayload?: true;
+}
+
+/**
+ * An attack check's natural roll. `slice(f)` is the check's share where the kept natural roll is f,
+ * in the check's own counts: every op after the natural die acts face by face, so replaying the
+ * ops on face f's weight gives exactly that share, and a mix of checks adds its branches' shares.
+ */
+export interface CritTrack {
+  /** The natural die's size. */
+  readonly sides: number;
+  /** The check is its natural roll itself, with no op since (`d20`, `2kh1d20`, `d20 > d20`, `d20 & d20`). */
+  readonly bare: boolean;
+  readonly slice: (face: number) => Dice;
 }
 
 /**
@@ -104,7 +132,6 @@ export class Dice {
   getAverage(key: OutcomeType): number {
     const distribution = this.getOutcomeDistribution(key);
     if (!distribution) return 0;
-    // TODO caching opportunity
 
     const totalCount = Object.values(distribution).reduce(
       (sum, count) => sum + count,
@@ -118,7 +145,7 @@ export class Dice {
     return expectedDamage / totalCount;
   }
 
-  // TODO this can be private later if we change how testing works
+  // Public (no modifier) for direct test access.
   calculateHitDistribution(): DamageDistribution {
     const hitValues: DamageDistribution = {};
 
@@ -147,9 +174,10 @@ export class Dice {
         }
       }
 
-      // Zero damage should not be counted as hits - they represent misses
+      // At 0 a miss and a hit that deals nothing coincide: only the landed hits recorded there are
+      // hits (an attack payload's, see `attackPayload`); everything else at 0 is a miss.
       if (numFace === 0) {
-        hitCount = 0;
+        hitCount = this.outcomeData.hit?.[0] ?? 0;
       }
 
       // Defensive clamp: guards against negative hit counts from older
@@ -210,21 +238,6 @@ export class Dice {
       }
     }
 
-    return result;
-  }
-
-  private removeFaces(facesToRemove: number[]): Dice {
-    const result = new Dice();
-
-    for (const [key, value] of Object.entries(this.faces)) {
-      const numKey = Number(key);
-      if (!facesToRemove.includes(numKey)) {
-        result.faces[numKey] = value;
-      }
-    }
-
-    result.privateData = { ...this.privateData };
-    result.outcomeData = { ...this.outcomeData };
     return result;
   }
 
@@ -289,6 +302,7 @@ export class Dice {
     this.faces[face] = current + count;
   }
 
+  /** Scales every face count, and every outcome's counts with it, so each outcome keeps its share. */
   public normalize(scalar: number): Dice {
     const result = new Dice();
 
@@ -297,7 +311,13 @@ export class Dice {
     }
 
     result.privateData = { ...this.privateData };
-    result.outcomeData = { ...this.outcomeData };
+    for (const [key, distribution] of Object.entries(this.outcomeData)) {
+      const scaled: DamageDistribution = {};
+      for (const [face, count] of Object.entries(distribution)) {
+        scaled[Number(face)] = count * scalar;
+      }
+      result.outcomeData[key as OutcomeType] = scaled;
+    }
     return result;
   }
 
@@ -348,11 +368,20 @@ export class Dice {
   }
 
   public divideRoundUp(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => Math.ceil(a / b));
+    this.assertNonZeroDivisor(other);
+    return this.binaryOp(other, (a, b) => (b === 0 ? 0 : Math.ceil(a / b)));
   }
 
   public divideRoundDown(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => Math.floor(a / b));
+    this.assertNonZeroDivisor(other);
+    return this.binaryOp(other, (a, b) => (b === 0 ? 0 : Math.floor(a / b)));
+  }
+
+  /** A divisor that can be 0 has no quotient there. A 0 face with no weight is never rolled, so it passes. */
+  private assertNonZeroDivisor(other: Dice | number): void {
+    if (typeof other === "number" ? other === 0 : other.get(0) > 0) {
+      throw new DiceParseError("Division by zero: the divisor can be 0");
+    }
   }
 
   public and(other: Dice | number): Dice {
@@ -401,23 +430,21 @@ export class Dice {
     return result;
   }
 
+  /**
+   * Roll once and, on a result in `toReroll`'s faces, roll again and keep the second roll. Each
+   * result keeps its own weight: with T the total count and c_R the count on the rerolled faces,
+   * face v's new count is c_v·(T·[v∉R] + c_R), i.e. p′(v) = p(v)·[v∉R] + P(R)·p(v).
+   */
   public reroll(toReroll: Dice | number): Dice {
-    const rerollDice =
-      typeof toReroll === "number" ? Dice.scalar(toReroll) : toReroll;
+    const rerolled = new Set(typeof toReroll === "number" ? [toReroll] : toReroll.keys());
+    const total = this.total();
+    let rerolledCount = 0;
+    for (const [face, count] of this.getFaceEntries()) if (rerolled.has(face)) rerolledCount += count;
 
-    const rerollKeys = rerollDice.keys();
-    const rerollSet = new Set(rerollKeys);
-    const removed = this.removeFaces(rerollKeys);
-    let result = new Dice();
-
-    for (const face of this.keys()) {
-      const wasRerolled = rerollSet.has(face);
-      result = result.combine(removed);
-      if (wasRerolled) {
-        result = result.combine(this);
-      }
+    const result = new Dice();
+    for (const [face, count] of this.getFaceEntries()) {
+      result.increment(face, count * ((rerolled.has(face) ? 0 : total) + rerolledCount));
     }
-
     return result;
   }
 
@@ -440,7 +467,7 @@ export class Dice {
       const numKey = Number(key);
       result.increment(numKey, value);
 
-      // If the key did not already exist in `other`, we remove it from `except`
+      // A key absent from `other` is still tracked in `except`.
       if (!(numKey in other.faces)) {
         except.increment(numKey, value); // still tracked in except
       }
@@ -500,13 +527,12 @@ export class Dice {
     const critDistro = this.getOutcomeDistribution("crit") || {};
     const missDistro = this.getOutcomeDistribution("missDamage") || {};
     const saveDistro = this.getOutcomeDistribution("saveHalf") || {};
+    const saveFailDistro = this.getOutcomeDistribution("saveFail") || {};
     const pcDistro = this.getOutcomeDistribution("pc") || {};
 
-    // A non-empty save distribution means the "save" mechanic was used (e.g.
-    // "save half"): its success mass is a saveHalf outcome and the remaining
-    // (full-damage) mass is a saveFail. The previous heuristic — "isSaveHalf iff
-    // 2×(a half value) appears in the hit distribution" — false-negatived on odd
-    // or constant damage, mislabeling saveHalf as saveFail and saveFail as hit.
+    // A save string records its failed saves as `saveFail` and its halved successes as
+    // `saveHalf`, a failed save that rolls 0 damage included. What is left of a save-half string
+    // is full damage on a failed save too; a bare DC check (no payload) is 1 on a failed save.
     const isSaveHalf = Object.keys(saveDistro).length > 0;
 
     const isDCCheck = this.privateData.isDCCheck === true;
@@ -567,15 +593,16 @@ export class Dice {
       if (saveDistro[face]) {
         const c = clampNonNeg(saveDistro[face] / total);
         if (c > 0) {
-          if (isSaveHalf) {
-            count.saveHalf = c; // half damage on successful save
-            attr.saveHalf = clampNonNeg((face * saveDistro[face]) / total);
-          } else {
-            count.saveFail = (count.saveFail ?? 0) + c; // regular fail
-            attr.saveFail = clampNonNeg(
-              (attr.saveFail ?? 0) + (face * saveDistro[face]) / total
-            );
-          }
+          count.saveHalf = c; // half damage on successful save
+          attr.saveHalf = clampNonNeg((face * saveDistro[face]) / total);
+        }
+      }
+
+      if (saveFailDistro[face]) {
+        const c = clampNonNeg(saveFailDistro[face] / total);
+        if (c > 0) {
+          count.saveFail = (count.saveFail ?? 0) + c;
+          attr.saveFail = clampNonNeg((attr.saveFail ?? 0) + (face * saveFailDistro[face]) / total);
         }
       }
 
@@ -587,13 +614,14 @@ export class Dice {
         }
       }
 
-      // Handle faces with no specific distribution (missNone) for non-save and non-DC checks
-      if (!isSaveHalf && !isDCCheck) {
+      // What no outcome claims deals no damage (missNone); a bare DC check's successes stay unlabelled.
+      if (!isDCCheck) {
         const distroCountRaw =
           (hitDistro[face] || 0) +
           (critDistro[face] || 0) +
           (missDistro[face] || 0) +
           (saveDistro[face] || 0) +
+          (saveFailDistro[face] || 0) +
           (pcDistro[face] || 0);
 
         const unaccountedCount = clampNonNeg(faceCount - distroCountRaw);

@@ -286,12 +286,13 @@ describe("AttackBuilder", () => {
       );
     });
 
-    it("should double crit dice for keepLowest", () => {
+    it("should refuse to auto-double a keepLowest crit, and render an explicit one", () => {
       const attack = d20
         .plus(10)
         .ac(18)
         .onHit(roll(1).d(6).keepLowest(3, 2).plus(3));
-      expect(attack.toExpression()).toBe(
+      expect(() => attack.toExpression()).toThrow(/3kl2/);
+      expect(attack.onCrit("3kl2(2d6) + 3").toExpression()).toBe(
         "(d20 + 10 AC 18) * (3kl2(1d6) + 3) crit (3kl2(2d6) + 3)"
       );
     });

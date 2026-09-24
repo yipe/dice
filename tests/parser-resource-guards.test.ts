@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DiceParseError, parse } from "../src/index";
 
 /**
- * Resource-exhaustion guards (item 7).
- *
  * Adversarial expressions — an enormous die, an enormous dice count, or a keep
- * over a combinatorially huge enumerated pool — must be rejected rather than
+ * over an enormous pool — must be rejected rather than
  * exhausting memory/CPU. The caps are generous enough that every legitimate
  * expression still parses.
  */
@@ -40,18 +38,16 @@ describe("parser resource-exhaustion guards", () => {
     });
   });
 
-  describe("keep enumeration cap", () => {
-    it("rejects a keep over a combinatorially huge pool", () => {
-      // 10^10 enumerated outcomes — far over the cap.
-      expect(() => parse("10kh1d10")).toThrow(/Keep enumeration .* exceeds the maximum/);
-      expect(() => parse("10kh1d10")).toThrow(DiceParseError);
+  describe("keep work cap", () => {
+    it("rejects a keep whose order-statistic work is astronomical", () => {
+      expect(() => parse("1000kh500(1d1000)")).toThrow(/Keep .* exceeds the maximum work/);
+      expect(() => parse("1000kh500(1d1000)")).toThrow(DiceParseError);
     });
 
-    it("still allows a normal keep pool (4kh3d6 = 6^4 outcomes)", () => {
-      const r = parse("4kh3d6");
-      // keep highest 3 of 4d6 -> support 3..18
-      expect(r.min()).toBe(3);
-      expect(r.max()).toBe(18);
+    it("still allows a large keep pool (10kh1d10 = 10^10 ordered outcomes)", () => {
+      const r = parse("10kh1d10");
+      expect(r.min()).toBe(1);
+      expect(r.max()).toBe(10);
       expect(r.mass()).toBeCloseTo(1, 9);
     });
   });

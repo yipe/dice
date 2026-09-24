@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { d10, d20, d4, d6, d8, roll } from "../builder";
 import { parse } from "../parser/parser";
 import { builderPMFCache } from "./factory";
-import { HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
+import { AmbiguousKeepError, HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
 import type { RollConfig } from "./types";
 export const testCases: {
   label: string;
@@ -28,7 +28,7 @@ export const testCases: {
   {
     label: "Reroll with minimum",
     config: { sides: 4, reroll: 2, minimum: 2 },
-    expected: "1(2>(d4 reroll d2))",
+    expected: "2>(d4 reroll d2)",
   },
   {
     label: "Reroll with minimum and multiple dice",
@@ -161,7 +161,7 @@ describe("RollBuilder", () => {
   it("should throw error if adding a die after adding a die", () => {
     const d8Builder = roll.d8();
     expect(() => {
-      d8Builder.d(8);
+      void d8Builder.d(8);
     }).toThrow("Cannot add a die after adding a die");
   });
 
@@ -172,7 +172,7 @@ describe("RollBuilder", () => {
 
   it("should handle negative base dice", () => {
     const builder = roll(-1).d8();
-    expect(builder.toExpression()).toBe("-1d8");
+    expect(builder.toExpression()).toBe("0 - 1d8");
   });
 
   describe("RollBuilder toExpression", () => {
@@ -363,15 +363,8 @@ describe("RollBuilder", () => {
       expect(builder.toPMF()?.mean()).toBeCloseTo(24.5086, 1);
     });
 
-    it("should handle complex keepLowest scenario", () => {
-      const builder = roll(8).d10().plus(3).keepLowest(4, 2);
-      expect(builder.toExpression()).toBe("4kl2(8d10) + 3");
-      expect(builder.toPMF()).toBeDefined();
-      // Interpretation: 4 trials of (8d10), keep the lowest 2 trial sums, then +3.
-      // Per-trial mean is 8*5.5 = 44, but picking the 2 minima of 4 lowers the total well below 2*44.
-      // The exact expectation is computed by DP over the per-trial PMF (order statistics of sums).
-      // See keepSumPMF DP in ast.ts.
-      expect(builder.toPMF()?.mean()).toBeCloseTo(80.1826, 3);
+    it("should refuse a per-die keepLowest(4, 2) on 8d10, which has more than one reading", () => {
+      expect(() => roll(8).d10().plus(3).keepLowest(4, 2)).toThrow(AmbiguousKeepError);
     });
 
     it("should handle copy() with multiple dice configurations", () => {
@@ -460,17 +453,8 @@ describe("RollBuilder", () => {
       expect(finalBuilder.toPMF()?.mean()).toBeCloseTo(7.2, 1);
     });
 
-    it("should handle complex combination of keep and modifiers", () => {
-      const builder = roll(3).d8().keepHighest(4, 3).plus(3);
-      // .addRoll(2)
-      // .d6()
-      // .keepLowest(2, 1);
-      // + 2kl1(2d6)
-      expect(builder.toExpression()).toBe("4kh3(3d8) + 3");
-      expect(builder.toPMF()).toBeDefined();
-      // Interpretation: 4 trials of (3d8), keep the highest 3 trial sums, then +3.
-      // Exact mean is E[sum of top-3 of 4 i.i.d. 3d8] + 3, computed via DP over the per-trial PMF.
-      expect(builder.toPMF()?.mean()).toBeCloseTo(47.6011, 3);
+    it("should refuse a per-die keepHighest(4, 3) on 3d8, which has more than one reading", () => {
+      expect(() => roll(3).d8().keepHighest(4, 3).plus(3)).toThrow(AmbiguousKeepError);
     });
   });
 
@@ -478,84 +462,84 @@ describe("RollBuilder", () => {
     describe("RollBuilder Input Validation", () => {
       it("should handle invalid dice sides", () => {
         expect(() => {
-          roll.d(0);
-        }).not.toThrow(); // Currently allows 0 sides, but should validate
+          void roll.d(0);
+        }).not.toThrow(); // 0 sides is no die
 
         expect(() => {
-          roll.d(-1);
-        }).not.toThrow(); // Currently allows negative sides, but should validate
+          void roll.d(-1);
+        }).toThrow("sides must not be negative, got -1");
       });
 
       it("should handle invalid dice count", () => {
         expect(() => {
-          roll(-1).d6();
+          void roll(-1).d6();
         }).not.toThrow(); // Currently allows negative count, but should validate
 
         expect(() => {
-          roll(0).d6();
+          void roll(0).d6();
         }).not.toThrow(); // Currently allows 0 count, but should validate
       });
 
       it("should handle invalid reroll values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.reroll(-1);
+          void builder.reroll(-1);
         }).not.toThrow(); // Currently allows negative reroll, but should validate
 
         expect(() => {
-          builder.reroll(7); // Reroll value higher than die sides
+          void builder.reroll(7); // Reroll value higher than die sides
         }).not.toThrow(); // Currently allows invalid reroll, but should validate
       });
 
       it("should handle invalid minimum values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.minimum(0); // Minimum of 0 should be invalid
+          void builder.minimum(0); // Minimum of 0 should be invalid
         }).not.toThrow(); // Currently allows, but should validate
 
         expect(() => {
-          builder.minimum(7); // Minimum higher than die sides
+          void builder.minimum(7); // Minimum higher than die sides
         }).not.toThrow(); // Currently allows, but should validate
       });
 
       it("should handle invalid explode values", () => {
         const builder = roll.d6();
         expect(() => {
-          builder.explode(-1);
+          void builder.explode(-1);
         }).toThrow();
 
         expect(() => {
-          builder.explode(0);
+          void builder.explode(0);
         }).not.toThrow(); // Currently allows 0 explode, which just means no explode
       });
 
       it("should handle invalid keep dice values", () => {
         const builder = roll(3).d6();
         expect(() => {
-          builder.keepHighest(2, 5); // Keep more than total
+          void builder.keepHighest(2, 5); // Keep more than total
+        }).toThrow(AmbiguousKeepError);
+
+        expect(() => {
+          void builder.keepHighest(3, 0); // Keep 0 dice
         }).not.toThrow(); // Currently allows, but should validate
 
         expect(() => {
-          builder.keepHighest(3, 0); // Keep 0 dice
-        }).not.toThrow(); // Currently allows, but should validate
-
-        expect(() => {
-          builder.keepHighest(3, -1); // Keep negative dice
+          void builder.keepHighest(3, -1); // Keep negative dice
         }).not.toThrow(); // Currently allows, but should validate
       });
 
       it("should handle invalid bestOf values", () => {
         const builder = roll(3).d6();
         expect(() => {
-          builder.bestOf(0);
+          void builder.bestOf(0);
         }).toThrow();
 
         expect(() => {
-          builder.bestOf(5); // bestOf higher than count
+          void builder.bestOf(5); // bestOf higher than count
         }).not.toThrow(); // TODO: Currently allows, but should throw
 
         expect(() => {
-          builder.bestOf(-1);
+          void builder.bestOf(-1);
         }).toThrow();
       });
     });
@@ -809,13 +793,13 @@ describe("RollBuilder", () => {
     });
 
     describe("Complex Combination Mathematics", () => {
-      it("should have correct mean for 2d6 + 3 with advantage", () => {
+      it("should roll each die of 2d6 + 3 with advantage", () => {
         const rollBuilder = new RollBuilder(2).d6().withAdvantage().plus(3);
         const pmf = rollBuilder.toPMF();
-        // Mean should be higher than 2d6 + 3 due to advantage
-        expect(pmf.mean()).toBeGreaterThan(7.0); // 2d6 + 3 mean (not 10.0)
-        expect(pmf.min()).toBe(4); // Advantage can result in lower values
-        expect(pmf.max()).toBe(9); // Actual max value is 9
+        // Two advantaged d6 (161/36 each) plus 3.
+        expect(pmf.mean()).toBeCloseTo(161 / 18 + 3, 12);
+        expect(pmf.min()).toBe(5);
+        expect(pmf.max()).toBe(15);
       });
 
       it("should have correct mean for 3d6 reroll 1 minimum 2 + 5", () => {
@@ -870,7 +854,7 @@ describe("RollBuilder", () => {
     it("should correctly subtract a roll that includes a subtraction", () => {
       const subtractedRoll = roll(1, 8).minus(d4); // 1d8 - 1d4
       const builder = roll(1, 20).minus(subtractedRoll);
-      expect(builder.toExpression()).toBe("d20 - 1d8 + 1d4");
+      expect(builder.toExpression()).toBe("d20 - 1d8 ~+ 1d4");
       expect(builder.toPMF().mean()).toBeCloseTo(10.5 - 4.5 + 2.5);
     });
   });
@@ -881,19 +865,21 @@ describe("RollBuilder", () => {
       expect(builder.toExpression()).toBe("4d6 + 5");
     });
 
-    it("should double keepHighest dice", () => {
-      const builder = roll(1).d(6).keepHighest(4, 3).doubleDice();
-      expect(builder.toExpression()).toBe("4kh3(2d6)");
+    it("should double keep-highest-of-1 dice inside each trial", () => {
+      const builder = roll(1).d(6).keepHighest(4, 1).doubleDice();
+      expect(builder.toExpression()).toBe("4kh1(2d6)");
     });
 
-    it("should double keepLowest dice", () => {
-      const builder = roll(1).d(6).keepLowest(4, 3).doubleDice();
-      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    it("should refuse to double a keepHighest of more than one die (no single doubled meaning)", () => {
+      expect(() => roll(1).d(6).keepHighest(4, 3).doubleDice()).toThrow(/4kh3/);
     });
 
-    it("should keepLowest double dice", () => {
-      const builder = roll(1).d(6).doubleDice().keepLowest(4, 3);
-      expect(builder.toExpression()).toBe("4kl3(2d6)");
+    it("should refuse to double keepLowest dice (no single doubled meaning)", () => {
+      expect(() => roll(1).d(6).keepLowest(4, 3).doubleDice()).toThrow(/4kl3/);
+    });
+
+    it("should refuse a keepLowest(4, 3) on the doubled 2d6, which has more than one reading", () => {
+      expect(() => roll(1).d(6).doubleDice().keepLowest(4, 3)).toThrow(AmbiguousKeepError);
     });
 
     it("should not affect modifiers", () => {
@@ -1103,7 +1089,7 @@ describe("RollBuilder", () => {
       const damage = roll(2).d6().withAdvantage();
       const halvedDamage = damage.half();
 
-      expect(halvedDamage.toExpression()).toBe("(d6 > d6) // 2");
+      expect(halvedDamage.toExpression()).toBe("(2(d6 > d6)) // 2");
     });
 
     it("should produce correct AST", () => {

@@ -78,7 +78,7 @@ describe("PMF.withProbability", () => {
   it("does not mutate the payload PMF", () => {
     const payload = parse("3d6");
     const snap = seriesOf(payload);
-    PMF.withProbability(payload, 0.25);
+    void PMF.withProbability(payload, 0.25);
     expect(seriesOf(payload)).toEqual(snap);
   });
 
@@ -152,7 +152,7 @@ describe("PMF.exclusive", () => {
     const snapA = seriesOf(a);
     const snapB = seriesOf(b);
 
-    PMF.exclusive([
+    void PMF.exclusive([
       { pmf: a, weight: 0.4 },
       { pmf: b, weight: 0.6 },
     ]);

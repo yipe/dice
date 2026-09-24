@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../dist-eslint-fixture-unused"
+  },
+  "include": ["./eslint-no-discarded-builder.fixture.ts"],
+  "exclude": ["../dist", "../node_modules"]
+}

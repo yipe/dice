@@ -6,19 +6,23 @@
  * Accounts for two modifiers:
  * - **Elemental Adept** (`minimumDieRoll >= 2`): rolls below the minimum are
  *   bumped up to it, collapsing the low faces onto a single heavier value.
- * - **Empowered Spell** (`rerollDamageDice > 0`): a number of dice may be
+ * - **Empowered Spell** (`rerollDamageDice > 0`): up to that many dice may be
  *   rerolled once, giving a second chance at a match.
  *
- * The base and Elemental-Adept cases are computed exactly (see
- * {@link pAllDistinct}); the Empowered-Spell reroll is an explicit model layered
- * on the exact base match probability.
+ * Every case is exact. With Empowered Spell, a roll that already matched stands;
+ * otherwise the caster rerolls the dice — which ones and how many, up to the
+ * limit — that maximise the chance of a match. The rerolled dice match when they
+ * collide among themselves or with a kept die.
  */
 
 /** Options that modify bounce odds via metamagic / feats. */
 export interface BounceOddsOptions {
   /** Minimum die roll — e.g. 2 for Elemental Adept, 3 for Great Weapon Fighting 2024. */
   minimumDieRoll?: number;
-  /** Number of dice that may be rerolled once — e.g. CHA modifier for Empowered Spell. */
+  /**
+   * How many dice may be rerolled once — e.g. CHA modifier for Empowered Spell. "Up to":
+   * the odds assume the best choice of which dice, and how many, to reroll.
+   */
   rerollDamageDice?: number;
 }
 
@@ -114,6 +118,11 @@ function pMatch(dice: number, faces: number, minimumDieRoll: number): number {
  * P(at least two of `diceCount` dice with `dieFaces` faces match), honoring
  * Elemental Adept and Empowered Spell. Returns a probability in [0, 1].
  *
+ * With `rerollDamageDice`, a roll that matched stands; otherwise up to that many
+ * dice are rerolled once, choosing which and how many to maximise the chance of a
+ * match (rerolling fewer can be better: a kept Elemental Adept face is a likely
+ * target). The fresh dice match when they collide among themselves or with a kept die.
+ *
  * @param diceCount Number of dice rolled.
  * @param dieFaces Faces per die (e.g. 8 for d8).
  * @param options Optional metamagic / feat modifiers.
@@ -132,28 +141,41 @@ export function calculateBounceOdds(
   const pMatchFirst = pMatch(diceCount, dieFaces, minimumDieRoll);
 
   // Without Empowered Spell we're done.
-  const rerollCount = Math.min(rerollDamageDice, diceCount);
-  if (rerollCount <= 0) return pMatchFirst;
+  const rerollLimit = Math.min(Math.floor(rerollDamageDice), diceCount);
+  if (rerollLimit <= 0 || pMatchFirst >= 1) return pMatchFirst;
 
-  // Empowered Spell: reroll `rerollCount` non-matching dice once. Model the
-  // second chance as (a rerolled die matching one of the kept dice) OR (the
-  // rerolled dice matching among themselves).
-  const pNoMatchFirst = 1 - pMatchFirst;
-  const keptDice = diceCount - rerollCount;
-  const effectiveFaces = minimumDieRoll >= 2 ? dieFaces - (minimumDieRoll - 1) : dieFaces;
+  // A roll with no match shows distinct faces. Elemental Adept gives the die two kinds of
+  // face: the collapsed minimum (the heavy face, weight minimumDieRoll/dieFaces) and the
+  // `lightCount` faces above it (1/dieFaces each); a plain die has only light faces. After
+  // rerolling k dice, no match means the k fresh dice are distinct and avoid every kept
+  // face: k!·e_k over the faces not kept, which `pAllDistinct` computes.
+  const collapsed = minimumDieRoll >= 2;
+  const lightCount = collapsed ? dieFaces - minimumDieRoll : dieFaces;
+  const heavyWeight = collapsed ? minimumDieRoll / dieFaces : 0;
+  const pMissAfter = (rerolled: number, keptLight: number, heavyKept: boolean): number =>
+    pAllDistinct(rerolled, dieFaces, lightCount - keptLight, heavyKept ? 0 : heavyWeight);
 
-  // With no kept dice, a rerolled die vacuously "misses" all of them (prob 1), so
-  // the only way to match is among the rerolled dice themselves (pRerolledMatch below).
-  const pRerollDieMissesAll =
-    keptDice > 0 ? Math.pow((effectiveFaces - keptDice) / effectiveFaces, rerollCount) : 1;
-  const pAtLeastOneRerollMatches = 1 - pRerollDieMissesAll;
-  const pRerolledMatch = rerollCount >= 2 ? pMatch(rerollCount, dieFaces, minimumDieRoll) : 0;
-  const pMatchAfterReroll = Math.min(
+  // The best reroll for each kind of first roll. Without the heavy face every kept face is
+  // light; with it, the caster either keeps it or rerolls it along with k − 1 light dice.
+  let missLightOnly = 1;
+  let missWithHeavy = 1;
+  for (let rerolled = 1; rerolled <= rerollLimit; rerolled++) {
+    const allLightKept = pMissAfter(rerolled, diceCount - rerolled, false);
+    missLightOnly = Math.min(missLightOnly, allLightKept);
+    missWithHeavy = Math.min(missWithHeavy, allLightKept);
+    if (rerolled < diceCount) {
+      missWithHeavy = Math.min(missWithHeavy, pMissAfter(rerolled, diceCount - 1 - rerolled, true));
+    }
+  }
+
+  // P(distinct, light faces only) = n!·C(L, n)·l^n; P(distinct, one heavy) = n·H·(n−1)!·C(L, n−1)·l^(n−1).
+  const pLightOnly = pAllDistinct(diceCount, dieFaces, lightCount, 0);
+  const pWithHeavy = diceCount * heavyWeight * pAllDistinct(diceCount - 1, dieFaces, lightCount, 0);
+
+  return Math.min(
     1,
-    pAtLeastOneRerollMatches + pRerolledMatch * (1 - pAtLeastOneRerollMatches)
+    pMatchFirst + pLightOnly * (1 - missLightOnly) + pWithHeavy * (1 - missWithHeavy)
   );
-
-  return Math.min(1, pMatchFirst + pNoMatchFirst * pMatchAfterReroll);
 }
 
 /**
@@ -238,8 +260,19 @@ export function jointSumAndMatch(dice: number, weights: readonly number[]): Map<
   const total = diceSumDistribution(dice, weights);
   const distinct = sumAllDistinctDistribution(dice, weights);
 
+  // A sum carries match mass only if a roll with a repeated face reaches it: twice one face
+  // plus any `dice − 2` faces. At every other sum the difference below is exactly 0, and
+  // float residue must not turn it into a bin.
+  const rest = diceSumDistribution(dice - 2, weights);
+  const matchable = new Set<number>();
+  weights.forEach((weight, index) => {
+    if (weight <= 0) return;
+    for (const sum of rest.keys()) matchable.add(2 * (index + 1) + sum);
+  });
+
   const result = new Map<number, number>();
   for (const [sum, mass] of total) {
+    if (!matchable.has(sum)) continue;
     const matchMass = Math.max(0, mass - (distinct.get(sum) ?? 0));
     if (matchMass > 0) result.set(sum, matchMass);
   }
@@ -312,43 +345,53 @@ function explodingPoolMkDistribution(
   return f(count, budget);
 }
 
+/** Exact P(`count` i.i.d. dice with face probabilities `weights` all differ): `count! · e_count(weights)`. */
+function allDistinctProbability(count: number, weights: readonly number[]): number {
+  const symmetric = new Array<number>(count + 1).fill(0);
+  symmetric[0] = 1;
+  for (const weight of weights) {
+    if (weight <= 0) continue;
+    for (let chosen = count; chosen >= 1; chosen--) symmetric[chosen] += symmetric[chosen - 1] * weight;
+  }
+  let factorial = 1;
+  for (let i = 2; i <= count; i++) factorial *= i;
+  return factorial * symmetric[count];
+}
+
 /**
  * P(match) for a pool sharing ONE pool-wide exploding-dice budget (see
  * `RollBuilder.explodePool()`). The plain `jointSumAndMatch`/`calculateBounceOdds` formulas assume
  * `dice` i.i.d. dice — false for an exploded pool, since conditioning on a realized size already
  * reveals some die rolled max. Exploiting that max is the only exploding face: condition on `m`
- * (dice showing max) and `k` (dice showing anything else) —
+ * (dice showing max, the exploded ones included) and `k` (dice showing anything else) —
  *
  * `m ≥ 2` → match is certain (two dice already share the max face).
- * `m ≤ 1` → match iff the `k` non-max dice collide among themselves, uniform over `faces - 1`
- *           non-max faces (they cannot collide with the max face, so the two parts separate).
+ * `m ≤ 1` → match iff the `k` non-max dice collide among themselves. Each shows face `v` with
+ *           the conditional weight `w_v / (1 − pMax)`, and they cannot collide with the max face,
+ *           so the two parts separate.
  *
- * `pMax` and `faces` describe the single (non-exploding-budget) die's resolved marginal —
- * `pMax = weights[faces - 1]`.
+ * So a single die can match its own explosion: a lone d8 with budget ≥ 1 matches when it rolls
+ * 8 and then 8 again (1/64).
+ *
+ * `weights` is the single (non-exploding-budget) die's resolved marginal, 1-indexed with the
+ * max face last, as {@link faceWeights} returns it.
  */
 export function explodingPoolMatchProbability(
-  pMax: number,
-  faces: number,
+  weights: readonly number[],
   count: number,
   budget: number
 ): number {
-  if (count <= 1) return 0;
+  if (count <= 0 || weights.length === 0) return 0;
 
-  const mkDistribution = explodingPoolMkDistribution(pMax, count, budget);
-  const nonMaxFaces = Math.max(1, faces - 1);
+  const pMax = weights[weights.length - 1];
+  const nonMax = pMax < 1 ? weights.slice(0, -1).map((weight) => weight / (1 - pMax)) : [];
 
   let pMatchTotal = 0;
-  for (const [mk, weight] of mkDistribution) {
+  for (const [mk, weight] of explodingPoolMkDistribution(pMax, count, budget)) {
     const [m, k] = mk.split(",").map(Number);
-    if (m >= 2) {
-      pMatchTotal += weight;
-      continue;
-    }
-    let pAllDistinctAmongNonMax = 1;
-    for (let i = 0; i < k; i++) {
-      pAllDistinctAmongNonMax *= (nonMaxFaces - i) / nonMaxFaces;
-    }
-    pMatchTotal += weight * (1 - Math.max(0, pAllDistinctAmongNonMax));
+    if (m >= 2) pMatchTotal += weight;
+    // Fewer than two non-max dice cannot collide: skip the sum that is 1 only up to rounding.
+    else if (k >= 2) pMatchTotal += weight * (1 - allDistinctProbability(k, nonMax));
   }
   return Math.min(1, Math.max(0, pMatchTotal));
 }

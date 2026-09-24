@@ -34,10 +34,8 @@ describe("Builder/index.ts - Roll Factory", () => {
       expect(builder.toExpression()).toBe("0"); // No dice added, so empty builder
     });
 
-    it("should handle negative sides (should not add dice)", () => {
-      const builder = roll(3, -1);
-      expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("0"); // No dice added, so empty builder
+    it("should refuse negative sides", () => {
+      expect(() => roll(3, -1)).toThrow("sides must not be negative, got -1");
     });
 
     it("should handle zero modifier", () => {
@@ -138,9 +136,9 @@ describe("Builder/index.ts - Roll Factory", () => {
         expect(roll.d(100).toExpression()).toBe("1d100"); // d100 is formatted with count
       });
 
-      it("should handle zero and negative sides", () => {
+      it("should handle zero sides and refuse negative sides", () => {
         expect(roll.d(0).toExpression()).toBe("0");
-        expect(roll.d(-1).toExpression()).toBe("0");
+        expect(() => roll.d(-1)).toThrow("sides must not be negative, got -1");
       });
     });
 
@@ -216,7 +214,7 @@ describe("Builder/index.ts - Roll Factory", () => {
       it("should create flat amount with negative number", () => {
         const builder = roll.flat(-3);
         expect(builder).toBeInstanceOf(RollBuilder);
-        expect(builder.toExpression()).toBe("-3");
+        expect(builder.toExpression()).toBe("0 - 3");
       });
 
       it("should handle decimal numbers", () => {
@@ -278,19 +276,19 @@ describe("Builder/index.ts - Roll Factory", () => {
     it("should handle floating point numbers", () => {
       const builder = roll(2.5, 6, 1.5);
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("2.5d6 + 1.5");
+      expect(builder.toExpression()).toBe("2d6 + 1.5"); // a fractional count rolls its whole dice
     });
 
     it("should handle negative count", () => {
       const builder = roll(-2, 6, 3);
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("-2d6 + 3");
+      expect(builder.toExpression()).toBe("3 - 2d6");
     });
 
     it("should handle negative modifier with zero sides", () => {
       const builder = roll(3, 0, -5);
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("-5"); // No dice added, only modifier
+      expect(builder.toExpression()).toBe("0 - 5"); // No dice added, only modifier
     });
   });
 
@@ -298,7 +296,7 @@ describe("Builder/index.ts - Roll Factory", () => {
     it("should allow chaining with other RollBuilder methods", () => {
       const builder = roll(2, 6).plus(3).withAdvantage();
       expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("d6 > d6 + 3"); // Only one die is used in advantage
+      expect(builder.toExpression()).toBe("2(d6 > d6) + 3"); // each die rolls with advantage
     });
 
     it("should allow chaining flat amounts with other methods", () => {

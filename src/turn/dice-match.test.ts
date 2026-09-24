@@ -23,7 +23,7 @@ function chromaticOrb(baseDice: number, attackBonus = 5, targetAC = 17): AttackB
 }
 
 describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds", () => {
-  // Oracles from the plan: baseDice(level) = level + 2, crit dice = 2 * baseDice.
+  // Oracle rule: baseDice(level) = level + 2, crit dice = 2 * baseDice.
   const rows: { level: number; baseDice: number; hitP: number; critP: number }[] = [
     { level: 1, baseDice: 3, hitP: 0.343750, critP: 0.923096 },
     { level: 2, baseDice: 4, hitP: calculateBounceOdds(4, 8), critP: 0.997597 },
@@ -54,9 +54,11 @@ describe("AttackBuilder.diceMatchInfo() — per-level Chromatic Orb match odds",
   });
 
   it("a keep()/bestOf() pool has no match info (ambiguous under crit doubling)", () => {
-    const attack = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3));
-    const { hit } = attack.diceMatchInfo();
+    // Its crit cannot auto-double (an ambiguous keep), so it states one explicitly.
+    const attack = d20.plus(5).ac(17).onHit(roll(4, d8).keepHighest(4, 3)).onCrit(roll(8, d8).keepHighest(8, 6));
+    const { hit, crit } = attack.diceMatchInfo();
     expect(hit).toBeNull();
+    expect(crit).toBeNull();
   });
 
   it("a single die is a supported source with zero match probability, not a missing descriptor", () => {
@@ -78,7 +80,7 @@ describe("dice-match trigger — validation", () => {
     const barePMF = chromaticOrb(3).toPMF();
     expect(() => turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3))).toThrow(TurnSpecError);
     try {
-      turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3));
+      void turn(barePMF).onDiceMatch(["attack 1"], chromaticOrb(3));
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(TurnSpecError);
@@ -110,15 +112,15 @@ describe("dice-match trigger — MATCH_BIT sharing a group with a first-hit trig
 
     const t = turn(attack)
       .onFirstHit(roll(1, 4), { of: ["attack 1"] }) // crit-doubles to 2d4 (mean 5) on a crit
-      .onDiceMatch(["attack 1"], roll(1, 1), { id: "match-marker" }); // deterministic +1 when matched
+      .onDiceMatch(["attack 1"], roll(1, 1), { id: "match-marker" }); // +2 when matched: 1d1 doubles on a crit
 
     // attack mean(6d8)=27 + firstHit ALWAYS crit-mode mean(2d4)=5 + match-marker fires w.p. pMatch
-    const expectedMean = 27 + 5 + pMatch * 1;
+    const expectedMean = 27 + 5 + pMatch * 2;
     expect(t.mean()).toBeCloseTo(expectedMean, 9);
 
     // The buggy decode instead read a matched crit as non-crit, undercounting toward
-    // 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch — a materially different, WRONG total.
-    const buggyMean = 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch * 1;
+    // 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + 2·pMatch — a materially different, WRONG total.
+    const buggyMean = 27 + (pMatch * 2.5 + (1 - pMatch) * 5) + pMatch * 2;
     expect(t.mean()).not.toBeCloseTo(buggyMean, 2);
   });
 });
@@ -195,10 +197,9 @@ describe("bounce() sugar and two-beam correlation", () => {
   });
 
   it("two-beam chain at pHit=0.6, 3d8: mean 9.770625, variance 92.944 (not the scalar-gate 74.902)", () => {
-    // The oracle (spec D3b) is the SIMPLE two-outcome model: X1 = 1{hit}*S1 where S1 is a plain
-    // 3d8 sum, no crit-doubling. noCrit() folds crit mass into hit at the same 3d8 dice, matching
-    // that model exactly. An AC where exactly 12 of 20 face values (9-20) succeed gives pHit = 0.6
-    // precisely.
+    // The oracle is the simple two-outcome model: X = 1{hit}·(plain 3d8 sum), no crit-doubling.
+    // noCrit() folds crit mass into hit at the same 3d8 dice, matching that model exactly. An AC
+    // where exactly 12 of 20 face values (9-20) succeed gives pHit = 0.6 precisely.
     const attack = d20.plus(0).ac(9).onHit(roll(3, d8)).noCrit();
     const resolution = attack.resolve();
     expect(resolution.weights.hit).toBeCloseTo(0.6, 10);
