@@ -79,10 +79,11 @@ describe("a landed hit that deals 0 damage is a hit in a parsed attack", () => {
     expectLabels(labelMass(parsed), { hit: 13 / 20, crit: 1 / 20, missNone: 6 / 20 }, "totals");
   });
 
-  it("a trailing hit-only term keeps the 0-damage hits labelled", () => {
-    // `+ 3` adds to non-zero totals only, so the 0-damage hits stay at 0 (and stay hits).
+  it("a trailing `+` adds to the 0-damage hits too, and the misses stay at 0", () => {
+    // The 0-damage hits deal 3; 1d4 - 1 + 3 is 3..6, a quarter each of the 13/20 hits.
     const parsed = parse("(d20 + 5 AC 12) * (1d4 - 1) crit (2d4 - 1) + 3");
-    expectLabels(labelsAtZero(parsed), { hit: 13 / 80, missNone: 6 / 20 }, "bin 0");
+    expectLabels(labelsAtZero(parsed), { missNone: 6 / 20 }, "bin 0");
+    expectLabels({ ...(parsed.map.get(3)?.count ?? {}) } as Record<string, number>, { hit: 13 / 80 }, "bin 3");
   });
 
   it("a trailing term that brings a landed hit to 0 keeps it a hit", () => {

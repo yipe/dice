@@ -51,8 +51,9 @@ export interface DicePrivateData {
    * text, so a trailing hit-only term joins the payload and doubles with it. See parser.ts. */
   implicitCrit?: { payload: string };
   /** Set on an attack's payload: the result of an AC check's `*`, and of each hit-only term after it.
-   * A landed hit that deals 0 there is recorded under `hit` at 0, where the misses also sit, and a
-   * later hit-only term keeps it (see {@link Dice.calculateHitDistribution}). Read and written by parser.ts. */
+   * A landed hit that deals 0 there is recorded under `hit` at 0, where the misses also sit, as an AC
+   * check's landed total of exactly 0 is (see {@link Dice.ac}). A later hit-only term treats it as
+   * the hit it is (see {@link Dice.calculateHitDistribution}). Read and written by parser.ts. */
   attackPayload?: true;
 }
 
@@ -175,7 +176,8 @@ export class Dice {
       }
 
       // At 0 a miss and a hit that deals nothing coincide: only the landed hits recorded there are
-      // hits (an attack payload's, see `attackPayload`); everything else at 0 is a miss.
+      // hits (an AC check's total of exactly 0 that met its target, or an attack payload's 0-damage
+      // hit, see `attackPayload`); everything else at 0 is a miss.
       if (numFace === 0) {
         hitCount = this.outcomeData.hit?.[0] ?? 0;
       }
@@ -410,9 +412,23 @@ export class Dice {
     return result;
   }
 
+  /**
+   * An attack check: a total that meets the target lands at its own value, and a miss is 0. A total
+   * of exactly 0 that meets the target (a target of 0 or less) lands at 0 too, where the misses sit:
+   * its count is recorded under `hit` at 0, like a payload's 0-damage hit, so the ops after the
+   * check tell it from a miss.
+   */
   public ac(other: Dice | number): Dice {
     const acCheck = (a: number, b: number) => (a >= b ? a : 0);
-    return this.checkTarget(other, acCheck);
+    const result = this.checkTarget(other, acCheck);
+    const zero = this.get(0);
+    if (zero > 0) {
+      let met = 0;
+      if (typeof other === "number") met = other <= 0 ? 1 : 0;
+      else for (const [target, count] of other.getFaceEntries()) if (target <= 0) met += count;
+      if (met > 0) result.setOutcomeDistribution("hit", { 0: zero * met });
+    }
+    return result;
   }
 
   public deleteFace(face: number): Dice {

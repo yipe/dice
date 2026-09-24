@@ -92,3 +92,87 @@ export function expectDist(actual: PMF, expected: Dist): void {
   }
   expect(Math.abs(actual.mass() - 1)).toBeLessThanOrEqual(1e-12);
 }
+
+/** Value → outcome label → probability: the labelled distribution of an attack. */
+export type LabelledDist = Map<number, Record<string, number>>;
+
+export interface AttackSpec {
+  /** The natural roll a crit is read from: `uniform(20)`, or `max(uniform(20), uniform(20))` with advantage. */
+  natural: Dist;
+  /** The rest of the check total, added to the natural roll: its flats and bonus dice. */
+  bonus: Dist;
+  /** The AC: the check lands where its total is at least this. */
+  target: number;
+  /** A landing on a natural face of this or more crits; 21 never crits. */
+  critFrom: number;
+  hit: Dist;
+  crit: Dist;
+  /** What a miss deals, under `missLabel` (default `missDamage`); with none a miss is 0, `missNone`. */
+  miss?: Dist;
+  missLabel?: string;
+}
+
+/**
+ * An attack under parse()'s rules, by listing every natural roll and bonus: it lands where its
+ * total meets the target (no natural-1 miss, no natural-20 hit) and crits where it lands on a
+ * natural face of `critFrom` or more.
+ */
+export function attack(spec: AttackSpec): LabelledDist {
+  const out: LabelledDist = new Map();
+  const put = (value: number, label: string, p: number): void => {
+    const bin = out.get(value) ?? {};
+    bin[label] = (bin[label] ?? 0) + p;
+    out.set(value, bin);
+  };
+  for (const [natural, pn] of spec.natural) {
+    for (const [bonus, pb] of spec.bonus) {
+      const p = pn * pb;
+      if (natural + bonus >= spec.target) {
+        const [label, damage] = natural >= spec.critFrom ? ["crit", spec.crit] : ["hit", spec.hit];
+        for (const [value, pv] of damage) put(value, label, p * pv);
+      } else if (spec.miss) {
+        for (const [value, pv] of spec.miss) put(value, spec.missLabel ?? "missDamage", p * pv);
+      } else {
+        put(0, "missNone", p);
+      }
+    }
+  }
+  return out;
+}
+
+/** An `&` mix of labelled distributions, each weighted by its share. */
+export function mixLabelled(...parts: [LabelledDist, number][]): LabelledDist {
+  const out: LabelledDist = new Map();
+  for (const [part, weight] of parts) {
+    for (const [value, labels] of part) {
+      const bin = out.get(value) ?? {};
+      for (const [label, p] of Object.entries(labels)) bin[label] = (bin[label] ?? 0) + weight * p;
+      out.set(value, bin);
+    }
+  }
+  return out;
+}
+
+/** Every bin of `actual` and every label in it equals `expected` to 1e-12, with no extra or missing support. */
+export function expectLabelled(actual: PMF, expected: LabelledDist): void {
+  const support = new Set([...actual.support(), ...expected.keys()]);
+  for (const value of support) {
+    const want = expected.get(value) ?? {};
+    const total = Object.values(want).reduce((sum, p) => sum + p, 0);
+    expect(Math.abs(actual.pAt(value) - total), `bin ${value}`).toBeLessThanOrEqual(1e-12);
+    const got = (actual.map.get(value)?.count ?? {}) as Record<string, number | undefined>;
+    for (const label of new Set([...Object.keys(got), ...Object.keys(want)])) {
+      expect(Math.abs((got[label] ?? 0) - (want[label] ?? 0)), `bin ${value} ${label}`).toBeLessThanOrEqual(1e-12);
+    }
+  }
+  expect(Math.abs(actual.mass() - 1)).toBeLessThanOrEqual(1e-12);
+}
+
+/** Two PMFs agree bin for bin and label for label, to 1e-12. */
+export function expectSameLabelled(actual: PMF, expected: PMF): void {
+  const labelled: LabelledDist = new Map();
+  for (const value of expected.support()) {
+    labelled.set(value, { ...(expected.map.get(value)?.count ?? {}) } as Record<string, number>);
+  }
+  expectLabelled(actual, labelled);
+}
