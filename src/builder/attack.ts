@@ -1,7 +1,6 @@
 import type { DiceMatchInfo, OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
 import { diceSumDistribution, faceWeights, jointSumAndMatch } from "../common/bounce";
-import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -26,7 +25,7 @@ type ActionEffect = RollBuilder;
  * (parsed/pooled/half/scale/max/composite) ⇒ resolve uncached. Cached PMFs are immutable (every PMF op
  * returns a new instance), so sharing is safe.
  */
-const attackPMFCache = new LRUCache<string, PMF>(4000);
+const attackPMFCache = PMF.createCache(4000);
 
 /** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
 export function clearAttackCache(): void {
@@ -486,7 +485,8 @@ export class AttackBuilder implements CheckBuilder {
     return { pSuccess: psuccess, pHit: phit, pCrit: pcrit, pMiss: pmiss };
   }
 
-  resolve(eps: number = EPS): AttackResolution {
+  /** Resolves the attack into its weighted slices. `eps` defaults to 0, as for {@link toPMF}: no reachable damage value is pruned. */
+  resolve(eps: number = 0): AttackResolution {
     const {
       pHit,
       pCrit,

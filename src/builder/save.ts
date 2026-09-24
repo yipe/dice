@@ -1,6 +1,5 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
-import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
@@ -17,7 +16,7 @@ export type SaveOutcome = "normal" | "half";
  * Fireball, a Paladin's smite) resolves the SAME save thousands of times. Keyed by
  * {@link SaveBuilder.cacheKey}; a `null` key resolves uncached.
  */
-const savePMFCache = new LRUCache<string, PMF>(4000);
+const savePMFCache = PMF.createCache(4000);
 
 /** Clears the resolved-save PMF cache (test/bench seam; mirrors {@link clearAttackCache}). */
 export function clearSaveCache(): void {

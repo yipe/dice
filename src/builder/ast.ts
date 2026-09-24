@@ -1,4 +1,4 @@
-import { LRUCache, PMF } from "../";
+import { PMF } from "../";
 import { d20RollPMF } from "./d20";
 import { builderPMFCache } from "./factory";
 import type {
@@ -17,7 +17,13 @@ import type { RollConfig, RollType } from "./types";
 // Default epsilon 0: single-die PMFs resolve without pruning.
 const defaultEps = 0;
 
-const singleDiePMFCache = new LRUCache<string, PMF>(1000);
+const singleDiePMFCache = PMF.createCache(1000);
+
+/** Clears the single-die and d20-lift PMF caches (reached through `clearRollCache`). */
+export function clearDieCaches(): void {
+  singleDiePMFCache.clear();
+  d20RollLiftCache.clear();
+}
 
 export function dieNodeFromConfig(cfg: RollConfig): DieNode {
   return {
@@ -260,7 +266,7 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
       case "scale": {
         const childPMF = resolve(node.child, eps);
         const denom = node.denominator === 0 ? 1 : node.denominator;
-        return childPMF.scaleDamage(node.numerator / denom, node.rounding);
+        return childPMF.scaleDamage(node.numerator, node.rounding, denom);
       }
     }
   })();
@@ -277,7 +283,7 @@ export function pmfFromRollBuilder(
   return resolve(ast, eps);
 }
 
-const d20RollLiftCache = new LRUCache<string, PMF>(500);
+const d20RollLiftCache = PMF.createCache(500);
 
 /**
  * Resolve a d20-shaped die (honoring reroll/minimum/explode via {@link resolveSingleDie}) then

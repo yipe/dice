@@ -1,4 +1,5 @@
 import { LRUCache } from "../common/lru-cache";
+import type { LRUCacheOptions } from "../common/lru-cache";
 import type { Bin, OutcomeLabelMap, Rounding } from "../common/types";
 import {
   ALL_OUTCOME_TYPES,
@@ -8,9 +9,19 @@ import {
 } from "../common/types";
 import { DiceQuery } from "./query";
 
-const cacheEnabled = true;
+/** Library caches hand the same PMF to every caller, so entries are frozen as they are stored. */
+const sharedPMFCacheOptions: LRUCacheOptions<PMF> = {
+  onInsert: (pmf) => pmf.freeze(),
+  followsCachingToggle: true,
+};
 
-export const pmfCache = new LRUCache<string, PMF>(1000);
+export const pmfCache = new LRUCache<string, PMF>(1000, sharedPMFCacheOptions);
+
+/**
+ * Relative slack when comparing a float-summed CDF with a target probability. Float running
+ * sums drift by a few ulps; a target within this fraction of the CDF counts as reached.
+ */
+const QUANTILE_RELATIVE_SLACK = 1e-12;
 
 /**
  * Complete numeric model for the stacked damage-attribution chart, produced by
@@ -57,14 +68,44 @@ export class PMF {
   private _variance?: number;
   private _stdev?: number;
   private _fingerprint?: string;
+  private _cumulative?: { values: number[]; below: number[]; above: number[] };
+  private _frozen = false;
 
+  /**
+   * @param map Damage value → bin. Typed read-only: a PMF is immutable once built, and PMFs
+   *   returned from the library's caches have frozen bins (see {@link freeze}).
+   */
   constructor(
-    public readonly map: Map<number, Bin> = new Map(),
+    public readonly map: ReadonlyMap<number, Bin> = new Map(),
     public readonly epsilon = EPS,
     public readonly normalized = false,
     public readonly identifier: string = `anon#${PMF.__anonIdCounter++}`,
-    private _preservedProvenance = true
+    private readonly _preservedProvenance = true
   ) {}
+
+  /**
+   * A PMF cache that freezes every stored PMF and follows `setCachingEnabled`. The library's
+   * own caches are built with this.
+   */
+  static createCache(maxSize: number): LRUCache<string, PMF> {
+    return new LRUCache<string, PMF>(maxSize, sharedPMFCacheOptions);
+  }
+
+  /**
+   * Deep-freezes every bin, including its `count` and `attr` maps, so a PMF shared through a
+   * cache cannot be changed through {@link map}; writing to a frozen bin throws a `TypeError`.
+   * Returns this PMF.
+   */
+  freeze(): this {
+    if (this._frozen) return this;
+    for (const bin of this.map.values()) {
+      Object.freeze(bin.count);
+      if (bin.attr) Object.freeze(bin.attr);
+      Object.freeze(bin);
+    }
+    this._frozen = true;
+    return this;
+  }
 
   static empty(epsilon = EPS, identifier = "empty") {
     return new PMF(new Map(), epsilon, false, identifier);
@@ -398,17 +439,10 @@ export class PMF {
     return acc ?? PMF.emptyMass();
   }
 
-  // One-way latch: `power()` folds independent attacks into one PMF and loses provenance, which
-  // cannot be restored — setting it back to true throws.
-  private setPreservedProvenance(preserved: boolean) {
-    if (!this._preservedProvenance && preserved) {
-      throw new Error(
-        "Preserved provenance is already set to false, cannot fix that"
-      );
-    }
-    this._preservedProvenance = preserved;
-  }
-
+  /**
+   * False for a PMF produced by {@link power}, which folds independent attacks into one
+   * distribution and cannot say which attack produced which label.
+   */
   public preservedProvenance(): boolean {
     return this._preservedProvenance;
   }
@@ -443,10 +477,8 @@ export class PMF {
     const epsilon = eps ?? this.epsilon;
 
     const key = this.getPowerCacheKey(n, epsilon);
-    if (cacheEnabled) {
-      const cached = pmfCache?.get(key);
-      if (cached) return cached;
-    }
+    const cached = pmfCache.get(key);
+    if (cached) return cached;
 
     // Start from the base PMF and accumulate n-1 additional powers
     let base: PMF = this.normalized ? this : this.normalize();
@@ -463,11 +495,16 @@ export class PMF {
       }
     }
 
-    result.setPreservedProvenance(false);
-    if (cacheEnabled) {
-      pmfCache?.set(key, result);
-    }
-    return result;
+    // A copy carries the flag: `result` may be a convolution shared through the cache.
+    const folded = new PMF(
+      result.map,
+      result.epsilon,
+      result.normalized,
+      result.identifier,
+      false
+    );
+    pmfCache.set(key, folded);
+    return folded;
   }
 
   /*
@@ -616,8 +653,11 @@ export class PMF {
   }
 
   /**
-   * Returns the expected (mean) damage value.
-   * Cached for performance since this requires iterating through all bins.
+   * Returns the expected (mean) damage value, Σ v·p. Cached.
+   *
+   * On a PMF whose mass is not 1 this is the partial expectation (the slice's contribution to
+   * the whole distribution's mean), not the conditional mean; `DiceQuery.mean()` divides by the
+   * mass instead.
    */
   mean(): number {
     if (this._mean === undefined) {
@@ -631,18 +671,25 @@ export class PMF {
   }
 
   /**
-   * Returns the variance of the damage distribution.
-   * Cached for performance since this requires mean calculation plus iteration.
+   * Returns the variance of the damage distribution. Cached.
+   *
+   * On a PMF whose mass is not 1 (a slice such as {@link filterOutcome}'s output) this is the
+   * variance of the distribution conditioned on the slice, Σ (v − μ)²·p / m with μ = Σ v·p / m
+   * and m = {@link mass}, the same quantity `DiceQuery.variance()` reports for that PMF. Note
+   * that {@link mean} is not conditioned: it stays the partial expectation Σ v·p, so slices add
+   * up. Within 1e-12 of unit mass (or at zero or negative mass) no conditioning is applied.
    */
   variance(): number {
     if (this._variance === undefined) {
-      const meanValue = this.mean();
+      const mass = this.mass();
+      const conditional = mass > 0 && Math.abs(mass - 1) > EPS;
+      const meanValue = conditional ? this.mean() / mass : this.mean();
       let varianceSum = 0;
       for (const [damageValue, probabilityBin] of this.map) {
         const deviationFromMean = damageValue - meanValue;
         varianceSum += deviationFromMean * deviationFromMean * probabilityBin.p;
       }
-      this._variance = varianceSum;
+      this._variance = conditional ? varianceSum / mass : varianceSum;
     }
     return this._variance;
   }
@@ -750,43 +797,43 @@ export class PMF {
   }
 
   /**
-   * Redistributes probability mass to model an effect that only occurs with
-   * probability `frequency` — a conditional attack, an on-hit rider, or a
-   * sub-one AoE target fraction.
+   * Bernoulli thinning: the effect this PMF describes happens with probability
+   * `frequency` and otherwise deals nothing — a conditional attack, an on-hit
+   * rider, or a sub-one AoE target fraction. The result is
+   * `frequency · X + (1 − frequency) · δ0`.
    *
-   * Every hit outcome (damage > 0) is scaled by `frequency` — probability mass,
-   * per-label `count`, AND per-label `attr` — and the freed mass is moved into
-   * the miss bin at damage 0, tagged with the canonical `missNone` outcome.
-   * Total probability mass is preserved.
+   * Every bin (negative damage included) keeps `frequency` of its probability
+   * mass, per-label `count` and per-label `attr`; the zero bin keeps its labels
+   * at that share too. The freed mass, `(1 − frequency) · mass()`, is added to
+   * the damage-0 bin under the canonical `missNone` outcome, so the total mass
+   * is unchanged, also for a slice whose mass is not 1.
    *
    * Unlike a bare {@link scaleMass} or {@link mapDamage}, this keeps damage
    * attribution (`attr`) intact, so a frequency-scaled PMF still renders
    * correctly in the damage-attribution charts.
    *
    * `frequency >= 1` (or non-finite) returns this PMF unchanged; `frequency <= 0`
-   * collapses all mass into the miss bin. The miss outcome is assumed to be
-   * encoded at damage value 0.
+   * leaves only the damage-0 bin, holding all of the mass as `missNone`.
    *
    * @param frequency Probability in [0, 1] that the effect occurs.
    */
   applyHitFrequency(frequency: number): PMF {
     if (!Number.isFinite(frequency) || frequency >= 1) return this;
     const freq = Math.max(0, frequency);
-
-    const pMiss = this.pAt(0);
-    const pHit = 1 - pMiss;
-    const newMissMass = pMiss + (1 - freq) * pHit;
+    const freedMass = (1 - freq) * this.mass();
 
     const newMap = new Map<number, Bin>();
-    newMap.set(0, {
-      p: newMissMass,
-      count: { [MISS_NONE_OUTCOME]: newMissMass },
-      attr: {},
-    });
-
-    for (const [damage, bin] of this.map) {
-      if (damage <= 0) continue;
-      newMap.set(damage, PMF.scaleBin(bin, freq));
+    if (freq > 0) {
+      for (const [damage, bin] of this.map) {
+        newMap.set(damage, PMF.scaleBin(bin, freq));
+      }
+    }
+    if (freedMass > 0) {
+      PMF.mergeInto(newMap, 0, {
+        p: freedMass,
+        count: { [MISS_NONE_OUTCOME]: freedMass },
+        attr: {},
+      });
     }
 
     return new PMF(
@@ -858,14 +905,13 @@ export class PMF {
       const prevCdf = cdf;
       cdf += normalizedP;
 
-      // P(max = damage), normalized: F(damage)^2 - F(damage^-)^2.
-      const newNormalizedP = cdf * cdf - prevCdf * prevCdf;
-
-      // Scale factor from the original bin to the new one. Reusing the bin's
-      // count/attr via scaleBin (rather than rebuilding from a bare number)
-      // is what keeps every label's proportion intact.
-      const factor = newNormalizedP / normalizedP;
-      resultMap.set(damage, PMF.scaleBin(bin, factor));
+      // P(max = damage), normalized: F(damage)² − F(damage⁻)², factored as
+      // p·(F(damage) + F(damage⁻)). The difference of squares near 1 would
+      // cancel the tail bins away; the factored form keeps full precision.
+      // It also is the scale factor from the original bin to the new one:
+      // reusing the bin's count/attr via scaleBin (rather than rebuilding from
+      // a bare number) is what keeps every label's proportion intact.
+      resultMap.set(damage, PMF.scaleBin(bin, cdf + prevCdf));
     }
 
     return new PMF(
@@ -909,17 +955,39 @@ export class PMF {
     );
   }
 
+  /**
+   * Multiplies every damage value by `factor / denominator` and rounds: `floor`
+   * (toward −∞, the default), `ceil` (toward +∞) or `round` (to nearest, halves
+   * toward +∞). Values that land on the same result merge, labels included.
+   *
+   * With an integer `factor` and `denominator` the rounding is exact: `v·factor`
+   * is an exact integer, and one division of two integers below 2^53 lands on
+   * the correct side of every integer. Pass a ratio that way, e.g.
+   * `scaleDamage(9, "ceil", 7)`; `scaleDamage(9 / 7, "ceil")` rounds the factor
+   * to a double first, so 21·(9/7) = 27.000000000000004 would round up to 28.
+   */
   scaleDamage(
     factor: number,
-    rounding: "floor" | "round" | "ceil" = "floor"
+    rounding: "floor" | "round" | "ceil" = "floor",
+    denominator = 1
   ): PMF {
-    const roundFunction =
-      rounding === "round"
-        ? Math.round
+    const exact = Number.isInteger(factor) && Number.isInteger(denominator);
+    return this.mapDamage((damageValue) => {
+      if (exact && Number.isInteger(damageValue)) {
+        const numerator = damageValue * factor;
+        if (rounding === "round") {
+          return Math.floor((2 * numerator + denominator) / (2 * denominator));
+        }
+        const quotient = numerator / denominator;
+        return rounding === "ceil" ? Math.ceil(quotient) : Math.floor(quotient);
+      }
+      const scaled = (damageValue * factor) / denominator;
+      return rounding === "round"
+        ? Math.round(scaled)
         : rounding === "ceil"
-        ? Math.ceil
-        : Math.floor;
-    return this.mapDamage((damageValue) => roundFunction(damageValue * factor));
+        ? Math.ceil(scaled)
+        : Math.floor(scaled);
+    });
   }
 
   private getPMFCombineCacheKey(
@@ -943,24 +1011,22 @@ export class PMF {
    * because a PMF is immutable once constructed -- this avoids re-deriving the key on every
    * convolve()/power() call (including cache hits). Bin order is sorted by damage value (and
    * label keys sorted within each bin) so two equal-content PMFs built via different code paths
-   * fingerprint identically regardless of Map insertion order.
+   * fingerprint identically regardless of Map insertion order. Label keys are JSON-encoded, so a
+   * label containing the separators cannot make two different bins read the same.
    */
   fingerprint(): string {
     if (this._fingerprint === undefined) {
+      const labels = (m: OutcomeLabelMap | undefined): string =>
+        m === undefined
+          ? ""
+          : Object.keys(m)
+              .sort()
+              .map((k) => `${JSON.stringify(k)}:${m[k]}`)
+              .join(",");
       const bins = [...this.map.entries()].sort((a, b) => a[0] - b[0]);
       const parts: string[] = [];
       for (const [damageValue, bin] of bins) {
-        const countStr = Object.keys(bin.count)
-          .sort()
-          .map((k) => `${k}:${bin.count[k]}`)
-          .join(",");
-        const attrStr = bin.attr
-          ? Object.keys(bin.attr)
-              .sort()
-              .map((k) => `${k}:${(bin.attr as OutcomeLabelMap)[k]}`)
-              .join(",")
-          : "";
-        parts.push(`${damageValue}:${bin.p}[${countStr}]{${attrStr}}`);
+        parts.push(`${damageValue}:${bin.p}[${labels(bin.count)}]{${labels(bin.attr)}}`);
       }
       this._fingerprint = `${this.normalized ? 1 : 0}|${parts.join(";")}`;
     }
@@ -978,7 +1044,7 @@ export class PMF {
 
     const [A, B] = A0.identifier <= B0.identifier ? [A0, B0] : [B0, A0];
     const cacheKey = this.getPMFCombineCacheKey(A, B, epsilon, raw);
-    const cached = pmfCache?.get(cacheKey);
+    const cached = pmfCache.get(cacheKey);
     if (cached) return cached;
 
     // Accumulate directly into each destination bin instead of building a
@@ -986,13 +1052,22 @@ export class PMF {
     // (`dest.p += ap*bp`) accumulates in the same order as before, so it is
     // bit-identical; only the per-label `count`/`attr` sums re-associate, which
     // shifts them by at most a few ULP (far below the eps pruning threshold).
+    // Label entries are listed once per bin, outside the pair loop: enumerating
+    // the keys of a (frozen, cached) bin per pair costs more than the arithmetic.
+    const labelEntries = (m: OutcomeLabelMap | undefined): [string, number][] | undefined =>
+      m === undefined ? undefined : (Object.entries(m) as [string, number][]);
+    const bEntries = [...B.map].map(([bVal, bBin]) => ({
+      bVal,
+      bp: bBin.p,
+      count: labelEntries(bBin.count) as [string, number][],
+      attr: labelEntries(bBin.attr),
+    }));
     const combinedMap = new Map<number, Bin>();
     for (const [aVal, aBin] of A.map) {
       const ap = aBin.p;
-      const aCount = aBin.count;
-      const aAttr = aBin.attr;
-      for (const [bVal, bBin] of B.map) {
-        const bp = bBin.p;
+      const aCount = labelEntries(aBin.count) as [string, number][];
+      const aAttr = labelEntries(aBin.attr);
+      for (const { bVal, bp, count: bCount, attr: bAttr } of bEntries) {
         const dmg = aVal + bVal;
 
         let dest = combinedMap.get(dmg);
@@ -1004,21 +1079,17 @@ export class PMF {
         dest.p += ap * bp;
 
         const dc = dest.count;
-        for (const k in aCount) dc[k] = (dc[k] || 0) + (aCount[k] as number) * bp;
-        for (const k in bBin.count)
-          dc[k] = (dc[k] || 0) + (bBin.count[k] as number) * ap;
+        for (const [k, v] of aCount) dc[k] = (dc[k] || 0) + v * bp;
+        for (const [k, v] of bCount) dc[k] = (dc[k] || 0) + v * ap;
 
-        if (aAttr || bBin.attr) {
+        if (aAttr || bAttr) {
           let da = dest.attr;
           if (da === undefined) {
             da = {};
             dest.attr = da;
           }
-          if (aAttr)
-            for (const k in aAttr) da[k] = (da[k] || 0) + (aAttr[k] as number) * bp;
-          if (bBin.attr)
-            for (const k in bBin.attr)
-              da[k] = (da[k] || 0) + (bBin.attr[k] as number) * ap;
+          if (aAttr) for (const [k, v] of aAttr) da[k] = (da[k] || 0) + v * bp;
+          if (bAttr) for (const [k, v] of bAttr) da[k] = (da[k] || 0) + v * ap;
         }
       }
     }
@@ -1042,7 +1113,7 @@ export class PMF {
     if (!raw && mGot !== 0 && Math.abs(result.mass() - 1) > epsilon)
       result = result.normalize();
 
-    pmfCache?.set(cacheKey, result);
+    pmfCache.set(cacheKey, result);
     return result;
   }
 
@@ -1253,18 +1324,65 @@ export class PMF {
     return acc;
   }
 
-  /** Quantile / inverse CDF for p in [0,1]. Returns smallest x with CDF ≥ p. */
+  /**
+   * Quantile / inverse CDF: the smallest support value x with P(X ≤ x) ≥ p·mass().
+   * `p <= 0` gives the smallest support value; `p >= 1` or NaN gives the largest.
+   *
+   * A float running sum can land an ulp short of a CDF that is exactly p (a d20's CDF(10) sums
+   * to 0.49999999999999994), so the comparison allows a relative slack of a few ulps per bin.
+   * Below the median it compares the CDF summed from the low end; above it, the mass strictly
+   * above x summed from the high end. A sum of non-negative terms is accurate relative to its
+   * own size, so the tail that decides the answer is never swamped by the rest of the mass.
+   */
   quantile(p: number): number {
-    if (this.map.size === 0) return 0;
-    const totalMass = this.mass();
-    if (totalMass <= 0) return 0;
-    const s = this.support().sort((a, b) => a - b);
-    let acc = 0;
-    for (const x of s) {
-      acc += this.pAt(x);
-      if (acc / totalMass >= p) return x;
+    const { values, below, above } = this.cumulative();
+    const n = values.length;
+    if (n === 0) return 0;
+    const total = below[n - 1];
+    if (!(total > 0)) return 0;
+    if (p <= 0) return values[0];
+    if (p >= 1) return values[n - 1];
+
+    const slack = Math.max(QUANTILE_RELATIVE_SLACK, 4 * n * Number.EPSILON);
+    const lowTarget = p * total * (1 - slack);
+    const highTarget = (1 - p) * total * (1 + slack);
+    const lowSide = p <= 0.5;
+
+    // Smallest index whose CDF reaches p; the test is monotone in the index.
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const reached = lowSide ? below[mid] >= lowTarget : above[mid] <= highTarget;
+      if (reached) hi = mid;
+      else lo = mid + 1;
     }
-    return s[s.length - 1];
+    return values[Math.min(lo, n - 1)];
+  }
+
+  /**
+   * Sorted support with `below[i]` = Σ p over values ≤ values[i], summed from the low end,
+   * and `above[i]` = Σ p over values > values[i], summed from the high end. Cached.
+   */
+  private cumulative(): { values: number[]; below: number[]; above: number[] } {
+    if (this._cumulative === undefined) {
+      const values = this.support();
+      const n = values.length;
+      const below = new Array<number>(n);
+      const above = new Array<number>(n);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += (this.map.get(values[i]) as Bin).p;
+        below[i] = sum;
+      }
+      sum = 0;
+      for (let i = n - 1; i >= 0; i--) {
+        above[i] = sum;
+        sum += (this.map.get(values[i]) as Bin).p;
+      }
+      this._cumulative = { values, below, above };
+    }
+    return this._cumulative;
   }
 
   /** Get outcome probability at specific damage value. */
@@ -1672,6 +1790,15 @@ export class PMF {
     return { pSpecificSuccess, pGeneralSuccess, pNone, pAny };
   }
 
+  /**
+   * Maps every damage value through `f`, then optionally rounds it (`rounding`, default
+   * `"none"`). Values that land on the same result merge their probability and, unless
+   * `preserveCounts` is false, their per-label `count`. Damage attribution (`attr`) is dropped,
+   * because it is tied to the old values. Nothing is pruned and the mass is unchanged.
+   *
+   * @param eps Epsilon carried by the result.
+   * @throws Error when a mapped value is not a finite integer.
+   */
   mapValues(
     f: (v: number) => number,
     eps: number = EPS,
@@ -1689,38 +1816,21 @@ export class PMF {
         ? Math.round(x)
         : x;
 
-    // Accumulate probs and merged counts
-    const probs = new Map<number, number>();
-    const counts = new Map<number, Record<string, number>>();
-
+    const merged = new Map<number, Bin>();
     for (const [v, bin] of this) {
-      if (Math.abs(bin.p) < eps) continue;
+      if (bin.p === 0) continue;
       const u = round(f(v));
-      probs.set(u, (probs.get(u) ?? 0) + bin.p);
-
-      if (preserveCounts) {
-        // Merge counts if present
-        const src = bin.count;
-        if (src) {
-          const dest = counts.get(u) ?? {};
-          for (const k in src) {
-            dest[k] = (dest[k] ?? 0) + (src[k] as number);
-          }
-          counts.set(u, dest);
-        }
+      if (!Number.isInteger(u)) {
+        throw new Error(`mapValues: ${v} maps to ${u}, not a finite integer`);
       }
+      PMF.mergeInto(merged, u, {
+        p: bin.p,
+        count: preserveCounts ? bin.count : {},
+      });
     }
 
-    // Build PMF with merged counts, then normalize
-    const internal = new Map<number, Bin>();
-    for (const [u, p] of probs) {
-      internal.set(u, { p, count: counts.get(u) ?? {} });
-    }
-    // Normalize via pmfFromMap to keep one source of truth
-    return PMF.fromMap(
-      new Map(Array.from(internal, ([u, b]) => [u, b.p] as [number, number])),
-      eps
-    );
+    const sorted = new Map([...merged.entries()].sort((a, b) => a[0] - b[0]));
+    return new PMF(sorted, eps, this.normalized, `mapValues(${this.identifier})`);
   }
 
   static fromMap(
