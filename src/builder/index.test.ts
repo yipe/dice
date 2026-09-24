@@ -34,10 +34,8 @@ describe("Builder/index.ts - Roll Factory", () => {
       expect(builder.toExpression()).toBe("0"); // No dice added, so empty builder
     });
 
-    it("should handle negative sides (should not add dice)", () => {
-      const builder = roll(3, -1);
-      expect(builder).toBeInstanceOf(RollBuilder);
-      expect(builder.toExpression()).toBe("0"); // No dice added, so empty builder
+    it("should refuse negative sides", () => {
+      expect(() => roll(3, -1)).toThrow("sides must not be negative, got -1");
     });
 
     it("should handle zero modifier", () => {
@@ -138,9 +136,9 @@ describe("Builder/index.ts - Roll Factory", () => {
         expect(roll.d(100).toExpression()).toBe("1d100"); // d100 is formatted with count
       });
 
-      it("should handle zero and negative sides", () => {
+      it("should handle zero sides and refuse negative sides", () => {
         expect(roll.d(0).toExpression()).toBe("0");
-        expect(roll.d(-1).toExpression()).toBe("0");
+        expect(() => roll.d(-1)).toThrow("sides must not be negative, got -1");
       });
     });
 

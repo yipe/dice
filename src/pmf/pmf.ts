@@ -24,6 +24,30 @@ export const pmfCache = new LRUCache<string, PMF>(1000, sharedPMFCacheOptions);
 const QUANTILE_RELATIVE_SLACK = 1e-12;
 
 /**
+ * The map of a frozen PMF: a copy of the map it was built with that reads like any `Map` but whose
+ * `set`, `delete` and `clear` throw a `TypeError`, so a PMF shared through a cache cannot be
+ * changed through it. Only frozen PMFs pay for the copy; the unfrozen hot paths keep their own map.
+ */
+class FrozenBinMap extends Map<number, Bin> {
+  constructor(source: ReadonlyMap<number, Bin>) {
+    super();
+    for (const [value, bin] of source) super.set(value, bin);
+  }
+
+  override set(value: number): never {
+    throw new TypeError(`Cannot set damage value ${value}: this PMF is frozen (shared through a cache)`);
+  }
+
+  override delete(value: number): never {
+    throw new TypeError(`Cannot delete damage value ${value}: this PMF is frozen (shared through a cache)`);
+  }
+
+  override clear(): never {
+    throw new TypeError("Cannot clear the map: this PMF is frozen (shared through a cache)");
+  }
+}
+
+/**
  * Complete numeric model for the stacked damage-attribution chart, produced by
  * {@link PMF.damageAttributionChartModel}. Carries every dice-and-probability
  * value the chart needs; a renderer only maps these numbers into its own format
@@ -72,8 +96,9 @@ export class PMF {
   private _frozen = false;
 
   /**
-   * @param map Damage value → bin. Typed read-only: a PMF is immutable once built, and PMFs
-   *   returned from the library's caches have frozen bins (see {@link freeze}).
+   * @param map Damage value → bin. Typed read-only: a PMF is immutable once built. A PMF returned
+   *   from the library's caches is frozen: its bins, its map and the `map` property itself reject
+   *   writes (see {@link freeze}).
    */
   constructor(
     public readonly map: ReadonlyMap<number, Bin> = new Map(),
@@ -92,17 +117,24 @@ export class PMF {
   }
 
   /**
-   * Deep-freezes every bin, including its `count` and `attr` maps, so a PMF shared through a
-   * cache cannot be changed through {@link map}; writing to a frozen bin throws a `TypeError`.
+   * Freezes this PMF so it can be shared through a cache. Every bin is deep-frozen, including its
+   * `count` and `attr` maps, so writing to one throws a `TypeError`. The map is replaced by a copy
+   * whose `set`/`delete`/`clear` throw a `TypeError` (the map this PMF was built with stays the
+   * caller's), and the `map` property becomes read-only, so assigning it throws too.
    * Returns this PMF.
    */
   freeze(): this {
     if (this._frozen) return this;
-    for (const bin of this.map.values()) {
+    const map = new FrozenBinMap(this.map);
+    for (const bin of map.values()) {
       Object.freeze(bin.count);
       if (bin.attr) Object.freeze(bin.attr);
       Object.freeze(bin);
     }
+    // Frozen too, so no own `set`/`delete`/`clear` can be installed over the throwing ones.
+    Object.freeze(map);
+    // `as object`: `defineProperty` returns its target, which is not a derived PMF to keep.
+    Object.defineProperty(this as object, "map", { value: map, writable: false, enumerable: true, configurable: false });
     this._frozen = true;
     return this;
   }

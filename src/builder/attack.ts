@@ -9,6 +9,7 @@ import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
+import { requireFinite } from "./arguments";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
@@ -147,6 +148,7 @@ export class AttackBuilder implements CheckBuilder {
    */
   rerollDamage(threshold: number): AttackBuilder {
     if (isNaN(threshold)) throw new Error("Invalid NaN value for rerollDamage threshold");
+    requireFinite(threshold, "rerollDamage() threshold");
     if (this.rerollThreshold !== undefined) {
       if (threshold === this.rerollThreshold) return this;
       throw new Error(
@@ -178,6 +180,7 @@ export class AttackBuilder implements CheckBuilder {
    */
   minimumDamageDie(minimum: number): AttackBuilder {
     if (isNaN(minimum)) throw new Error("Invalid NaN value for minimumDamageDie");
+    requireFinite(minimum, "minimumDamageDie()");
     if (this.minimumDieValue !== undefined) {
       if (minimum === this.minimumDieValue) return this;
       throw new Error(
@@ -282,6 +285,8 @@ export class AttackBuilder implements CheckBuilder {
 
   private static buildCheck(next: Check): ACBuilder | AlwaysCritBuilder {
     if (isNaN(next.ac)) throw new Error("Invalid NaN value for AC in withCheck()");
+    requireFinite(next.ac, "AC in withCheck()");
+    requireFinite(next.critThreshold, "crit threshold in withCheck()");
     const configs = next.roll.getSubRollConfigs();
     let rewritten: readonly RollConfig[] = configs;
     if (configs.length > 0) {
@@ -357,9 +362,10 @@ export class AttackBuilder implements CheckBuilder {
   /**
    * The attack as a string `parse()` reads back to the same outcomes, up to the natural-1 miss and
    * natural-20 hit, which the grammar does not model. The crit clause is always printed, since a
-   * string without one crits with its hit dice doubled: `noCrit()` prints `crit (<hit>)`, and a crit
-   * range keeps its `xcritN`. A check that crits on every hit (`alwaysCrits()`) prints `xcritS`, S
-   * the natural die's size; one that always hits prints just its natural roll, which never totals 0.
+   * string without one crits with its hit dice doubled: `noCrit()` prints `xcrit0 (<hit>)` (no
+   * natural face crits, so every landing is a hit), and a crit range keeps its `xcritN`. A check
+   * that crits on every hit (`alwaysCrits()`) prints `xcritS`, S the natural die's size; one that
+   * always hits prints just its natural roll, which never totals 0.
    */
   toExpression(): string {
     // The string grammar has no separate-damage channel and no "half the hit payload on a miss"
@@ -385,24 +391,24 @@ export class AttackBuilder implements CheckBuilder {
     if (this.hitEffect) {
       const hitExpression = this.hitEffect.toExpression();
       effectPart = `(${hitExpression})`;
-      // A crit doubles the hit payload's dice — parsed and pooled payloads included.
-      const critExpression =
-        this.critEffect === null
-          ? hitExpression
-          : (this.critEffect ?? this.hitEffect.copy().doubleDice()).toExpression();
-
-      const critThreshold = check.critThreshold;
-      if (this.critEffect !== null && (critThreshold < 1 || critThreshold > 20)) {
-        throw new Error(
-          `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
-        );
-      }
-      if (check instanceof AlwaysCritBuilder && naturalRoll !== undefined) {
-        effectPart += ` xcrit${check.getRootDieConfig()!.sides} (${critExpression})`;
-      } else if (critThreshold === 20 || this.critEffect === null) {
-        effectPart += ` crit (${critExpression})`;
+      if (this.critEffect === null) {
+        effectPart += ` xcrit0 (${hitExpression})`;
       } else {
-        effectPart += ` xcrit${21 - critThreshold} (${critExpression})`;
+        // A crit doubles the hit payload's dice — parsed and pooled payloads included.
+        const critExpression = (this.critEffect ?? this.hitEffect.copy().doubleDice()).toExpression();
+        const critThreshold = check.critThreshold;
+        if (critThreshold < 1 || critThreshold > 20) {
+          throw new Error(
+            `Invalid crit threshold: ${critThreshold}. Must be between 1 and 20.`
+          );
+        }
+        if (check instanceof AlwaysCritBuilder && naturalRoll !== undefined) {
+          effectPart += ` xcrit${check.getRootDieConfig()!.sides} (${critExpression})`;
+        } else if (critThreshold === 20) {
+          effectPart += ` crit (${critExpression})`;
+        } else {
+          effectPart += ` xcrit${21 - critThreshold} (${critExpression})`;
+        }
       }
 
       if (this.missEffect) {

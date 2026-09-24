@@ -463,11 +463,11 @@ describe("RollBuilder", () => {
       it("should handle invalid dice sides", () => {
         expect(() => {
           void roll.d(0);
-        }).not.toThrow(); // Currently allows 0 sides, but should validate
+        }).not.toThrow(); // 0 sides is no die
 
         expect(() => {
           void roll.d(-1);
-        }).not.toThrow(); // Currently allows negative sides, but should validate
+        }).toThrow("sides must not be negative, got -1");
       });
 
       it("should handle invalid dice count", () => {
