@@ -179,6 +179,117 @@ RollBuilder (d20, d6, roll(), etc.)
     └─ .toPMF() ──► PMF
 ```
 
+**Crits double the damage dice, never the flats.** An `onHit` payload with no `onCrit` override
+crits with its dice doubled: `roll(2, d6).plus(5)` and the string `"2d6+5"` both crit as `4d6 + 5`.
+A pool doubles inside, then pools — `roll(2, d6).plus(3).keepHighestAll(2, 1)` crits as
+`roll(4, d6).plus(3).keepHighestAll(2, 1)` (mean 18.93), not as the whole pool rolled twice (22.74).
+Rider damage doubles the same way; a bare `PMF` has no dice, so it is added as-is. `onCrit(...)` and
+`noCrit()` stay explicit, and a damage string containing an attack or save check (`AC`/`DC`) throws
+when used as a payload that doubles (`onHit`, `doubleDice()`); as a rider it is added as-is on a
+crit, like the attack or save builder it stands for.
+An attack string with no crit clause crits too: `"(d20 + 8 AC 16) * (2d6)"` rolls its natural 20 as
+`4d6`, like `d20.plus(8).ac(16).onHit(roll(2, d6))`; a `crit (…)` clause still wins. A term after
+the payload joined by `+`, `*`, `**`, `/` or `//` applies only where the attack deals damage (the
+grammar reads left to right, and `+` adds to non-zero totals), so it is part of the payload:
+`(d20 + 5 AC 15) * (1d8) + 1d6` crits as `2d8 + 2d6`, like `onHit(roll(1, d8).plus(roll(1, d6)))`,
+and keeps its hit, crit and miss labels. After a `crit (…)` clause the term is added to the crit as
+written. The crit rate reads the check's natural die, its one d20 wherever it sits in the sum (with
+no d20, its largest die), through bonus to-hit dice, advantage (`d20 > d20`, `d20!`, `2kh1d20`),
+disadvantage (`2kl1(1d20)`), elven accuracy (`3kh1(1d20)`) and halfling luck (`hd20`,
+`d20 reroll 1`), for `crit` and `xcrit N` alike: `(d20 > d20 + 5 + 1d4 AC 15) * (2d6)` crits at
+39/400, like `d20.withAdvantage().plus(5).plus(d4)`, `(1d4 + d20 + 5 AC 15)` crits on the d20, not
+the d4, and `(d20 + d100 AC 60)` on the d20, not the d100 (61/2000). A max or min against another
+die or a number crits where the natural 20 is the value kept: `(d20 > d4 + 5 AC 10)` on every
+natural 20, `(d20 < 15 + 5 AC 10)` never. An `&` mix crits where one of its sides rolls its natural
+20, at that side's share of the mix, in either order and with the AC gate on either side:
+`(d4 & d20 AC 5) * (1d6) crit (2d6)` and `(d4 & (d20 AC 5)) * (1d6)` both crit at 1/24. A die on
+the AC side is the target's roll, never the natural roll. A check with no single natural die
+(`2d20`, `d20 + d20`, `d20 + d20 + d100`, `2kh2(1d20)`, advantage over a total like `(d20 + 1d4)!`,
+`d20 + 5 > d20`, a reroll, repeat, keep or double advantage of a mix with a smaller die in it, like
+`(d20 & d4) reroll 1`, `1(d20 & d4)`, `2kh1(d20 & d4)` or `(d20 & d4)!!`) throws `crit rate cannot
+be computed exactly …` when it would crit, and so does an `xcrit N` wider than the die. A check with
+no die at all (`(15 AC 12) * (1d6)`, `(25 AC d20) * (1d6)`) has no natural roll, so it never crits,
+and a `crit (…)` or `xcrit N` clause on it is inert: `(15 AC 12) * (1d6) crit (2d6)` means 3.5, like
+`roll.flat(15).ac(12).onHit(d6)`, which emits that string.
+
+**`&` shapes that are refused.** An `&` mix weights each side by its count of outcomes, so these
+shapes have no single reading and throw rather than return a number that depends on how they are
+spelled:
+
+- `&` with dice on either side inside a payload that doubles on a crit: an attack string with no
+  crit clause (`(d20 + 5 AC 15) * (1d6 & 3)`, or a trailing `+ (1d4 & 2)`), `onHit("1d6 & 3")`, a
+  rider's auto-crit and `doubleDice()`. Doubling the dice also changes each side's share of the
+  mix (`1d6 & 3` → `2d6 & 3` moves the flat's share from 1/7 to 1/37), so this throws
+  `AmbiguousCritDoublingError`. Give the crit explicitly: `… * (1d6 & 3) crit (2d6 & 3)` parses.
+- `&` with an attack already split into crit, miss or save outcomes (`((d20 AC 5) * (1d6)) & d4`,
+  `(d20 + 5 AC 15) * (1d6) & 3`), `&` of a saving throw with anything but another saving throw
+  (`d4 & (d20 DC 12)`), and a crit, save, pc or miss clause right after an `&` mix
+  (`(d20 + 5 AC 15) & (1d6) crit (2d6)`). Mix the checks before the payload instead:
+  `((d20 AC 10) & (d20 AC 15)) * (1d6)`.
+- A reroll, repeat, keep or double advantage of a mix with a smaller die in it, when it would crit
+  (listed above). `(1(d20 & d4) AC 5) * (1d6) crit (2d6)` and `(2kh1(d20 & d4) AC 15) * (1d6) crit
+  (2d6)` were exact in 0.11.0 (119/48 and 2093/1152) and now throw. Spell the second as
+  `((d20 & d4)! AC 15)`, which gives the same exact value.
+
+A parsed attack still differs from the builder in these cases:
+
+- `parse()` has no natural-1 miss and no natural-20 hit: `(d20+30 AC 5) * (1d8)` means 4.725, the
+  builder 4.5.
+- A payload the doubling rewrite cannot read (`d4d6`, a nested check) is added to the crit as-is;
+  the builder's `onHit` throws.
+- A term joined by an op that also changes a miss (`~+`, `-`, `>`, `<`, `=`, `reroll`, `!`) loses
+  the attack's crit and miss labels, so riders never see its crit. So do a clause after a trailing
+  term (`… * (2d6) + 3 miss (1d6)`) and a repeat wrapper around an attack string
+  (`2((d20 + 5 AC 15) * (2d6))`). An `&` there throws (see above).
+
+**Crits on keeps.** A keep-highest-of-1 payload, meaning "roll it N times, keep the best", doubles
+its dice inside each trial on a crit. For example, `roll(2,d6).keepHighest(2,1).plus(3)` crits as
+`2kh1(4d6) + 3` (18.9334, the same as the pooled `keepHighestAll(2,1)`), and the parsed
+`2kh1(2d6)+3` crits as `2kh1(4d6)+3`. Other shapes have more than one reasonable doubled meaning,
+so `doubleDice()`/`scaleDice()` throws an Error rather than guessing. The throw names the shape and
+asks for an explicit crit. The shapes that throw are: a per-die keep with K >= 2
+(`roll(4,d6).keepHighest(4,3)`, which used to crit at 88.98); any keepLowest (`3kl1`, `2kl1`); a
+`bestOf()` that is a keep, or becomes one when doubled (`roll(4,d6).bestOf(3)`,
+`roll(2,d6).bestOf(3)`); a non-d20 die rolled with advantage, disadvantage or elven accuracy
+(`d6.withAdvantage()`, which used to crit at the hit's mean); a parsed `NkhK(...)` with K >= 2 or
+any `NklK(...)`, including when nested (`4kh3d6`, `3kh2(2d6+1)`, `2kh1(4kh3(1d6))`); a parsed
+min of two dice terms (`d6 < d6`); and a parsed `&` mix with dice on either side (`1d6 & 3`). This
+covers an attack's auto-crit (`resolve()` and `toExpression()` throw), a rider's auto-crit, and an
+attack string with no crit clause
+(`(d20+5 AC 12) * (4kh3(1d6))` now fails to parse). You can fix any of these with `onCrit(...)`, a
+rider's `critDamage`, a `crit (...)` clause, or `noCrit()`. The attack check's own d20 advantage is
+never doubled and is unaffected. Three things still do not throw: `keepHighestAll`/`keepLowestAll`
+pools, which double inside and then pool as before; a flat cap or floor like `2d6 < 9` or `3>d6`;
+and `diceMatchInfo()`, whose crit descriptor is `null` for such an attack (its hit side is unchanged).
+
+**Builder semantics.** `roll(N, X)` is N independent copies of X, so `roll(2, d6.keepHighest(2, 1))`
+is two best-of-two d6 (161/18), and a group of zero dice rolls nothing (`roll(0, d6).plus(3)` is 3).
+A roll type applies to each die of its group: `roll(2, d6).withAdvantage()` is two advantaged d6.
+`explode(k)` needs a finite cap k, sides must be finite and not negative (`roll(2, 0)` is no die),
+`scaleResult()` needs a finite numerator and a non-zero finite denominator, and `ac()`, `dc()`,
+`critOn()`, `minimumDamageDie()`, `rerollDamage()` and a `withCheck()` result need finite numbers;
+each throws, naming the argument. Per-die keeps have one reading each: `roll(1, d).keepHighest(T, K)`
+keeps K of T dice, `roll(N, d).keepHighest(N, K)` keeps K of the N dice, and
+`roll(N, d).keepHighest(T, 1)` is the best of T rolls of the whole group (`keepLowest(T, 1)` with
+T ≠ N the worst); any other keep on several dice throws `AmbiguousKeepError`, so use
+`keepHighestAll`/`keepLowestAll` or a keep on one die. `minus(X)` subtracts X's flat along with its
+dice. `half()`, `scaleResult()` and `maxOf()` keep their transform under `plus()`/`minus()`.
+A check's natural roll is its d20 wherever it sits in the sum (with no d20, its largest die);
+`withAdvantage()`/`withDisadvantage()`/`withElvenAccuracy()` apply to that d20 whatever the call
+order; a natural roll of more than one die (`roll(2, d20).ac(15)`) throws; a check with no die
+(`flat(15).ac(12)`) compares its total with the target and never crits; a natural 20 always crits,
+including under `alwaysHits()` and `alwaysCrits()`. A parsed string cannot be a check
+(`d("d20+5").ac(15)` throws `ParsedCheckError`); spell it with the builder or as a full attack string.
+`rerollDamage(k)` rerolls a face when its kept value, after any `minimumDamageDie` floor, is below
+a fresh die's expected value, and never lowers a payload's own `reroll` or `minimum`.
+
+**Strings from builders.** `toExpression()` prints a string that `parse()` reads back to the
+builder's own distribution: a term after the first is parenthesised when it is an expression of its
+own, `~+` joins a term to a running total that can be 0, and an attack always carries its crit clause
+(`noCrit()` prints `xcrit0 (<hit payload>)`, which crits on no natural face). Explode, pool-wide explode, `scaleResult(…, "round")`,
+fractional scale factors, `plusSeparateDamage()` and `halfOnMiss()` have no spelling and throw.
+Strings have no natural-1 miss or natural-20 hit.
+
 ### Core Class Flow
 
 ```
@@ -317,6 +428,49 @@ const query = new DiceQuery(pmf);
 console.log("DPR:", query.mean());
 ```
 
+#### Grammar
+
+Spaces are ignored and letters may be any case. Every binary operator has the **same precedence and
+associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to group.
+
+| Syntax | Meaning |
+| --- | --- |
+| `7`, `d6`, `3d6`, `hd20` | A number, a die, a sum of dice, a die whose 1 is rerolled once (halfling luck, `d20 reroll 1`). |
+| `N(X)`, `(X)d6` | N independent copies of X, summed. The count may be rolled: `(1d4)d6`. A count of 0 is 0 (`0d6`, `(1d4 - 1)d6` has P(0) = 1/4); a count that can be negative throws. |
+| `NkhK(X)`, `NklK(X)` | The sum of the K highest (lowest) of N independent copies of X, exact for any X: `4kh3d6`, `2kl1(1d20)`, `4kh1(2d20)`. `2kl1(2d6)` keeps the lower of two 2d6 *sums*. |
+| `X + Y` | Adds Y where the total so far is not 0, so a miss (0) stays 0: `(d20 + 5 AC 15) * (1d8) + 1d6`. Inside a check total (left of `AC`/`DC`) `+` always adds, so `d20 - 5 + 1d4 AC 1` adds the d4 on a natural 5 too. |
+| `X ~+ Y` | Always adds. |
+| `X - Y`, `-X` | Subtracts. A leading `-` negates the argument after it, repeat included: `-2d6` is `-(2d6)`, `1d6 + -3` is `1d6 - 3`, `-1d8 + 1d6` has mean -1. There is no unary `+`. |
+| `X * Y` | Y where X is not 0, else 0: the hit gate of `(check) * (damage)`. |
+| `X ** Y` | The product. |
+| `X / Y`, `X // Y` | Division rounding up, rounding down (toward -∞). A divisor that can be 0 throws. |
+| `X > Y`, `X < Y` | The max, the min: `d20 > d20` is advantage, `3>d6` a floor of 3. |
+| `X!` | The max of two independent copies of X. |
+| `X = Y` | 1 where X equals Y, else 0. |
+| `X & Y` | A mix weighted by each side's count of outcomes (see the refused shapes above). |
+| `X reroll R` | Rolls X, and on a result in the face set R rolls X again and keeps the second roll. |
+| `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). |
+| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. `xcrit0 (Y)` never crits: every landing is a hit. |
+
+**Rerolls.** `reroll N` rerolls the face N only; `reroll dN` rerolls every face from 1 to N; the
+builder's `.reroll(N)` rerolls every face up to N, like `reroll dN`. On a d6 they differ from N = 2
+on: `d6 reroll 2` is 15/4, `d6 reroll d2` and `d6.reroll(2)` are 25/6. `reroll d0` rerolls
+nothing. A reroll applies to the whole value on its left, so `2d6 reroll 1` rerolls the *total*,
+which is never 1 (mean 7); spell a per-die reroll as `2(d6 reroll 1)` (47/6), and several of them as
+`1(d8 reroll 1) + 2(d6 reroll 1)` (613/48). Each result keeps its own probability, so a reroll of a
+sum, a max or a floor is exact: `2d6 reroll 2` is 257/36, `(d20 > d20) reroll 1` is 221713/16000.
+The reroll decides on the raw face and a minimum applies after: `3>(d6 reroll 1)` (what
+`roll(1, d6).reroll(1).minimum(3)` prints) is 25/6.
+
+**Labels.** An attack labels its outcomes `hit`, `crit`, `missNone` and `missDamage`. A save labels a
+failed save `saveFail` (whatever the payload rolls, 0 included), a halved success `saveHalf`, and a
+success with no `save half` `missNone`, like the builder's `onSaveFailure()`. A landed hit whose
+payload deals 0 is still `hit` (a 0-damage crit is `crit`), like the builder; only a miss is
+`missNone`.
+
+A `d0` has no faces: it is only a face set (`reroll d0`); rolled on its own it throws, as does a
+string the grammar cannot read, always as a `DiceParseError`.
+
 ### Error Handling
 
 `parse()` throws a `DiceParseError` (a subclass of `Error`) for invalid input.
@@ -335,14 +489,15 @@ try {
 ```
 
 For UI code that parses on every keystroke, `tryParse()` returns an empty PMF
-instead of throwing, and accepts a bare integer — which the grammar rejects, but
-a half-typed damage field is one for a keystroke or two:
+instead of throwing, and also reads an integer with a leading `+`, which the
+grammar rejects — a half-typed damage field is one for a keystroke or two:
 
 ```ts
 import { tryParse } from "@yipe/dice";
 
 tryParse("1d6 + 2").mean(); // 5.5
-tryParse("-3").mean(); // -3   — signed integers, which the grammar rejects
+tryParse("+7").mean(); // 7   — a leading `+`, which the grammar rejects
+tryParse("-3").mean(); // -3  — the same as parse("-3")
 tryParse("0x10").mass(); // 0  — decimal only
 tryParse("1d").mass(); // 0   — empty PMF
 ```
@@ -400,7 +555,8 @@ chance of 0.015 instead of 0.1225.
 |---|---|---|
 | `onFirstHit` | once, on the first attack that lands — doubled if it crit | Sneak Attack |
 | `onAnyCrit` | once, if any attack crit | Divine Smite |
-| `onAnyMiss` | once, if any attack missed | Unerring Accuracy, Lucky |
+| `onAnyMiss` | once, if any attack missed; runs after every attack | a reroll no grant reaches |
+| `onFirstMiss` | once, on the first attack that missed; runs right after it | Unerring Accuracy, Lucky |
 | `onEveryHit` | once per attack that lands | Hunter's Mark, Hex, Rage |
 | `otherwise` | when the rider before it did *not* | flurry of blows if you didn't smite |
 
@@ -434,6 +590,10 @@ turn([sword, sword]).onEveryHit(flat(2));               // Rage
 turn([dagger, dagger]).onAnyCrit(roll(4, d8)).otherwise([unarmed, unarmed]); // smite, or flurry
 ```
 
+A list of attacks deals their exact summed damage, but it is one payload, not attacks that each
+land: it is not a watchable attack. Naming it in `of` throws `not-an-attack`, and it never joins a
+later rider's default `of`. To watch each strike, give each strike its own rider.
+
 #### The hard build
 
 A goliath rogue/monk/paladin, every trigger at once:
@@ -444,7 +604,7 @@ const goliath = turn([dagger, dagger])
   .onFirstHit(d10)               // fire's burn
   .onAnyCrit(roll(2, d8))        // divine smite
   .otherwise([unarmed, unarmed]) // flurry of blows, if the smite didn't happen
-  .onEveryHit(d6);               // hunter's mark
+  .onEveryHit(d6);               // hunter's mark, on the daggers
 
 goliath.mean();                                // 39.5903
 goliath.toQuery().damageAttributionChartModel();
@@ -453,7 +613,8 @@ goliath.toQuery().damageAttributionChartModel();
 Two things that would be easy to get wrong are handled for you. Riders sharing a trigger resolve
 **jointly** — sneak attack and fire's burn fire together or not at all, which shows up in the spread
 even though it never moves the mean. And `otherwise()` binds to the rider immediately before it, so
-the smite and the flurry are two branches of one decision and can never both land.
+the smite and the flurry are two branches of one decision and can never both land. The mark
+watches the two daggers: the flurry is a list rider, which no rider watches.
 
 #### Asking questions
 
@@ -466,6 +627,104 @@ t.pmf.stdev();                              // 8.8860
 t.toQuery().probTotalAtLeast(20);           // 0.5062  — P(20+ damage)
 t.toQuery().percentiles([0.25, 0.5, 0.75]); // [15, 20, 24]
 ```
+
+#### Once per turn: keep the better damage roll
+
+`onFirstHit` also takes a **transform** instead of damage. `keepBestDamage()` rolls the attack's own
+base payload a second time and keeps the better total — once per turn, on the first attack that
+lands. No dice are restated, and one call covers every attack in the turn:
+
+```ts
+import { keepBestDamage } from "@yipe/dice/builder";
+
+const attack = d20.plus(5).ac(12).onHit(roll(2, d6).plus(3));
+
+turn([attack, attack]).mean();                               // 14.7000
+turn([attack, attack]).onFirstHit(keepBestDamage()).mean();  // 15.9849
+```
+
+What it rerolls is the **base payload**: a crit transforms the doubled crit dice, while
+`plusSeparateDamage` channels, `every-hit` riders and the miss branch are never rerolled. Spending
+on the first landing is a policy, and not the best one — a player who sees a high roll holds the
+reroll — so the number is a lower bound. `keepBestDamage().ifBelow({ hit, crit })` spends only when
+the base payload total (dice plus the payload's own flat bonus, excluding separate-damage channels)
+is below the threshold for that mode. When no later attack it watches can still land — the last
+one, or an earlier one whose watched reroll can no longer fire — it spends on any landing.
+`ifBelow({ hit: 10, crit: 18 })` reaches the optimum on the turn above, and since the threshold
+reads the payload's own values it works on a parsed string or a bare `PMF` too.
+On a tie the original roll is kept; the total is the same, so that only matters to a dice-match
+trigger reading the same attack.
+`fireProbability(id)` reports P(spent). A second transform over any of the same attacks throws
+`duplicate-substitute`, and a transform passed to any other verb throws `unsupported-trigger`.
+
+#### Conditions: advantage, disadvantage and crits granted by earlier attacks
+
+The same verbs take a **grant** — a modifier with a lifetime — for the attack rolls after it:
+
+```ts
+import { advantage, disadvantage, turn } from "@yipe/dice/builder";
+
+const sword = d20.plus(5).ac(12).onHit(roll(1, d8).plus(3));
+
+// A hit gives the next attack advantage. The next attack uses it up even on a miss, and passes it
+// on if it lands.
+turn([sword, sword]).onEveryHit(advantage().untilNextAttack()).mean();        // 12.202125
+turn([sword, sword, sword]).onEveryHit(advantage().untilNextAttack()).mean(); // 19.192196
+
+// A hit gives advantage for the rest of the turn if the target fails a save; each landing tries again.
+turn([axe, axe]).onEveryHit(advantage().untilEndOfTurn(), { save: d20.plus(2).dc(15) });
+
+// Once per turn, on the first hit, 40% of the time: advantage, and every later hit is a crit.
+turn([fist, fist, fist]).onFirstHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.4 });
+
+// One save, two grants: advantage for the melee attacks, disadvantage for the ranged ones.
+turn().attack(axe, { tag: "melee" }).attack(bow, { tag: "ranged" })
+  .onEveryHit([advantage().untilEndOfTurn().to("melee"),
+               disadvantage().untilEndOfTurn().to("ranged")], { of: ["melee"], save: dc });
+```
+
+`advantage()`, `disadvantage()` and `critOnHit()` are not grants until they get a lifetime, so
+`onEveryHit(advantage())` does not compile. A grant combines with the reading attack's own roll
+type by cancellation — advantage and disadvantage together roll flat — and a net advantage rolls
+three dice for an attack built with `threeDiceAdvantage()`. `critOnHit` makes every landing a crit;
+a natural 1 still misses. `.to(…)` takes ids or tags; left out, every later attack roll reads the
+grant, rerolls and bonus attacks included. An `onAnyMiss` reroll resolves after every attack, so one
+that would read a grant, or apply one, throws `unsupported-trigger`: use `onFirstMiss`, which
+resolves right after the miss and reads the grants in force there.
+
+`chance` or `save` gates the grants only: damage in the same call (`[d8, advantage()…]`) lands
+whatever the save does. `onEveryHit` rolls the save again on each landing until it takes, and
+`onFirstHit` rolls it once. An application whose grants are all `untilEndOfTurn` and all already
+in force rolls no further save; one with any `untilNextAttack` grant always rolls.
+`onSave` applies other grants on the success branch of the same roll:
+`{ chance: 0.4, onSave: advantage().untilNextAttack() }`. `fireProbability(id)` reports P(the grants
+were applied where a later attack reads them). In plain data it is `TurnSpec.conditions`, with the
+`save` already turned into its `chance`.
+
+#### Rerolls, sweeping AC, and naming attacks
+
+A reroll is an attack-shaped rider. `onFirstMiss(attack)` resolves right after the attack that
+missed, so anything that reads order — a `first-hit` rider's crit mode, a granted advantage — sees
+it where it happened. A rider or transform added *after* an `onAnyMiss` / `onFirstMiss` reroll
+watches it without being told:
+
+```ts
+turn([sword, sword])
+  .onFirstMiss(sword)       // reroll the first miss
+  .onFirstHit(roll(1, d10)) // watches both attacks and the reroll
+```
+
+`vsAC(ac)` rebuilds every attack with an AC — including rerolls and bonus attacks carried by
+riders — for a DPR-by-AC sweep, leaving saves untouched:
+
+```ts
+const base = turn([sword, sword]).onFirstHit(roll(3, d6));
+[12, 14, 16, 18].map((ac) => base.vsAC(ac).mean());
+```
+
+`attack(source, { tag })` and `attacks(n, source, { tag })` name a group of attacks, and an `of`
+entry that is not an id expands to every attack with that tag — so reordering a turn cannot
+silently retarget a rider the way a positional `attack 2` can.
 
 #### Ids, errors, and plain data
 
@@ -482,12 +741,17 @@ paladin.riderIds;                 // ["smite"]
 
 Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
 `unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `unused-crit-damage`,
-`too-many-groups` — maps
+`too-many-groups`, `no-dice-descriptor`, `duplicate-substitute`, `attack-after-rider`,
+`no-rebindable-source`, `unsupported-trigger`, `unsupported-policy`, `too-many-flags` — maps
 straight onto a UI field state. A bad `of` fails at the call that introduced it, not later at
 `.mean()`.
 
 Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
-rider watches and defaults to all of them. All of them are sugar over `rider()`, which takes the
+rider watches. Left out, it is filled in at that call: the attacks declared so far, plus any reroll
+declared so far. So declare attacks first — `.attack()` after such a rider throws
+`attack-after-rider` rather than silently leaving the new attack out. `Turn.from` fills an omitted
+`of` the same way — every attack plus the rerolls, for a rider the rerolls listed before it — so
+both spellings of a turn watch the same sources. All of them are sugar over `rider()`, which takes the
 trigger as plain data — and `Trigger` is JSON-safe, so a UI can persist one and hand it straight
 back:
 
@@ -528,6 +792,12 @@ console.table(query.toChartSeries());
 │ 8       │ 12 │ 0.003125 │
 └─────────┴────┴──────────┘
 ```
+
+Percentiles and `quantile()` land on the exact bin, so a d20's median is 10. `missChance()` is the
+probability that at least one attack misses; for "every attack misses" use
+`probExactlyK(["missNone", "missDamage"], n)`. `turn()`, `Turn.from()` and `resolve()` keep every
+reachable damage value (their `eps` defaults to 0). `setCachingEnabled(false)` turns off and
+empties every internal cache; PMFs returned from a cache have frozen bins.
 
 ## 🧪 Running Examples
 

@@ -49,8 +49,32 @@ export type AttackResolution = Resolution & {
   hit: PMF;
   crit: PMF;
   miss: PMF;
+  // Base payload only, before `plusSeparateDamage` channels are convolved in — equal to hit/crit
+  // when the attack has no separate-damage channels.
+  hitBase: PMF;
+  critBase: PMF;
+  // The convolved `plusSeparateDamage` channels only — PMF.delta(0) when there are none.
+  // critSeparate carries the channels' DOUBLED dice (same doubling hit/crit already use, in
+  // both the auto-double and the explicit `onCrit` branch).
+  hitSeparate: PMF;
+  critSeparate: PMF;
   weights: { hit: number; crit: number; miss: number };
 };
+
+/**
+ * The one re-derivation surface `AttackBuilder.withCheck(fn)` accepts. `roll` is the
+ * to-hit + bonus-dice descriptor (AC and crit threshold live alongside it, not inside it);
+ * `rollType`/`advantageDice` are the SOURCE's own values (before any grant is combined in —
+ * see `combine()` in `ac.ts`); `critOnHit` mirrors the `alwaysCrits()` path.
+ */
+export interface Check {
+  roll: RollBuilder;
+  ac: number;
+  critThreshold: number;
+  rollType: RollType;
+  advantageDice: 2 | 3;
+  critOnHit: boolean;
+}
 
 export type SaveResolution = Resolution & {
   saveFail: PMF;

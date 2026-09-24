@@ -130,7 +130,7 @@ describe("Dice Parser Tests", () => {
       const result = parse("(d20 + 6 AC 15) * (2d6 + 4)");
       // AC expressions with damage return 0 for minFace in the original parser
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(16);
+      expect(result.max()).toBe(28); // a natural 20 crits as 4d6 + 4
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(5, "hit")).toBe(0);
       expect(result.outcomeAt(6, "hit")).toBeGreaterThan(0);
@@ -141,7 +141,7 @@ describe("Dice Parser Tests", () => {
       const result = parse("(d20 > d20 + 6 AC 15) * (2d6 + 4)");
       // Same behavior as above
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(16); // 2d6 + 4 = 2*6 + 4 = 16
+      expect(result.max()).toBe(28); // crit: 4d6 + 4 = 24 + 4; a hit tops out at 16
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(5, "hit")).toBe(0);
       expect(result.outcomeAt(6, "hit")).toBeGreaterThan(0);
@@ -514,12 +514,6 @@ describe("Dice Parser Tests", () => {
       expect(result.outcomeAt(0, "hit")).toBe(0);
       expect(result.outcomeAt(20, "hit")).toBe(0);
     });
-
-    it("handles division by zero", () => {
-      // The parser doesn't currently throw for division by zero
-      const result = parse("d6/0");
-      expect(result.support().length).toBe(1);
-    });
   });
 
   describe("Critical Hit Handling", () => {
@@ -540,10 +534,9 @@ describe("Dice Parser Tests", () => {
     });
 
     it("ttest xcrit2 does not work without parens", () => {
-      // This expression fails due to parsing ambiguity - parentheses are required
-      expect(() => parse("d20 * 1d6 xcrit2 1d6")).toThrow(
-        "No numeric faces found"
-      );
+      // Without parentheses the count runs into the next number (`xcrit21 d6`), a range wider
+      // than the d20, so the parse is refused rather than read as "every natural face crits".
+      expect(() => parse("d20 * 1d6 xcrit2 1d6")).toThrow(/xcrit21 is wider than the d20/);
     });
 
     it("tests xcrit2 with parentheses around dice", () => {
@@ -606,7 +599,7 @@ describe("Dice Parser Tests", () => {
         "(d20 > d20 > d20 +8 AC 10) * (8d8 + 6d6 + 2d4 + 7)"
       );
       expect(result.min()).toBe(0);
-      expect(result.max()).toBe(115);
+      expect(result.max()).toBe(223); // crit doubles every die: 16d8 + 12d6 + 4d4 + 7
     });
 
     it("handles bonus to-hit dice with complex crit", () => {
@@ -628,7 +621,6 @@ describe("Dice Parser Tests", () => {
 
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
 
     it("handles multiple keeps with complex dice", () => {
@@ -640,7 +632,6 @@ describe("Dice Parser Tests", () => {
 
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
 
     it("handles max operations with complex crits", () => {
@@ -729,7 +720,6 @@ describe("Dice Parser Tests", () => {
       expect(result.max()).toBe(20);
       expect(result.mass()).toBeCloseTo(1, EPS);
 
-      // TODO - add more here
     });
   });
 

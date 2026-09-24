@@ -16,7 +16,7 @@ import type { SaveBuilder } from "./save";
 
 //const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").toQuery();
 
-/* A basic attack. Note that it auto-creates a crit roll. */
+/* A basic attack; its crit defaults to the doubled hit dice. */
 export const fullAttack = d20.plus(5).ac(10).onHit(2, d6);
 export const fullAttackExprExpected = "(d20 + 5 AC 10) * (2d6) crit (4d6)";
 
@@ -38,9 +38,7 @@ export const fullAttackWithCritAndMissExprExpected =
 export const basicDamageRoll = d6.plus(3);
 export const basicDamageRollExprExpected = "1d6 + 3";
 
-/** Basic 2d6 + 3 damage roll
- * For multiple dice, you need to use roll().
- */
+/** Basic 2d6 + 3 damage roll; multiple dice use roll(). */
 export const basic2d6Plus3 = roll(2, d6).plus(3);
 export const basic2d6Plus3ExprExpected = "2d6 + 3";
 
@@ -64,20 +62,19 @@ export const basicShorthandD6RollExprExpected = "2d6 + 3";
 export const shortcutDie = d8.plus(2);
 export const shortcutDieExprExpected = "1d8 + 2";
 
-/** Flat modifier only (no dice)
- * You can also use roll.flat(n) if you prefer.
- * Many methods take pure numbers, so this may not even be needed in many cases.
+/** Flat modifier only (no dice); roll.flat(n) is the same. Pure-number args are accepted
+ * directly, so a bare flat is rarely needed.
  * */
 export const flatFive = flat(5);
 export const flatFiveExprExpected = "5";
 
 /** Negative base dice */
 export const negativeBaseDieInline = roll(-1, d8);
-export const negativeBaseDieInlineExprExpected = "-1d8";
+export const negativeBaseDieInlineExprExpected = "0 - 1d8";
 
 /** Negative base dice explicit */
 export const negativeBaseDie = roll(-1).d8();
-export const negativeBaseDieExprExpected = "-1d8";
+export const negativeBaseDieExprExpected = "0 - 1d8";
 
 /** Subtracting a bonus die via negative roll part.
  * Useful for effects like Bane
@@ -95,7 +92,7 @@ export const singleD20ExprExpected = "d20";
 
 /** Adding a bunch */
 export const addAWholeBunch = d6.plus(d8).plus(d10).plus(d12).plus(d20);
-export const addAWholeBunchExprExpected = "1d20 + 1d12 + 1d10 + 1d8 + 1d6";
+export const addAWholeBunchExprExpected = "d20 + 1d12 + 1d10 + 1d8 + 1d6";
 
 /** Subtracting a bunch */
 export const subtractAWholeBunch = d6
@@ -104,7 +101,7 @@ export const subtractAWholeBunch = d6
   .minus(d12)
   .minus(d20);
 export const subtractAWholeBunchExprExpected =
-  "-1d20 - 1d12 - 1d10 - 1d8 + 1d6"; // For now it just sorts by die size
+  "1d6 - 1d20 - 1d12 - 1d10 - 1d8"; // For now it just sorts by die size
 
 export const addingMultipleConstants = d6.plus(2).plus(4);
 export const addingMultipleConstantsExprExpected = "1d6 + 6";
@@ -157,8 +154,7 @@ export const disD20ExprExpected = "d20 < d20";
 export const advHd20 = hd20.withAdvantage();
 export const advHd20ExprExpected = "hd20 > hd20";
 
-/** Complex chain: 2d6 + 1d8 + 4(d4 reroll 1) + 5
- * Note that reroll(1) applies to the immediate roll before it.
+/** Complex chain: 2d6 + 1d8 + 4(d4 reroll 1) + 5; reroll(1) applies to the roll before it.
  */
 export const complexDamage = roll(2, d6).plus(d8).plus(4, d4).reroll(1).plus(5);
 export const complexDamageExprExpected = "4(d4 reroll 1) + 1d8 + 2d6 + 5";
@@ -182,7 +178,7 @@ export const bestOfExampleExprExpected = "4kh3(1d6)";
 export const doubleD6 = roll(2, d6);
 export const doubleD6ExprExpected = "2d6";
 
-/** Double a d6+1 roll, resulting in 2d6+2. Note that modifiers are also doubled. */
+/** Double a d6+1 roll, resulting in 2d6+2 — modifiers double too. */
 export const doubleD6Plus1 = roll(2, d6.plus(1));
 export const doubleD6Plus1ExprExpected = "2d6 + 2";
 
@@ -249,14 +245,14 @@ export const alwaysCritsAttack: ReturnType<ACBuilder["onHit"]> = d20
   .ac(10)
   .alwaysCrits()
   .onHit(d8);
-export const alwaysCritsAttackExprExpected = "d20 + 5 * (1d8) crit (2d8)";
+export const alwaysCritsAttackExprExpected = "(d20 + 5 AC 10) * (1d8) xcrit20 (2d8)";
 
 /** Attack that always hits and always crits (no misses at all). */
 export const alwaysHitsAlwaysCrits: ReturnType<ACBuilder["onHit"]> = d20
   .alwaysHits()
   .alwaysCrits()
   .onHit(d8);
-export const alwaysHitsAlwaysCritsExprExpected = "d20 * (1d8) crit (2d8)";
+export const alwaysHitsAlwaysCritsExprExpected = "d20 * (1d8) xcrit20 (2d8)";
 
 // ------------------------------
 // Saves (DC checks) and effects
@@ -434,7 +430,6 @@ export function analyzeSave(save: SaveBuilder) {
   };
 }
 
-// TODO make some of these interactive UI examples?
 export function demoAnalyses() {
   const damage = roll(2, d6).plus(4);
   const advCompare = compareAdvantageStates(6, 16, damage);

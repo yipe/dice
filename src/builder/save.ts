@@ -1,10 +1,9 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
-import { LRUCache } from "../common/lru-cache";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
-import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { pmfFromRollBuilder } from "./ast";
 import type { DCBuilder } from "./dc";
 import { ParsedRollBuilder, type RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
@@ -17,7 +16,7 @@ export type SaveOutcome = "normal" | "half";
  * Fireball, a Paladin's smite) resolves the SAME save thousands of times. Keyed by
  * {@link SaveBuilder.cacheKey}; a `null` key resolves uncached.
  */
-const savePMFCache = new LRUCache<string, PMF>(4000);
+const savePMFCache = PMF.createCache(4000);
 
 /** Clears the resolved-save PMF cache (test/bench seam; mirrors {@link clearAttackCache}). */
 export function clearSaveCache(): void {
@@ -44,10 +43,13 @@ export class SaveBuilder implements CheckBuilder {
     return this.saveOutcome === "half" ? `${result} save half` : result;
   }
 
+  /**
+   * The save's outcome: `check` is the DC check's own PMF (success at 0, failure at 1, as
+   * {@link DCBuilder.toPMF}), `weights` its success/failure chances, `saveFail` the failure payload
+   * and `saveSuccess` what a success deals (half, floored, under `saveHalf()`; else 0).
+   */
   resolve(eps: number = EPS): SaveResolution {
-    const { pSuccess: psuccess = 0, pFail: pfail = 1 } = resolveProbabilities(
-      this.check
-    );
+    const { pSuccess: psuccess, pFail: pfail } = this.check.saveProbabilities();
     const failPMF = this.failureEffect
       ? this.failureEffect instanceof ParsedRollBuilder
         ? this.failureEffect.toPMF(eps)
@@ -68,8 +70,7 @@ export class SaveBuilder implements CheckBuilder {
 
     return {
       pmf: mixture.buildPMF(eps) ?? PMF.delta(0, eps),
-      check:
-        PMF.exclusive([[PMF.delta(1), psuccess]], eps) ?? PMF.delta(0, eps),
+      check: this.check.toPMF(eps),
       saveFail: failPMF ?? PMF.delta(0, eps),
       saveSuccess: successPMF ?? PMF.delta(0, eps),
       weights: { success: psuccess, fail: pfail },
@@ -78,7 +79,7 @@ export class SaveBuilder implements CheckBuilder {
 
   /**
    * A cheap, complete key for this save's resolved PMF, or `null` when it can't be cached soundly.
-   * {@link resolve} reads exactly three things: the DC check (via `resolveProbabilities`), the failure
+   * {@link resolve} reads exactly three things: the DC check (via `saveProbabilities`/`toPMF`), the failure
    * effect's PMF, and the save outcome — so composing their keys pins it. A `ParsedRollBuilder` failure
    * effect returns `null`, which correctly forces this uncached.
    */
@@ -115,36 +116,4 @@ export class SaveBuilder implements CheckBuilder {
   toQuery(eps: number = 0): DiceQuery {
     return this.toPMF(eps).query();
   }
-}
-
-function resolveProbabilities(check: DCBuilder): {
-  pSuccess: number;
-  pFail: number;
-} {
-  const saveBonus = check.modifier;
-  const dc = check.saveDC;
-  const eps = 0;
-
-  const die = resolveRootD20(check);
-  const faceP = new Map<number, number>();
-  for (const [r, bin] of die) {
-    const pr = bin.p;
-    if (pr > 0) faceP.set(r, pr);
-  }
-
-  // Now add bonus dice to the PMF (bless, bane, bardic, etc)
-  const bonusDicePMFs = check.getBonusDicePMFs(check, eps);
-  const bonusPMF =
-    bonusDicePMFs.length > 0
-      ? PMF.convolveMany(bonusDicePMFs, eps)
-      : PMF.zero(eps);
-
-  let pSuccess = 0;
-  for (const [r, pr] of faceP) {
-    const need = dc - saveBonus - r;
-    pSuccess += pr * bonusPMF.tailProbGE(need);
-  }
-
-  const pFail = Math.max(0, 1 - pSuccess);
-  return { pSuccess, pFail: pFail };
 }

@@ -351,11 +351,12 @@ describe("Dice Advanced Methods", () => {
       expect(normalized.privateData).not.toBe(d6.privateData);
     });
 
-    it("should preserve outcome data", () => {
+    it("scales outcome data with the faces, so an outcome keeps its share of the total", () => {
       d6.setOutcomeDistribution("crit", { 6: 1.0 });
       const normalized = d6.normalize(2);
 
-      expect(normalized.getOutcomeDistribution("crit")).toEqual({ 6: 1.0 });
+      expect(normalized.getOutcomeDistribution("crit")).toEqual({ 6: 2.0 });
+      expect(normalized.toPMF().outcomeProbability("crit")).toBeCloseTo(1 / 6, 12);
     });
   });
 

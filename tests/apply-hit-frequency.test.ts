@@ -97,7 +97,7 @@ describe("PMF.applyHitFrequency", () => {
 
   it("does not mutate the source PMF (copy-on-write)", () => {
     const base = hitPMF().withAttribution();
-    base.applyHitFrequency(0.5);
+    void base.applyHitFrequency(0.5);
     // Original bins — probability, count, and attr — must be untouched.
     expect(base.pAt(5)).toBeCloseTo(0.6, 12);
     expect(base.pAt(10)).toBeCloseTo(0.4, 12);

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { fullRoundSimulationExample } from "../examples/other-examples";
 import { clearParserCache, DiceQuery, EPS, parse, PMF } from "../src/";
+import { d20, d8, roll } from "../src/builder/index";
 
 function seriesOf(pmf: PMF) {
   return new DiceQuery(pmf).toChartSeries();
@@ -40,15 +41,17 @@ describe("DiceQuery Comprehensive", () => {
 
   describe("Probability Queries", () => {
     it("should calculate hit probabilities correctly", () => {
-      // Attack with known hit rate (d20+5 vs AC 15 = hits on 10+, so 55% hit rate)
+      // Attack with known hit rate (d20+5 vs AC 15 = hits on 10+, so 55% hit rate), of which
+      // the natural 20 is a crit: 50% hit, 5% crit.
       const pmf = parse("(d20 + 5 AC 15) * (1d6)");
       const query = new DiceQuery([pmf]);
 
       // Test various probability methods
-      const hitProb = query.probAtLeastOne("hit");
+      const hitProb = query.probAtLeastOne(["hit", "crit"]);
       const missProb = query.missChance();
 
-      expect(hitProb).toBeCloseTo(0.55, 2); // d20+5 vs AC 15 = 11/20 = 55%
+      expect(query.probAtLeastOne("hit")).toBeCloseTo(0.5, 12);
+      expect(hitProb).toBeCloseTo(0.55, 12); // d20+5 vs AC 15 = 11/20 = 55%
       expect(missProb).toBeCloseTo(0.45, 2); // 45% miss
       expect(hitProb + missProb).toBeCloseTo(1, 6); // Should sum to 1
     });
@@ -59,10 +62,10 @@ describe("DiceQuery Comprehensive", () => {
       const query = new DiceQuery([attack, attack, attack]);
 
       // Probability of exactly K hits
-      const prob0Hits = query.probExactlyK("hit", 0); // All miss
-      const prob1Hit = query.probExactlyK("hit", 1); // Exactly 1 hits
-      const prob2Hits = query.probExactlyK("hit", 2); // Exactly 2 hit
-      const prob3Hits = query.probExactlyK("hit", 3); // All hit
+      const prob0Hits = query.probExactlyK(["hit", "crit"], 0); // All miss
+      const prob1Hit = query.probExactlyK(["hit", "crit"], 1); // Exactly 1 hits
+      const prob2Hits = query.probExactlyK(["hit", "crit"], 2); // Exactly 2 hit
+      const prob3Hits = query.probExactlyK(["hit", "crit"], 3); // All hit
 
       // Hand calculation verification for binomial distribution (55% hit rate)
       expect(prob0Hits).toBeCloseTo(0.45 ** 3, 3); // (1-0.55)^3 = 0.091
@@ -410,8 +413,8 @@ describe("DiceQuery Comprehensive", () => {
     const before = new DiceQuery(a).toChartSeries();
 
     // Simulate “other tests” doing lots of work
-    PMF.withProbability(parse("3d6"), 0.25);
-    PMF.withProbability(parse("2d6"), 0.75);
+    void PMF.withProbability(parse("3d6"), 0.25);
+    void PMF.withProbability(parse("2d6"), 0.75);
     new DiceQuery([parse(atkExpr), parse(atkExpr)]).probAtLeastOne([
       "hit",
       "crit",
@@ -515,8 +518,8 @@ describe("DiceQuery Comprehensive", () => {
     expect(pMissSubset + pMissSuccess).toBeCloseTo(pMissAny, 12);
     expect(pMissAny + pMissNone).toBeCloseTo(1, 12);
 
-    // No crits scenario (no 'crit' clause → pC ≈ 0)
-    const noCrit = parse("(d20 + 8 AC 16) * (1d8 + 4)");
+    // No crits scenario: noCrit() on the builder (a parsed attack string crits on a natural 20).
+    const noCrit = d20.plus(8).ac(16).onHit(roll(1, d8).plus(4)).noCrit().toPMF();
     const dqNoCrit1 = new DiceQuery([noCrit]);
     const dqNoCrit2 = new DiceQuery([noCrit, noCrit]);
     const pHN = dqNoCrit1.probAtLeastOne(["hit", "crit"]);

@@ -154,14 +154,18 @@ describe("refactor characterization: count queries (item 9)", () => {
       expectClose(q.probAtMostK(arr, k), baseline.countquery_atMost[k], `atMost ${k}`);
     }
   });
-  it("single-label path unchanged", () => {
+  it("single-label path counts only that label: a natural 20 is a crit, not a hit (R33)", () => {
+    // Hit-only rates vs AC 15 at +5 / +3 / +7: 10–19, 12–19 and 8–19 on the d20.
+    const [a, b, c] = [0.5, 0.4, 0.6];
+    const exactly = [
+      (1 - a) * (1 - b) * (1 - c),
+      a * (1 - b) * (1 - c) + (1 - a) * b * (1 - c) + (1 - a) * (1 - b) * c,
+      a * b * (1 - c) + a * (1 - b) * c + (1 - a) * b * c,
+      a * b * c,
+    ];
     const q = buildQuery();
     for (let k = 0; k <= 3; k++) {
-      expectClose(
-        q.probExactlyK("hit" as any, k),
-        baseline.countquery_exactly_single[k],
-        `exactly-single ${k}`
-      );
+      expectClose(q.probExactlyK("hit", k), exactly[k], `exactly-single ${k}`);
     }
   });
 
@@ -232,7 +236,7 @@ describe("compact() (item 1)", () => {
     m.set(5, { p: 0.5, count: { hit: 0.5, tiny: 1e-20 }, attr: { hit: 2.5, tiny: 1e-20 } });
     m.set(7, { p: 0.5, count: { hit: 0.5 } });
     const pmf = new PMF(m, EPS);
-    pmf.compact();
+    void pmf.compact();
     expect(pmf.map.get(5)!.count.tiny).toBe(1e-20);
     expect(pmf.map.get(5)!.attr!.tiny).toBe(1e-20);
   });
@@ -255,7 +259,7 @@ describe("compact() (item 1)", () => {
     );
     const b = new PMF(new Map<number, any>([[5, sharedBin]]), EPS);
 
-    b.compact();
+    void b.compact();
 
     expect(a.map.get(5)!.count.tiny).toBe(1e-20);
     expect(a.map.get(5)!.attr!.tiny).toBe(1e-20);
@@ -265,7 +269,7 @@ describe("compact() (item 1)", () => {
     const failure = parse("2d6+1");
     const before = JSON.stringify(failure.toJSON());
     const branched = PMF.branch(parse("1d8"), failure, 0);
-    branched.compact(1e-9); // aggressive eps to force count pruning
+    void branched.compact(1e-9); // aggressive eps to force count pruning
     expect(JSON.stringify(failure.toJSON())).toBe(before);
   });
 });

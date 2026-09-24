@@ -5,7 +5,7 @@ describe("DiceParseError", () => {
   it("is thrown for unexpected tokens and is an Error", () => {
     let caught: unknown;
     try {
-      parse("d6@3");
+      void parse("d6@3");
     } catch (e) {
       caught = e;
     }
@@ -18,7 +18,7 @@ describe("DiceParseError", () => {
   it("wraps parse failures with the original cause", () => {
     let caught: unknown;
     try {
-      parse("d6+");
+      void parse("d6+");
     } catch (e) {
       caught = e;
     }

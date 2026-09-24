@@ -165,7 +165,8 @@ describe("tryParse and the n substitution", () => {
 describe("withRollType with nested parentheses", () => {
   it("finds the AC check when it is not in the innermost group", () => {
     const nested = "((d20 + 8) AC 16) * (1d4 + 4)";
-    expect(parse(nested).mean()).toBeCloseTo(4.225, 3);
+    // 0.60 × (1d4 + 4) + 0.05 × (2d4 + 4) on the natural 20: the nested check still crits.
+    expect(parse(nested).mean()).toBeCloseTo(4.35, 12);
     expect(withRollType(nested, "advantage")).toBe(
       "((d20 > d20 + 8) AC 16) * (1d4 + 4)"
     );
@@ -204,10 +205,11 @@ describe("tryParse and integer range", () => {
     expect(tryParse("-9007199254740991").mean()).toBe(-9007199254740991);
   });
 
-  it("covers the signed integers the grammar rejects", () => {
-    expect(() => parse("-3")).toThrow();
-    expect(tryParse("-3").mean()).toBe(-3);
+  it("reads a leading `+`, which the grammar rejects, and a leading `-` as the grammar does", () => {
+    expect(() => parse("+7")).toThrow();
     expect(tryParse("+7").mean()).toBe(7);
+    expect(parse("-3").mean()).toBe(-3);
+    expect(tryParse("-3").mean()).toBe(-3);
   });
 });
 

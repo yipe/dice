@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { d8, roll } from "../builder";
 
-// Oracles from docs/superpowers/plans/2026-09-21-native-bounce-and-explode.md, §1.3. Computed by
-// brute-force enumeration in the plan/spec's appendix — ground truth. NEVER adjust these numbers
-// to match an implementation; if an assertion disagrees, the implementation is wrong.
+// Ground-truth oracles from brute-force enumeration. These numbers are authoritative: NEVER adjust
+// them to match an implementation; if an assertion disagrees, the implementation is wrong.
 describe("RollBuilder.explodePool() — pool-wide exploding-dice budget", () => {
   const oracles: { pool: string; count: number; budget: number; poolWideMean: number; perDieMean: number }[] = [
     { pool: "1d8", count: 1, budget: 1, poolWideMean: 5.0625000000, perDieMean: 5.0625000000 },
