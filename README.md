@@ -705,6 +705,119 @@ in force rolls no further save; one with any `untilNextAttack` grant always roll
 were applied where a later attack reads them). In plain data it is `TurnSpec.conditions`, with the
 `save` already turned into its `chance`.
 
+#### Effects cookbook: every combination, fluently
+
+An effect has four parts, and each has a spelling:
+
+| part | options | spelling |
+|---|---|---|
+| when | every hit · any crit · the turn's first hit | `attack.onEveryHit(…)` · `attack.onAnyCrit(…)` · `turn.onFirstHit(…)` |
+| what | advantage · disadvantage · every hit is a crit | `advantage()` · `disadvantage()` · `critOnHit()`, chainable: `advantage().critOnHit()` |
+| how long | the next attack · the rest of the turn | `.untilNextAttack()` · `.untilEndOfTurn()` |
+| gate | always · a chance · the target's save, with an optional consolation | nothing · `{ chance: 0.4 }` · `{ save: d20.plus(3).dc(15) }`, `{ save, onSave: advantage().untilNextAttack() }` |
+
+Every-hit and any-crit effects belong to the attack that grants them, so attach them to it. The
+result is a new builder; the receiver is unchanged. `turn()`, `Turn.from()` and `turn().attack()` all
+read an attached effect as one condition watching that attack. Once-per-turn effects fire on the
+turn's first hit whichever attack lands it, so they are turn verbs. Every number below is exact; each
+example is exported from `src/builder/example.ts` and pinned in its test.
+
+```ts
+import { PMF } from "@yipe/dice";
+import { advantage, critOnHit, d20, d4, d6, d8, flat, roll, turn } from "@yipe/dice/builder";
+
+const shortsword = d20.plus(8).ac(16).onHit(d6.plus(5));
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(5));
+const staff = d20.plus(8).ac(16).onHit(d8.plus(5));
+const fist = d20.plus(8).ac(16).onHit(d6.plus(5));
+
+// Every hit: advantage on the next attack (the shape of Vex).
+const sword = shortsword.onEveryHit(advantage().untilNextAttack());
+turn([sword, sword, dagger]).mean();            // 19.2211   (no effect: 16.4000)
+turn().attacks(4, sword).mean();                // 27.5867   — the chain passes along, swing by swing
+
+// The same grant, limited to some readers: the dagger attacks another creature.
+turn()
+  .attacks(2, shortsword, { tag: "sword" })
+  .attack(dagger)
+  .onEveryHit(advantage().untilNextAttack().to("sword"), { of: ["sword"] })
+  .mean();                                      // 17.7650
+
+// Every hit, 40% of the time.
+turn([shortsword.onEveryHit(advantage().untilNextAttack(), { chance: 0.4 }), shortsword]).mean(); // 11.9460
+
+// Every hit, gated by the target's save, for the rest of the turn (the shape of Topple).
+// Each landing retries the save until it fails; once it has, later landings roll nothing.
+const toppling = staff.onEveryHit(advantage().untilEndOfTurn(), { save: d20.plus(3).dc(15) });
+turn([toppling, toppling, dagger]).mean();      // 19.7207
+
+// Any crit: advantage for the rest of the turn.
+turn([shortsword.onAnyCrit(advantage().untilEndOfTurn()), shortsword, shortsword]).mean(); // 17.3100
+
+// Two modifiers in one grant: advantage, and every later hit is a crit.
+turn([shortsword.onEveryHit(advantage().critOnHit().untilEndOfTurn()), shortsword]).mean(); // 14.5395
+
+// The turn's first hit: every later hit this turn is a crit.
+turn([shortsword, shortsword]).onFirstHit(critOnHit().untilEndOfTurn()).mean(); // 12.7650
+
+// The turn's first hit, with a save deciding between two outcomes (the shape of Stunning Strike):
+// a failed save gives advantage for the rest of the turn, a success still gives the next attack.
+turn([fist, fist, fist])
+  .onFirstHit(advantage().untilEndOfTurn(), {
+    save: d20.plus(2).dc(15),
+    onSave: advantage().untilNextAttack(),
+  })
+  .mean();                                      // 19.7618
+
+// Damage and a grant on the same first hit, in one list, on top of the attached effect.
+turn([sword, sword, dagger]).onFirstHit([roll(3, d6), advantage().untilEndOfTurn()]).mean(); // 30.1893
+
+// A gate covers grants, never damage (the shape of Trip Attack). Two calls on one trigger resolve
+// jointly; giving the grant its own call lets you ask how often it applied.
+const tripping = turn([shortsword, shortsword, dagger])
+  .onFirstHit(d8)
+  .onFirstHit(advantage().untilEndOfTurn(), { save: d20.plus(4).dc(15), id: "advantage" });
+tripping.mean();                                // 22.5216
+tripping.fireProbability("advantage");          // 0.4388 — applied where a later attack reads it
+
+// What the target already has when the turn starts, in 60% of rounds: a step that always hits
+// for 0 goes first, and its grant reaches every attack after it.
+const start = d20.alwaysHits().onHit(flat(0)).onEveryHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.6 });
+turn([start, shortsword, shortsword]).mean();   // 17.1960   (every round: 21.0600)
+
+// An attack that happens in only some rounds: mix the turn with it and the turn without it. Gating
+// its PMF in place would let a skipped round use up a next-attack grant.
+const sword9 = d20.plus(9).ac(16).onHit(d6.plus(5)).onEveryHit(advantage().untilNextAttack());
+const knife9 = d20.plus(9).ac(16).onHit(d4.plus(5));
+PMF.mix([
+  { pmf: turn([sword9, knife9, sword9]).pmf, weight: 0.5 },
+  { pmf: turn([sword9, knife9]).pmf, weight: 0.5 },
+]).mean();                                      // 15.7481
+```
+
+Effects compose without precedence rules. Advantage is a set, not a counter, so two sources of it
+are one advantage, and a grant cancels against the reading attack's own disadvantage. Everything at
+once, with two rapiers granting next-attack advantage, two fists, a d6 on the first hit and the
+save-or-next-attack condition, is still one exact turn. `stepStats(id)` reports how often each swing
+had advantage:
+
+```ts
+const rapier = d20.plus(8).ac(16).onHit(d8.plus(5)).onEveryHit(advantage().untilNextAttack());
+const smallFist = d20.plus(8).ac(16).onHit(d6.plus(4));
+const t = turn([rapier, rapier, smallFist, smallFist])
+  .onFirstHit(d6)
+  .onFirstHit(advantage().untilEndOfTurn(), { save: d20.plus(2).dc(15), onSave: advantage().untilNextAttack() });
+
+t.mean();                                                 // 30.8749
+t.attackIds.map((id) => t.stepStats(id).live.advantage);  // [0, 0.65, 0.8457, 0.6061]
+t.stepStats("attack 2");  // { rolled: 1, hit: 0.7979, crit: 0.0809, live: { advantage: 0.65, … } }
+```
+
+`stepStats(id)` works for any declared attack or attack-shaped rider. `hit` includes crits. `live.*`
+is the chance that each modifier was in force when the swing read it, before the swing used it up.
+`rolled` is 1 for a declared attack and the fire probability for a rider. An effect attached to an
+attack used as a rider throws `unsupported-trigger`: spell it with the turn's verbs instead.
+
 #### Rerolls, sweeping AC, and naming attacks
 
 A reroll is an attack-shaped rider. `onFirstMiss(attack)` resolves right after the attack that

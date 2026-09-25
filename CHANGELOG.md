@@ -32,6 +32,21 @@ statistics for every attack and attack-shaped rider.
   own probabilities; a damage-shaped rider, substitute, condition or unknown id is an `unknown-id`
   `TurnSpecError`. Three attacks where a hit grants the next attack advantage report, per swing,
   65.00 / 79.79 / 83.15% landed and 0 / 65.00 / 79.79% advantage.
+- **Effects cookbook** in the README and `src/builder/example.ts`. It shows the fluent spelling of
+  every combination of when (every hit, any crit, the turn's first hit), what (advantage,
+  disadvantage, every hit is a crit), how long (next attack, rest of turn) and gate (chance, save,
+  save with `onSave`). It also covers readers limited by tag, a condition already in force at the
+  start of the turn, an attack that happens only some rounds, and `stepStats`. Every mean is pinned
+  in `example.test.ts`.
+
+### Changed
+
+- **A bare `PMF` used as a source or payload is normalized to unit mass** before the turn is
+  resolved, so `stepStats` and `fireProbability` are unconditional probabilities even when a caller
+  supplies a PMF whose mass is not 1. Builder sources already had unit mass, so they are unaffected.
+- **A rider whose source carries an attached condition throws `unsupported-trigger`.** Attached
+  conditions are read only from declared attacks. Previously they were silently dropped on a rider.
+- **`stepStats(id)` returns a copy**, so mutating the result cannot change a later read.
 
 ## [0.12.1] - 2026-09-24
 
