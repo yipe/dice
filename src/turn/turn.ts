@@ -614,7 +614,9 @@ export class Turn {
           .join(", ")}.`
       );
     }
-    return stats;
+    // The cached entry is shared by every later call; hand out a copy so a caller
+    // mutating the result cannot change what the next read reports.
+    return { ...stats, live: { ...stats.live } };
   }
 
   private resolve(): {
