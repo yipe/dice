@@ -122,4 +122,13 @@ describe("Turn.stepStats", () => {
     expect(stats.crit).toBeCloseTo(0.05, 4);
     expect(stats.live.advantage).toBeCloseTo(0, 10);
   });
+
+  it("returns a copy, so mutating the result cannot change later reads", () => {
+    const v = ss().onEveryHit(advantage().untilNextAttack());
+    const t = turn([{ id: "s1", source: v }, { id: "s2", source: v }]);
+    const first = t.stepStats("s2");
+    first.hit = 0;
+    first.live.advantage = 0;
+    expectStats(t.stepStats("s2"), 0.7979, 0.0809, 0.65);
+  });
 });
