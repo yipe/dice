@@ -100,4 +100,26 @@ describe("Turn.stepStats", () => {
       expect((caught as TurnSpecError).code).toBe("unknown-id");
     }
   });
+
+  it("sums a first-miss rider's several steps under one id", () => {
+    const t = turn([{ id: "a", source: ss() }, { id: "b", source: ss() }]).onFirstMiss(ss(), {
+      id: "reroll",
+    });
+    const reroll = t.stepStats("reroll");
+    // Fires iff a misses (0.35) or a hits and b misses (0.65 × 0.35).
+    const fired = 0.35 + 0.65 * 0.35;
+    expect(reroll.rolled).toBeCloseTo(fired, 4);
+    expect(reroll.hit).toBeCloseTo(fired * 0.65, 4);
+    expect(reroll.crit).toBeCloseTo(fired * 0.05, 4);
+  });
+
+  it("reports unit-mass stats when a later source PMF has mass other than 1", () => {
+    const doubled = ss().toPMF().scaleMass(2);
+    const t = turn([{ id: "a", source: ss().toPMF() }, { id: "b", source: doubled }]);
+    const stats = t.stepStats("a");
+    expect(stats.rolled).toBeCloseTo(1, 10);
+    expect(stats.hit).toBeCloseTo(0.65, 4);
+    expect(stats.crit).toBeCloseTo(0.05, 4);
+    expect(stats.live.advantage).toBeCloseTo(0, 10);
+  });
 });

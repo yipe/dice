@@ -864,12 +864,15 @@ export class Turn {
 
     // Per-step stats live in the same mass units, so they follow the same
     // normalization. Only attack-shaped steps (a declared attack, or a rider that
-    // rolls its own attack — anything with variants) are reportable.
+    // rolls its own attack — anything with variants) are reportable. A rider that
+    // fires at several positions in the rail (a `first-miss` reroll watching many
+    // attacks) has one step per position under one id; those steps are mutually
+    // exclusive, so their masses sum.
     const scale = (mass: number): number => (needsNormalizing ? mass / totalMass : mass);
     const stepStats = new Map<string, StepStats>();
     plan.steps.forEach((step, stepIndex) => {
       if (step.variants.length === 0) return;
-      stepStats.set(step.id, {
+      const next: StepStats = {
         rolled: scale(rolled[stepIndex]),
         hit: scale(hitMass[stepIndex]),
         crit: scale(critMass[stepIndex]),
@@ -878,7 +881,22 @@ export class Turn {
           disadvantage: scale(liveDisadvantage[stepIndex]),
           critOnHit: scale(liveCritOnHit[stepIndex]),
         },
-      });
+      };
+      const existing = stepStats.get(step.id);
+      if (existing === undefined) {
+        stepStats.set(step.id, next);
+      } else {
+        stepStats.set(step.id, {
+          rolled: existing.rolled + next.rolled,
+          hit: existing.hit + next.hit,
+          crit: existing.crit + next.crit,
+          live: {
+            advantage: existing.live.advantage + next.live.advantage,
+            disadvantage: existing.live.disadvantage + next.live.disadvantage,
+            critOnHit: existing.live.critOnHit + next.live.critOnHit,
+          },
+        });
+      }
     });
 
     this.resolved = {
