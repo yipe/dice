@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advantage, d20, turn, Turn } from "../builder";
+import { advantage, d20, turn, Turn, TurnSpecError } from "../builder";
 import type { AttackBuilder } from "../builder";
 
 // Every oracle below is +8 vs AC 16, crit on 20: shortsword 1d6+5, dagger 1d4+5,
@@ -56,5 +56,31 @@ describe("AttackBuilder.onEveryHit / onAnyCrit", () => {
     // mean is unchanged; two shortswords gain a little from the first critting.
     expect(turn([onCrit]).mean()).toBeCloseTo(turn([bare]).mean(), 10);
     expect(turn([onCrit, onCrit]).mean()).toBeGreaterThan(turn([bare, bare]).mean());
+  });
+
+  it("snapshots the grants array and the gate, so later caller mutation is inert", () => {
+    const build = (mutate: boolean): number => {
+      const grants = [advantage().untilNextAttack()];
+      const onSave = [advantage().untilNextAttack()];
+      const v = ss().onEveryHit(grants, { chance: 0.5, onSave });
+      if (mutate) {
+        grants.length = 0;
+        onSave.length = 0;
+      }
+      return turn([v, v, dg()]).mean();
+    };
+    // Mutating the caller-owned arrays after attaching must not change the turn.
+    expect(build(true)).toBeCloseTo(build(false), 10);
+  });
+
+  it("rejects an attached condition on a rider source", () => {
+    const carrying = ss().onEveryHit(advantage().untilNextAttack());
+    let code: string | undefined;
+    try {
+      void turn([{ id: "a", source: ss() }]).onFirstMiss(carrying, { id: "reroll" });
+    } catch (error) {
+      code = error instanceof TurnSpecError ? error.code : String(error);
+    }
+    expect(code).toBe("unsupported-trigger");
   });
 });

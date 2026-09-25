@@ -355,7 +355,15 @@ function toPMF(
   const parts = Array.isArray(damage) ? damage : [damage as Damage];
   if (parts.length === 0) return PMF.delta(0, eps);
   const pmfs = parts.map((part) => {
-    if (part instanceof PMF) return part;
+    if (part instanceof PMF) {
+      // A bare PMF is a caller-supplied distribution, and its mass is not
+      // guaranteed to be 1. Normalize it so the walk stays in probability space:
+      // step statistics and fire masses are unconditional probabilities, which
+      // only hold when every source contributes unit mass. A builder's toPMF()
+      // already returns unit mass.
+      const mass = part.mass();
+      return Math.abs(mass - 1) <= EPS ? part : part.normalize();
+    }
     // `Damage` rules this out, but a consumer deserializing UI state reaches
     // here untyped. Reporting it as a spec error beats a bare TypeError from
     // calling a method that isn't there.
@@ -546,6 +554,18 @@ function attackEntry(entry: Attack, index: number): { id: string; tag?: string; 
 }
 
 /**
+ * The attached conditions a source carries, or `undefined` when it has none.
+ * Duck-typed: the only sources that carry `attached` are `AttackBuilder`s, whose
+ * field is exactly `readonly AttachedCondition[]`.
+ */
+function attachedConditionsOf(source: unknown): readonly AttachedCondition[] | undefined {
+  if (typeof source !== "object" || source === null || !("attached" in source)) return undefined;
+  const attached: unknown = source.attached;
+  if (!Array.isArray(attached) || attached.length === 0) return undefined;
+  return attached as readonly AttachedCondition[];
+}
+
+/**
  * The one {@link ConditionSpec} an {@link AttachedCondition} becomes: `of` is the
  * carrying attack's id, the gate's `save` becomes `chance` (its P(fail)), and its
  * `onSave` grants become the success-branch grants. Mirrors `Turn`'s trigger verbs.
@@ -627,9 +647,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // the `${slotId}:${index}` ids the attached entries get.
   const attachedConditions: ConditionSpec[] = [];
   attackIds.forEach((slotId, index) => {
-    const source = attackSources[index] as { attached?: readonly AttachedCondition[] };
-    const attached = source?.attached;
-    if (!attached || attached.length === 0) return;
+    const attached = attachedConditionsOf(attackSources[index]);
+    if (!attached) return;
     attached.forEach((entry, entryIndex) => {
       attachedConditions.push(conditionFromAttached(slotId, entryIndex, entry, eps));
     });
@@ -671,6 +690,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         "unsupported-trigger",
         riderIds[index],
         `Rider "${riderIds[index]}" carries a grant on "${rider.on}". A grant is only accepted by onEveryHit, onFirstHit and onAnyCrit.`
+      );
+    }
+    if (parts.some((part) => attachedConditionsOf(part) !== undefined)) {
+      fail(
+        "unsupported-trigger",
+        riderIds[index],
+        `Rider "${riderIds[index]}" carries a condition attached to its source (AttackBuilder.onEveryHit / onAnyCrit). Attachment is only read from declared attacks; spell this condition with the turn's verbs instead.`
       );
     }
   });

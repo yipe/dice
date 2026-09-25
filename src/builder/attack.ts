@@ -286,17 +286,7 @@ export class AttackBuilder implements CheckBuilder {
    * ```
    */
   onEveryHit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
-    return new AttackBuilder(
-      this.check,
-      this.hitEffect,
-      this.critEffect,
-      this.missEffect,
-      this.separateDamage,
-      this.rerollThreshold,
-      this.minimumDieValue,
-      this.halfOnMissFlag,
-      [...this.attached, { on: "every-hit", grants, gate }]
-    );
+    return this.attach("every-hit", grants, gate);
   }
 
   /**
@@ -304,6 +294,20 @@ export class AttackBuilder implements CheckBuilder {
    * to later attack rolls. The receiver is unchanged; the result is a new builder.
    */
   onAnyCrit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
+    return this.attach("any-crit", grants, gate);
+  }
+
+  /**
+   * The shared implementation of the two attachment verbs. The `grants` array and
+   * the gate (its `onSave` array included) are caller-owned and mutable, so they are
+   * copied here: the returned builder must not change if the caller mutates them
+   * before `Turn` reads the attachment.
+   */
+  private attach(
+    on: "every-hit" | "any-crit",
+    grants: Grant | readonly Grant[],
+    gate?: ConditionGate
+  ): AttackBuilder {
     return new AttackBuilder(
       this.check,
       this.hitEffect,
@@ -313,7 +317,20 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      [...this.attached, { on: "any-crit", grants, gate }]
+      [
+        ...this.attached,
+        {
+          on,
+          grants: Array.isArray(grants) ? [...grants] : grants,
+          gate:
+            gate === undefined
+              ? undefined
+              : {
+                  ...gate,
+                  onSave: Array.isArray(gate.onSave) ? [...gate.onSave] : gate.onSave,
+                },
+        },
+      ]
     );
   }
 
