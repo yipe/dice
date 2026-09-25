@@ -40,6 +40,21 @@ interface TurnState {
 /** What a trigger verb accepts: damage, grants, or both in one list. */
 type Effect = RiderDamage | Grant | readonly (Damage | Grant)[];
 
+/**
+ * Per-step statistics of a turn's walk, for one attack or attack-shaped rider.
+ * Every field is a probability (mass): `rolled` is the mass in which the step
+ * drew at all — 1 for a declared attack, a rider's fire mass for an attack-shaped
+ * rider — `hit`/`crit` the mass of those draws that landed (crit included) / were
+ * crits, and `live` the mass in which each granted modifier was in force when the
+ * step read its flags, before the step consumes anything.
+ */
+export interface StepStats {
+  rolled: number;
+  hit: number;
+  crit: number;
+  live: { advantage: number; disadvantage: number; critOnHit: number };
+}
+
 /** Test seam: the plan and walk size of a turn. Not exported from the package. */
 const inspections = new WeakMap<Turn, { plan: TurnPlan; stateCounts?: readonly number[] }>();
 
@@ -72,7 +87,11 @@ export class Turn {
   private readonly eps: number;
   private readonly state: TurnState;
   private readonly plan: TurnPlan;
-  private resolved?: { pmf: PMF; fireMass: ReadonlyMap<string, number> };
+  private resolved?: {
+    pmf: PMF;
+    fireMass: ReadonlyMap<string, number>;
+    stepStats: ReadonlyMap<string, StepStats>;
+  };
 
   private constructor(state: TurnState, eps: number) {
     // Copied, because a caller can hand in an array they still hold and keep
@@ -571,13 +590,57 @@ export class Turn {
     return mass;
   }
 
-  private resolve(): { pmf: PMF; fireMass: ReadonlyMap<string, number> } {
+  /**
+   * Per-step statistics for one declared attack or attack-shaped rider: P(landed,
+   * crit included), P(crit), and the mass in which each granted modifier was in
+   * force when it read its flags. `rolled` is 1 for a declared attack and the
+   * rider's fire mass for an attack-shaped rider.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a declared attack or an
+   * attack-shaped rider — a damage-shaped rider, substitute, condition or unknown
+   * id included, since only those roll their own attack and have hit/crit odds.
+   */
+  stepStats(id: string): StepStats {
+    const resolved = this.resolve();
+    const stats = resolved.stepStats.get(id);
+    if (stats === undefined) {
+      throw new TurnSpecError(
+        "unknown-id",
+        id,
+        `"${id}" is not an attack or attack-shaped rider in this turn. Attacks: ${[
+          ...resolved.stepStats.keys(),
+        ]
+          .map((each) => `"${each}"`)
+          .join(", ")}.`
+      );
+    }
+    // The cached entry is shared by every later call; hand out a copy so a caller
+    // mutating the result cannot change what the next read reports.
+    return { ...stats, live: { ...stats.live } };
+  }
+
+  private resolve(): {
+    pmf: PMF;
+    fireMass: ReadonlyMap<string, number>;
+    stepStats: ReadonlyMap<string, StepStats>;
+  } {
     if (this.resolved) return this.resolved;
 
     const plan = this.plan;
     const eps = this.eps;
     const width = plan.groupCount;
     const conditionCount = plan.conditionIds.length;
+
+    // Per-step stat accumulators, in the same unnormalized mass units as the walk's
+    // states. `rolled` counts the mass in which a step drew at all; `hit`/`crit` the
+    // mass of its hit (crit included) / crit draws; `live*` the mass in which the
+    // matching modifier flag was set when the step read its flags.
+    const rolled = new Array<number>(plan.steps.length).fill(0);
+    const hitMass = new Array<number>(plan.steps.length).fill(0);
+    const critMass = new Array<number>(plan.steps.length).fill(0);
+    const liveAdvantage = new Array<number>(plan.steps.length).fill(0);
+    const liveDisadvantage = new Array<number>(plan.steps.length).fill(0);
+    const liveCritOnHit = new Array<number>(plan.steps.length).fill(0);
 
     // state key -> { codes, accumulated sub-mass damage, per-slot firing, flag word,
     // per-condition applied mass }
@@ -657,6 +720,18 @@ export class Turn {
           continue;
         }
 
+        const stateMass = state.pmf.mass();
+        rolled[stepIndex] += stateMass;
+        if (step.readAdvantage !== 0 && (state.flags & step.readAdvantage) !== 0) {
+          liveAdvantage[stepIndex] += stateMass;
+        }
+        if (step.readDisadvantage !== 0 && (state.flags & step.readDisadvantage) !== 0) {
+          liveDisadvantage[stepIndex] += stateMass;
+        }
+        if (step.readCritOnHit !== 0 && (state.flags & step.readCritOnHit) !== 0) {
+          liveCritOnHit[stepIndex] += stateMass;
+        }
+
         let fired = state.fired;
         if (step.slot !== -1) {
           fired = [...fired];
@@ -682,10 +757,17 @@ export class Turn {
         // apply this outcome's grants.
         const draws = step.variants[step.select(state.codes, fired, state.flags)];
         const flags = state.flags & ~step.consumes;
-        const stateMass = conditionCount ? state.pmf.mass() : 0;
         for (const { outcome, matched, spends, slice } of draws) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
+
+          const contribution = stateMass * sliceMass;
+          if (outcome === "crit") {
+            critMass[stepIndex] += contribution;
+            hitMass[stepIndex] += contribution;
+          } else if (outcome === "hit") {
+            hitMass[stepIndex] += contribution;
+          }
 
           const codes = [...state.codes];
           for (const group of step.updates) {
@@ -782,9 +864,47 @@ export class Turn {
       for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
     }
 
+    // Per-step stats live in the same mass units, so they follow the same
+    // normalization. Only attack-shaped steps (a declared attack, or a rider that
+    // rolls its own attack — anything with variants) are reportable. A rider that
+    // fires at several positions in the rail (a `first-miss` reroll watching many
+    // attacks) has one step per position under one id; those steps are mutually
+    // exclusive, so their masses sum.
+    const scale = (mass: number): number => (needsNormalizing ? mass / totalMass : mass);
+    const stepStats = new Map<string, StepStats>();
+    plan.steps.forEach((step, stepIndex) => {
+      if (step.variants.length === 0) return;
+      const next: StepStats = {
+        rolled: scale(rolled[stepIndex]),
+        hit: scale(hitMass[stepIndex]),
+        crit: scale(critMass[stepIndex]),
+        live: {
+          advantage: scale(liveAdvantage[stepIndex]),
+          disadvantage: scale(liveDisadvantage[stepIndex]),
+          critOnHit: scale(liveCritOnHit[stepIndex]),
+        },
+      };
+      const existing = stepStats.get(step.id);
+      if (existing === undefined) {
+        stepStats.set(step.id, next);
+      } else {
+        stepStats.set(step.id, {
+          rolled: existing.rolled + next.rolled,
+          hit: existing.hit + next.hit,
+          crit: existing.crit + next.crit,
+          live: {
+            advantage: existing.live.advantage + next.live.advantage,
+            disadvantage: existing.live.disadvantage + next.live.disadvantage,
+            critOnHit: existing.live.critOnHit + next.live.critOnHit,
+          },
+        });
+      }
+    });
+
     this.resolved = {
       pmf: needsNormalizing ? pmf.normalize() : pmf,
       fireMass,
+      stepStats,
     };
     return this.resolved;
   }

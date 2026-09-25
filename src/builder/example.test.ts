@@ -207,3 +207,50 @@ describe("Builder examples integration", () => {
     expect(roll(2).d6().minus(2).toExpression()).toBe("2d6 - 2");
   });
 });
+
+describe("Effects cookbook examples", () => {
+  const means: [string, number, number][] = [
+    ["advantageChain", examples.advantageChain.mean(), examples.advantageChainMeanExpected],
+    ["plainTrio", examples.plainTrio.mean(), examples.plainTrioMeanExpected],
+    ["advantageChainOfFour", examples.advantageChainOfFour.mean(), examples.advantageChainOfFourMeanExpected],
+    ["advantageOnlyAmongSwords", examples.advantageOnlyAmongSwords.mean(), examples.advantageOnlyAmongSwordsMeanExpected],
+    ["chanceGatedAdvantage", examples.chanceGatedAdvantage.mean(), examples.chanceGatedAdvantageMeanExpected],
+    ["saveGatedRestOfTurn", examples.saveGatedRestOfTurn.mean(), examples.saveGatedRestOfTurnMeanExpected],
+    ["critGrantsAdvantage", examples.critGrantsAdvantage.mean(), examples.critGrantsAdvantageMeanExpected],
+    ["advantageAndCritsOnHit", examples.advantageAndCritsOnHit.mean(), examples.advantageAndCritsOnHitMeanExpected],
+    ["firstHitAutoCrit", examples.firstHitAutoCrit.mean(), examples.firstHitAutoCritMeanExpected],
+    ["firstHitSaveOrNextAttack", examples.firstHitSaveOrNextAttack.mean(), examples.firstHitSaveOrNextAttackMeanExpected],
+    ["firstHitDamageAndAdvantage", examples.firstHitDamageAndAdvantage.mean(), examples.firstHitDamageAndAdvantageMeanExpected],
+    [
+      "damageAlwaysAdvantageOnFailedSave",
+      examples.damageAlwaysAdvantageOnFailedSave.mean(),
+      examples.damageAlwaysAdvantageOnFailedSaveMeanExpected,
+    ],
+    ["twoFirstHitConditions", examples.twoFirstHitConditions.mean(), examples.twoFirstHitConditionsMeanExpected],
+    ["everythingAtOnce", examples.everythingAtOnce.mean(), examples.everythingAtOnceMeanExpected],
+    ["conditionAtTurnStart(1)", examples.conditionAtTurnStart(1).mean(), examples.conditionAtTurnStartMeanExpected.always],
+    [
+      "conditionAtTurnStart(0.6)",
+      examples.conditionAtTurnStart(0.6).mean(),
+      examples.conditionAtTurnStartMeanExpected.sixtyPercent,
+    ],
+    ["sometimesAttack", examples.sometimesAttack().mean(), examples.sometimesAttackMeanExpected],
+  ];
+
+  it.each(means)("%s scores its documented mean", (_name, actual, expected) => {
+    expect(actual).toBeCloseTo(expected, 4);
+  });
+
+  it("reports P(the save-gated grant was applied where a later attack reads it)", () => {
+    expect(examples.damageAlwaysAdvantageOnFailedSave.fireProbability("advantage")).toBeCloseTo(
+      examples.damageAlwaysAdvantageOnFailedSaveFireExpected,
+      4
+    );
+  });
+
+  it("reads each swing's odds of having advantage through stepStats", () => {
+    const t = examples.everythingAtOnce;
+    const live = t.attackIds.map((id) => t.stepStats(id).live.advantage);
+    live.forEach((value, index) => expect(value).toBeCloseTo(examples.everythingAtOnceAdvantageExpected[index]!, 4));
+  });
+});
