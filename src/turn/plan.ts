@@ -1,11 +1,12 @@
 import { combine } from "../builder/ac";
+import type { AttachedCondition } from "../builder/attack";
 import { ParsedRollBuilder } from "../builder/roll";
 import type { AttackResolution, Check } from "../builder/types";
 import { EPS } from "../common/types";
 import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
-import { isGrant, isTransform } from "./effects";
+import { grantSpec, isGrant, isTransform } from "./effects";
 import type { StepOutcome } from "./state";
 import {
   advance,
@@ -248,6 +249,12 @@ export interface Step {
   consumes: number;
   /** Conditions this step's outcome may apply, in declaration order. */
   grants: readonly GrantApplication[];
+  /** Flag bits this step reads that grant advantage. */
+  readAdvantage: number;
+  /** Flag bits this step reads that grant disadvantage. */
+  readDisadvantage: number;
+  /** Flag bits this step reads that grant crit-on-hit. */
+  readCritOnHit: number;
 }
 
 /** Trigger kinds that read a group's accumulated state (as opposed to `not-fired`,
@@ -348,7 +355,15 @@ function toPMF(
   const parts = Array.isArray(damage) ? damage : [damage as Damage];
   if (parts.length === 0) return PMF.delta(0, eps);
   const pmfs = parts.map((part) => {
-    if (part instanceof PMF) return part;
+    if (part instanceof PMF) {
+      // A bare PMF is a caller-supplied distribution, and its mass is not
+      // guaranteed to be 1. Normalize it so the walk stays in probability space:
+      // step statistics and fire masses are unconditional probabilities, which
+      // only hold when every source contributes unit mass. A builder's toPMF()
+      // already returns unit mass.
+      const mass = part.mass();
+      return Math.abs(mass - 1) <= EPS ? part : part.normalize();
+    }
     // `Damage` rules this out, but a consumer deserializing UI state reaches
     // here untyped. Reporting it as a spec error beats a bare TypeError from
     // calling a method that isn't there.
@@ -538,6 +553,63 @@ function attackEntry(entry: Attack, index: number): { id: string; tag?: string; 
   return { id: entry.id ?? id, tag: entry.tag, source: entry.source };
 }
 
+/**
+ * The attached conditions a source carries, or `undefined` when it has none.
+ * Duck-typed: the only sources that carry `attached` are `AttackBuilder`s, whose
+ * field is exactly `readonly AttachedCondition[]`.
+ */
+function attachedConditionsOf(source: unknown): readonly AttachedCondition[] | undefined {
+  if (typeof source !== "object" || source === null || !("attached" in source)) return undefined;
+  const attached: unknown = source.attached;
+  if (!Array.isArray(attached) || attached.length === 0) return undefined;
+  return attached as readonly AttachedCondition[];
+}
+
+/**
+ * The one {@link ConditionSpec} an {@link AttachedCondition} becomes: `of` is the
+ * carrying attack's id, the gate's `save` becomes `chance` (its P(fail)), and its
+ * `onSave` grants become the success-branch grants. Mirrors `Turn`'s trigger verbs.
+ */
+function conditionFromAttached(
+  slotId: string,
+  index: number,
+  attached: AttachedCondition,
+  eps: number
+): ConditionSpec {
+  const gate = attached.gate;
+  const save = gate?.save;
+  const chance = gate?.chance;
+  const onSave = gate?.onSave;
+  if (save !== undefined && chance !== undefined) {
+    throw new Error(
+      "An attached condition takes either save or chance, not both: each is the chance the grants take."
+    );
+  }
+  if (onSave !== undefined && save === undefined && chance === undefined) {
+    throw new Error(
+      "An attached condition's onSave needs a save or a chance: without one there is no other branch to apply it on."
+    );
+  }
+  if (save !== undefined && typeof (save as Partial<ToPMF>).toPMF !== "function") {
+    throw new Error("An attached condition's save must be a DC check such as d20.plus(2).dc(15).");
+  }
+  // A save's P(fail): the DC check's PMF puts it at 1. `vsAC` leaves it alone —
+  // it is the target's save bonus, not its AC.
+  const probability = save === undefined ? chance : save.toPMF(eps).pAt(1);
+  const grants = (Array.isArray(attached.grants) ? attached.grants : [attached.grants]).map(
+    grantSpec
+  );
+  const saved = onSave === undefined ? [] : Array.isArray(onSave) ? [...onSave] : [onSave];
+  return {
+    id: `${slotId}:${index}`,
+    on: attached.on,
+    of: [slotId],
+    ...(probability === undefined ? {} : { chance: probability }),
+    grants,
+    ...(saved.length === 0 ? {} : { onSave: saved.map(grantSpec) }),
+  };
+}
+
 export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const fail = (code: TurnSpecErrorCode, id: string, message: string): never => {
     throw new TurnSpecError(code, id, message);
@@ -545,7 +617,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
   const riders = spec.riders ?? [];
   const substitutes: readonly SubstituteSpec[] = spec.substitutes ?? [];
-  const conditions: readonly ConditionSpec[] = spec.conditions ?? [];
+  const declaredConditions: readonly ConditionSpec[] = spec.conditions ?? [];
 
   // --- attacks -------------------------------------------------------------
   const attackIds: string[] = [];
@@ -567,6 +639,21 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       else attackIdsByTag.set(tag, [id]);
     }
   });
+
+  // --- attached conditions --------------------------------------------------
+  // A builder can carry conditions (`AttackBuilder.onEveryHit` / `onAnyCrit`):
+  // each entry becomes one ConditionSpec whose `of` is that attack's id. Declared
+  // conditions come first, so their default `condition N` ids never collide with
+  // the `${slotId}:${index}` ids the attached entries get.
+  const attachedConditions: ConditionSpec[] = [];
+  attackIds.forEach((slotId, index) => {
+    const attached = attachedConditionsOf(attackSources[index]);
+    if (!attached) return;
+    attached.forEach((entry, entryIndex) => {
+      attachedConditions.push(conditionFromAttached(slotId, entryIndex, entry, eps));
+    });
+  });
+  const conditions: readonly ConditionSpec[] = [...declaredConditions, ...attachedConditions];
 
   // --- ids -----------------------------------------------------------------
   const riderIds = riders.map((rider, index) => rider.id ?? `rider ${index + 1}`);
@@ -603,6 +690,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         "unsupported-trigger",
         riderIds[index],
         `Rider "${riderIds[index]}" carries a grant on "${rider.on}". A grant is only accepted by onEveryHit, onFirstHit and onAnyCrit.`
+      );
+    }
+    if (parts.some((part) => attachedConditionsOf(part) !== undefined)) {
+      fail(
+        "unsupported-trigger",
+        riderIds[index],
+        `Rider "${riderIds[index]}" carries a condition attached to its source (AttackBuilder.onEveryHit / onAnyCrit). Attachment is only read from declared attacks; spell this condition with the turn's verbs instead.`
       );
     }
   });
@@ -1257,6 +1351,19 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     }
 
     const readMask = readMaskAt[stepIndex];
+    let readAdvantage = 0;
+    let readDisadvantage = 0;
+    let readCritOnHit = 0;
+    if (readMask !== 0) {
+      for (let bit = 0; bit < modifiersOfBit.length; bit++) {
+        if (readMask & (1 << bit)) {
+          const modifiers = modifiersOfBit[bit];
+          if (modifiers & MOD_ADVANTAGE) readAdvantage |= 1 << bit;
+          if (modifiers & MOD_DISADVANTAGE) readDisadvantage |= 1 << bit;
+          if (modifiers & MOD_CRIT_ON_HIT) readCritOnHit |= 1 << bit;
+        }
+      }
+    }
     if (rider?.on === "any-miss" && slices) {
       // Its step runs after every declared attack, but in play the reroll happens right
       // after the miss: it would read, or grant to, the wrong attack rolls.
@@ -1417,6 +1524,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       spendSlot,
       consumes: consumesAt[stepIndex],
       grants: grantsAt[stepIndex],
+      readAdvantage,
+      readDisadvantage,
+      readCritOnHit,
     });
   });
 
