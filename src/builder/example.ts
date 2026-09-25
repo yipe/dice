@@ -1,4 +1,7 @@
+import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
+import { advantage, critOnHit, turn } from "../turn";
+import type { Turn } from "../turn";
 
 import "./ac"; // for side effects of prototype augmentation
 import type { ACBuilder } from "./ac";
@@ -448,3 +451,176 @@ export function demoAnalyses() {
     saveInfo,
   };
 }
+
+// ------------------------------
+// Effects: attacks that change later attacks
+//
+// An effect has four parts: WHEN it fires (every hit, the turn's first hit, any
+// crit), WHAT later attack rolls get (advantage, disadvantage, every hit is a
+// crit), HOW LONG it lasts (the next attack, or the rest of the turn), and an
+// optional GATE (a chance, or the target's saving throw). Every mean below is
+// exact and pinned in example.test.ts.
+//
+// All attacks are +8 vs AC 16, crit on 20.
+// ------------------------------
+
+const shortsword = d20.plus(8).ac(16).onHit(d6.plus(5));
+const dagger = d20.plus(8).ac(16).onHit(d4.plus(5));
+const staff = d20.plus(8).ac(16).onHit(d8.plus(5));
+const fist = d20.plus(8).ac(16).onHit(d6.plus(5));
+const smallFist = d20.plus(8).ac(16).onHit(d6.plus(4));
+const rapier = d20.plus(8).ac(16).onHit(d8.plus(5));
+
+/** Advantage on the next attack after every hit, attached to the attack that grants it (the shape of Vex). */
+export const nextAttackAdvantageSword = shortsword.onEveryHit(advantage().untilNextAttack());
+
+/** Two such swords, then a plain dagger. The dagger reads whatever the second sword left. */
+export const advantageChain = turn([nextAttackAdvantageSword, nextAttackAdvantageSword, dagger]);
+export const advantageChainMeanExpected = 19.2211;
+/** The same three attacks with no effect: the effect is worth +2.82. */
+export const plainTrio = turn([shortsword, shortsword, dagger]);
+export const plainTrioMeanExpected = 16.4;
+
+/** Four in a row: each swing's advantage odds equal the previous swing's landing odds. */
+export const advantageChainOfFour = turn().attacks(4, nextAttackAdvantageSword);
+export const advantageChainOfFourMeanExpected = 27.5867;
+
+/**
+ * The dagger attacks a different creature, so it must not read the grant. Tag
+ * the swords and send the grant only to them.
+ */
+export const advantageOnlyAmongSwords = turn()
+  .attacks(2, shortsword, { tag: "sword" })
+  .attack(dagger)
+  .onEveryHit(advantage().untilNextAttack().to("sword"), { of: ["sword"] });
+export const advantageOnlyAmongSwordsMeanExpected = 17.765;
+
+/** A 40% chance that a hit grants advantage on the next attack. */
+export const chanceGatedAdvantage = turn([
+  shortsword.onEveryHit(advantage().untilNextAttack(), { chance: 0.4 }),
+  shortsword,
+]);
+export const chanceGatedAdvantageMeanExpected = 11.946;
+
+/**
+ * Advantage for the rest of the turn if the target fails a CON save (d20+3 vs
+ * DC 15), rolled again on every hit until it takes (the shape of Topple).
+ */
+export const saveGatedStaff = staff.onEveryHit(advantage().untilEndOfTurn(), {
+  save: d20.plus(3).dc(15),
+});
+export const saveGatedRestOfTurn = turn([saveGatedStaff, saveGatedStaff, dagger]);
+export const saveGatedRestOfTurnMeanExpected = 19.7207;
+
+/** A crit grants advantage for the rest of the turn. */
+export const critGrantsAdvantage = turn([
+  shortsword.onAnyCrit(advantage().untilEndOfTurn()),
+  shortsword,
+  shortsword,
+]);
+export const critGrantsAdvantageMeanExpected = 17.31;
+
+/** One grant, two modifiers: after a hit, advantage and every later hit is a crit. */
+export const advantageAndCritsOnHit = turn([
+  shortsword.onEveryHit(advantage().critOnHit().untilEndOfTurn()),
+  shortsword,
+]);
+export const advantageAndCritsOnHitMeanExpected = 14.5395;
+
+/**
+ * Once per turn, on the turn's first hit, whichever attack lands it: a turn
+ * verb, not an attack verb. Every later hit this turn is a crit.
+ */
+export const firstHitAutoCrit = turn([shortsword, shortsword]).onFirstHit(critOnHit().untilEndOfTurn());
+export const firstHitAutoCritMeanExpected = 12.765;
+
+/**
+ * Once per turn, a save decides between two outcomes (the shape of Stunning
+ * Strike): a failed save gives advantage for the rest of the turn, a
+ * successful one still gives advantage on the next attack.
+ */
+export const firstHitSaveOrNextAttack = turn([fist, fist, fist]).onFirstHit(advantage().untilEndOfTurn(), {
+  save: d20.plus(2).dc(15),
+  onSave: advantage().untilNextAttack(),
+});
+export const firstHitSaveOrNextAttackMeanExpected = 19.7618;
+
+/**
+ * Damage and a grant on the same first hit, in one list: 3d6 extra damage plus
+ * advantage for the rest of the turn, on top of the swords' own next-attack
+ * advantage.
+ */
+export const firstHitDamageAndAdvantage = advantageChain.onFirstHit([
+  roll(3, d6),
+  advantage().untilEndOfTurn(),
+]);
+export const firstHitDamageAndAdvantageMeanExpected = 30.1893;
+
+/**
+ * A gate covers grants, never damage (the shape of Trip Attack): the d8 lands
+ * on the first hit whatever the save does, and the advantage needs a failed
+ * save. Two calls on the same trigger resolve jointly, and the grant's own id
+ * reports P(it was applied where a later attack reads it).
+ */
+export const damageAlwaysAdvantageOnFailedSave = turn([shortsword, shortsword, dagger])
+  .onFirstHit(d8)
+  .onFirstHit(advantage().untilEndOfTurn(), { save: d20.plus(4).dc(15), id: "advantage" });
+export const damageAlwaysAdvantageOnFailedSaveMeanExpected = 22.5216;
+export const damageAlwaysAdvantageOnFailedSaveFireExpected = 0.4388;
+
+/**
+ * Two first-hit conditions on one turn need no precedence rule: advantage is a
+ * set, not a counter, so the second adds nothing once the first is in force.
+ */
+export const twoFirstHitConditions = turn([smallFist, smallFist, smallFist, smallFist])
+  .onFirstHit([roll(3, d6), advantage().untilEndOfTurn()])
+  .onFirstHit(advantage().untilEndOfTurn(), {
+    save: d20.plus(2).dc(15),
+    onSave: advantage().untilNextAttack(),
+  });
+export const twoFirstHitConditionsMeanExpected = 35.9905;
+
+/**
+ * Everything at once: two rapiers granting next-attack advantage, two fists,
+ * a d6 on the first hit, and the save-or-next-attack condition.
+ * `stepStats` reads each swing's odds of having advantage.
+ */
+const nextAttackAdvantageRapier = rapier.onEveryHit(advantage().untilNextAttack());
+export const everythingAtOnce = turn([nextAttackAdvantageRapier, nextAttackAdvantageRapier, smallFist, smallFist])
+  .onFirstHit(d6)
+  .onFirstHit(advantage().untilEndOfTurn(), {
+    save: d20.plus(2).dc(15),
+    onSave: advantage().untilNextAttack(),
+  });
+export const everythingAtOnceMeanExpected = 30.8749;
+export const everythingAtOnceAdvantageExpected = [0, 0.65, 0.8457, 0.6061];
+
+/**
+ * What the target already has when the turn starts, some fraction of rounds
+ * (knocked prone by an ally, say): a step that always hits for 0 goes first,
+ * and its every-hit grant reaches every attack after it.
+ */
+export function conditionAtTurnStart(chance: number): Turn {
+  const start = d20
+    .alwaysHits()
+    .onHit(flat(0))
+    .onEveryHit(advantage().critOnHit().untilEndOfTurn(), { chance });
+  return turn([start, shortsword, shortsword]);
+}
+export const conditionAtTurnStartMeanExpected = { always: 21.06, sixtyPercent: 17.196 };
+
+/**
+ * An attack that happens only some rounds: mix the turn with it and the turn
+ * without it. Gating its PMF in place would let a skipped round use up a
+ * next-attack grant. At +9: one sword, a dagger, and a sword opportunity attack
+ * in half of rounds, both swords granting next-attack advantage.
+ */
+export function sometimesAttack(): PMF {
+  const sword = d20.plus(9).ac(16).onHit(d6.plus(5)).onEveryHit(advantage().untilNextAttack());
+  const knife = d20.plus(9).ac(16).onHit(d4.plus(5));
+  return PMF.mix([
+    { pmf: turn([sword, knife, sword]).pmf, weight: 0.5 },
+    { pmf: turn([sword, knife]).pmf, weight: 0.5 },
+  ]);
+}
+export const sometimesAttackMeanExpected = 15.7481;

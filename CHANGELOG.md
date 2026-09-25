@@ -5,6 +5,49 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-09-24
+
+Conditions can now be attached to the attack that grants them, and a turn reports per-step
+statistics for every attack and attack-shaped rider.
+
+### Added
+
+- **`AttackBuilder.onEveryHit(grants, gate?)` / `AttackBuilder.onAnyCrit(grants, gate?)`** — carry
+  a condition on the builder that emits it, instead of spelling the `of` on the turn. Every time the
+  attack lands (`onEveryHit`) or crits (`onAnyCrit`), the grants apply to later attack rolls; a
+  `{ save }` / `{ chance }` / `{ onSave }` gate matches the turn's trigger verbs. The receiver is
+  unchanged and the result is a new, immutable builder, so `ss().onEveryHit(advantage().untilNextAttack())`
+  leaves the plain `ss()` untouched. `turn(attacks)`, `Turn.from(spec)` and the chained
+  `turn().attack(source)` all read each entry into one condition whose `of` is the carrying attack's
+  id (id `"${slotId}:${index}"`), so a builder's condition travels through `vsAC` rebinding and
+  `withCheck` re-derivation. Exact against the same d20 enumeration the turn-level verbs use:
+  two `d20+8` vs AC 16 shortswords granting the next attack advantage, then a dagger, score
+  19.2211; four in a row score 27.5867; a save-gated end-of-turn advantage on two staffs then a
+  dagger scores 19.7207.
+- **`Turn.stepStats(id)`** — per-step statistics for a declared attack or an attack-shaped rider:
+  `rolled` (the mass in which the step drew at all — 1 for a declared attack, the fire mass for a
+  rider), `hit` (P(landed, crit included)), `crit`, and `live.{ advantage, disadvantage, critOnHit }`
+  (the mass in which each granted modifier was in force when the step read its flags, before it
+  consumes anything). On a turn with no conditions `live.*` is 0 and `hit`/`crit` are the source's
+  own probabilities; a damage-shaped rider, substitute, condition or unknown id is an `unknown-id`
+  `TurnSpecError`. Three attacks where a hit grants the next attack advantage report, per swing,
+  65.00 / 79.79 / 83.15% landed and 0 / 65.00 / 79.79% advantage.
+- **Effects cookbook** in the README and `src/builder/example.ts`. It shows the fluent spelling of
+  every combination of when (every hit, any crit, the turn's first hit), what (advantage,
+  disadvantage, every hit is a crit), how long (next attack, rest of turn) and gate (chance, save,
+  save with `onSave`). It also covers readers limited by tag, a condition already in force at the
+  start of the turn, an attack that happens only some rounds, and `stepStats`. Every mean is pinned
+  in `example.test.ts`.
+
+### Changed
+
+- **A bare `PMF` used as a source or payload is normalized to unit mass** before the turn is
+  resolved, so `stepStats` and `fireProbability` are unconditional probabilities even when a caller
+  supplies a PMF whose mass is not 1. Builder sources already had unit mass, so they are unaffected.
+- **A rider whose source carries an attached condition throws `unsupported-trigger`.** Attached
+  conditions are read only from declared attacks. Previously they were silently dropped on a rider.
+- **`stepStats(id)` returns a copy**, so mutating the result cannot change a later read.
+
 ## [0.12.1] - 2026-09-24
 
 Two string-parser fixes: `parse()` now agrees with the builder, bin for bin and label for label, on
