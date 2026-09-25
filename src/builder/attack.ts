@@ -18,8 +18,24 @@ import {
   RollBuilder,
 } from "./roll";
 import type { AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
+import type { ConditionOptions, Grant } from "../turn/effects";
 
 type ActionEffect = RollBuilder;
+
+/**
+ * A condition a builder carries into a turn: when this attack's outcome fires,
+ * the grants apply to later attack rolls. Attached by {@link AttackBuilder.onEveryHit}
+ * / {@link AttackBuilder.onAnyCrit}; `Turn` reads each entry into one
+ * `ConditionSpec` with `of` = this attack's id.
+ */
+export interface AttachedCondition {
+  on: "every-hit" | "any-crit";
+  grants: Grant | readonly Grant[];
+  gate?: ConditionGate;
+}
+
+/** What gates an attached condition's grants: the same fields `Turn`'s trigger verbs accept. */
+export type ConditionGate = Pick<ConditionOptions, "save" | "chance" | "onSave">;
 
 /**
  * Resolved-attack PMF cache. `resolve()`/`toPMF()` re-runs the damage convolution + hit/crit/miss mixture
@@ -51,7 +67,9 @@ export class AttackBuilder implements CheckBuilder {
     // the SAME value stays a no-op.
     private readonly rerollThreshold?: number,
     private readonly minimumDieValue?: number,
-    private readonly halfOnMissFlag: boolean = false
+    private readonly halfOnMissFlag: boolean = false,
+    /** Conditions carried into a turn, read by `Turn` into one `ConditionSpec` each. */
+    readonly attached: readonly AttachedCondition[] = []
   ) {}
 
   onCrit(val: number): AttackBuilder;
@@ -73,7 +91,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -99,7 +118,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -112,7 +132,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -131,7 +152,8 @@ export class AttackBuilder implements CheckBuilder {
       [...this.separateDamage, damage],
       this.rerollThreshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -168,7 +190,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       threshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -200,7 +223,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       minimum,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
     );
   }
 
@@ -225,7 +249,8 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       this.minimumDieValue,
-      true
+      true,
+      this.attached
     );
   }
 
@@ -244,7 +269,51 @@ export class AttackBuilder implements CheckBuilder {
       this.separateDamage,
       this.rerollThreshold,
       this.minimumDieValue,
-      this.halfOnMissFlag
+      this.halfOnMissFlag,
+      this.attached
+    );
+  }
+
+  /**
+   * Carries a condition into a turn: every time this attack lands, the grants apply
+   * to later attack rolls (optionally gated by a save or a chance). The receiver is
+   * unchanged; the result is a new builder. `Turn` reads each attached condition as
+   * one `ConditionSpec` with `of` = this attack's id.
+   *
+   * ```ts
+   * const sword = d20.plus(5).ac(15).onHit(d8);
+   * turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean();
+   * ```
+   */
+  onEveryHit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      [...this.attached, { on: "every-hit", grants, gate }]
+    );
+  }
+
+  /**
+   * Carries a condition into a turn: every time this attack crits, the grants apply
+   * to later attack rolls. The receiver is unchanged; the result is a new builder.
+   */
+  onAnyCrit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      [...this.attached, { on: "any-crit", grants, gate }]
     );
   }
 
