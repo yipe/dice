@@ -723,7 +723,6 @@ turn's first hit whichever attack lands it, so they are turn verbs. Every number
 example is exported from `src/builder/example.ts` and pinned in its test.
 
 ```ts
-import { PMF } from "@yipe/dice";
 import { advantage, critOnHit, d20, d4, d6, d8, flat, roll, turn } from "@yipe/dice/builder";
 
 const shortsword = d20.plus(8).ac(16).onHit(d6.plus(5));
@@ -785,14 +784,12 @@ tripping.fireProbability("advantage");          // 0.4388 — applied where a la
 const start = d20.alwaysHits().onHit(flat(0)).onEveryHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.6 });
 turn([start, shortsword, shortsword]).mean();   // 17.1960   (every round: 21.0600)
 
-// An attack that happens in only some rounds: mix the turn with it and the turn without it. Gating
-// its PMF in place would let a skipped round use up a next-attack grant.
+// An attack that happens in only some rounds: give it a chance. A not-happened attack is no
+// miss and no landing, so a skipped round never uses up a next-attack grant (gating its PMF
+// in place would).
 const sword9 = d20.plus(9).ac(16).onHit(d6.plus(5)).onEveryHit(advantage().untilNextAttack());
 const knife9 = d20.plus(9).ac(16).onHit(d4.plus(5));
-PMF.mix([
-  { pmf: turn([sword9, knife9, sword9]).pmf, weight: 0.5 },
-  { pmf: turn([sword9, knife9]).pmf, weight: 0.5 },
-]).mean();                                      // 15.7481
+turn([sword9, knife9]).attack(sword9, { chance: 0.5 }).mean(); // 15.7481
 ```
 
 Effects compose without precedence rules. Advantage is a set, not a counter, so two sources of it
@@ -843,6 +840,15 @@ const base = turn([sword, sword]).onFirstHit(roll(3, d6));
 entry that is not an id expands to every attack with that tag — so reordering a turn cannot
 silently retarget a rider the way a positional `attack 2` can.
 
+An attack also takes a `chance` — the probability it happens at all, in `[0, 1]`. With
+`1 − chance` probability it does not happen: no damage, and it is **not** a miss (`any-miss` /
+`first-miss`) or a landing (hit triggers), so a skipped attack never spends a `next-attack`
+grant. `chance: 1` is the default and byte-identical to leaving it out:
+
+```ts
+turn([sword, sword]).attack(sword, { chance: 0.5 });  // the third swing happens half the time
+```
+
 #### Ids, errors, and plain data
 
 Nothing above needs an `id`: attacks and riders get `attack 1`, `rider 2`, … in declaration order,
@@ -859,9 +865,11 @@ paladin.riderIds;                 // ["smite"]
 Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
 `unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `unused-crit-damage`,
 `too-many-groups`, `no-dice-descriptor`, `duplicate-substitute`, `attack-after-rider`,
-`no-rebindable-source`, `unsupported-trigger`, `unsupported-policy`, `too-many-flags` — maps
-straight onto a UI field state. A bad `of` fails at the call that introduced it, not later at
-`.mean()`.
+`no-rebindable-source`, `unsupported-trigger`, `unsupported-policy`, `too-many-flags`,
+`unknown-key`, `non-string-id` — maps straight onto a UI field state. A bad `of` fails at the
+call that introduced it, not later at `.mean()`. An attack wrapper carries only `source`, `id`,
+`tag` and `chance`: any other key is `unknown-key`, and an id or tag that is not a string is
+`non-string-id`.
 
 Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
 rider watches. Left out, it is filled in at that call: the attacks declared so far, plus any reroll

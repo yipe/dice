@@ -1,4 +1,3 @@
-import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
 import { advantage, critOnHit, turn } from "../turn";
 import type { Turn } from "../turn";
@@ -610,17 +609,15 @@ export function conditionAtTurnStart(chance: number): Turn {
 export const conditionAtTurnStartMeanExpected = { always: 21.06, sixtyPercent: 17.196 };
 
 /**
- * An attack that happens only some rounds: mix the turn with it and the turn
- * without it. Gating its PMF in place would let a skipped round use up a
- * next-attack grant. At +9: one sword, a dagger, and a sword opportunity attack
- * in half of rounds, both swords granting next-attack advantage.
+ * An attack that happens only some rounds: give it a chance. A not-happened
+ * attack is no miss and no landing, so a skipped round never uses up a
+ * next-attack grant (gating its PMF in place would). At +9: one sword, a dagger,
+ * and a sword opportunity attack in half of rounds, both swords granting
+ * next-attack advantage.
  */
-export function sometimesAttack(): PMF {
+export function sometimesAttack(): Turn {
   const sword = d20.plus(9).ac(16).onHit(d6.plus(5)).onEveryHit(advantage().untilNextAttack());
   const knife = d20.plus(9).ac(16).onHit(d4.plus(5));
-  return PMF.mix([
-    { pmf: turn([sword, knife, sword]).pmf, weight: 0.5 },
-    { pmf: turn([sword, knife]).pmf, weight: 0.5 },
-  ]);
+  return turn([sword, knife]).attack(sword, { chance: 0.5 });
 }
 export const sometimesAttackMeanExpected = 15.7481;

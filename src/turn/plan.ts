@@ -52,8 +52,10 @@ export interface TurnPlan {
   steps: readonly Step[];
   /** One entry per distinct `of` set; each holds the step indices that update it. */
   groupCount: number;
-  /** Declared attacks only, in order — what `DiceQuery.singles` gets. */
+  /** Declared attacks only, in order — the walk's full (ungated) marginals. */
   attackPMFs: readonly PMF[];
+  /** Declared attacks gated by their `chance`, in order — what `DiceQuery.singles` gets. */
+  attackSingles: readonly PMF[];
   /** Every attack id, in declaration order. */
   attackIds: readonly string[];
   /** Every rider id, in declaration order, including `every-hit` riders. */
@@ -198,6 +200,9 @@ export function grantApplies(
   outcome: StepOutcome,
   codes: readonly number[]
 ): boolean {
+  // A "none" outcome (an attack that did not happen) is no landing and no miss,
+  // so it applies no condition's grants.
+  if (outcome === "none") return false;
   switch (app.on) {
     case "every-hit":
       return outcome !== "miss";
@@ -544,13 +549,44 @@ function keepBetterOfFresh(spend: PMF, base: PMF): { kept: PMF; beaten: PMF } {
   return { kept, beaten };
 }
 
+/** The keys a declared-attack wrapper may carry. */
+const ATTACK_KEYS: Record<string, true> = { source: true, id: true, tag: true, chance: true };
+
 /** A declared attack, unwrapped. */
-function attackEntry(entry: Attack, index: number): { id: string; tag?: string; source: Damage } {
+function attackEntry(
+  entry: Attack,
+  index: number
+): { id: string; tag?: string; source: Damage; chance: number } {
   const id = `attack ${index + 1}`;
   // A wrapper with no source falls through as a would-be source, so it fails
   // `not-an-attack` in toPMF rather than as a bare TypeError.
-  if (!("source" in entry) || entry.source === undefined) return { id, source: entry as Damage };
-  return { id: entry.id ?? id, tag: entry.tag, source: entry.source };
+  if (!("source" in entry) || entry.source === undefined) {
+    return { id, source: entry as Damage, chance: 1 };
+  }
+
+  const wrapper = entry as unknown as Record<string, unknown>;
+  for (const key of Object.keys(wrapper)) {
+    if (!ATTACK_KEYS[key]) {
+      throw new TurnSpecError(
+        "unknown-key",
+        typeof wrapper.id === "string" ? wrapper.id : id,
+        `Attack "${typeof wrapper.id === "string" ? wrapper.id : id}" carries an unknown key "${key}". Valid keys are source, id, tag and chance.`
+      );
+    }
+  }
+  if (wrapper.id !== undefined && typeof wrapper.id !== "string") {
+    throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string id.`);
+  }
+  if (wrapper.tag !== undefined && typeof wrapper.tag !== "string") {
+    throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string tag.`);
+  }
+
+  return {
+    id: (wrapper.id as string) ?? id,
+    tag: wrapper.tag as string | undefined,
+    source: wrapper.source as Damage,
+    chance: (wrapper.chance as number) ?? 1,
+  };
 }
 
 /**
@@ -623,16 +659,26 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const attackIds: string[] = [];
   const attackSources: Damage[] = [];
   const attackPMFs: PMF[] = [];
+  const attackSingles: PMF[] = [];
   const attackSlices: (SourceSlices | null)[] = [];
+  const attackChances: number[] = [];
   const attackIdsByTag = new Map<string, string[]>();
 
   spec.attacks.forEach((entry, index) => {
-    const { id, tag, source } = attackEntry(entry, index);
+    const { id, tag, source, chance } = attackEntry(entry, index);
+    if (!(chance >= 0 && chance <= 1)) {
+      throw new RangeError(`Attack "${id}" needs a chance in [0, 1], got ${chance}.`);
+    }
     const pmf = toPMF(source, eps, id);
     attackIds.push(id);
     attackSources.push(source);
     attackPMFs.push(pmf);
+    // The toQuery() single is the attack's marginal: gated by its occurrence
+    // probability. The walk uses the full slices plus a "none" draw instead, so
+    // a not-happened attack never reads as a miss or a landing.
+    attackSingles.push(chance === 1 ? pmf : pmf.applyHitFrequency(chance));
     attackSlices.push(sliceSource(pmf));
+    attackChances.push(chance);
     if (tag !== undefined) {
       const tagged = attackIdsByTag.get(tag);
       if (tagged) tagged.push(id);
@@ -656,11 +702,20 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const conditions: readonly ConditionSpec[] = [...declaredConditions, ...attachedConditions];
 
   // --- ids -----------------------------------------------------------------
-  const riderIds = riders.map((rider, index) => rider.id ?? `rider ${index + 1}`);
-  const substituteIds = substitutes.map(
-    (substitute, index) => substitute.id ?? `substitute ${index + 1}`
+  const stringId = (value: unknown, fallback: string): string => {
+    if (value === undefined) return fallback;
+    if (typeof value !== "string") {
+      fail("non-string-id", String(value), `An id must be a string, got ${typeof value}.`);
+    }
+    return value as string;
+  };
+  const riderIds = riders.map((rider, index) => stringId(rider.id, `rider ${index + 1}`));
+  const substituteIds = substitutes.map((substitute, index) =>
+    stringId(substitute.id, `substitute ${index + 1}`)
   );
-  const conditionIds = conditions.map((condition, index) => condition.id ?? `condition ${index + 1}`);
+  const conditionIds = conditions.map((condition, index) =>
+    stringId(condition.id, `condition ${index + 1}`)
+  );
   const seen = new Set<string>();
   for (const id of [...attackIds, ...riderIds, ...substituteIds, ...conditionIds]) {
     if (seen.has(id)) fail("duplicate-id", id, `Duplicate id "${id}".`);
@@ -1316,7 +1371,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
             : step.variants[0].some(
                 (draw) =>
                   draw.slice.mass() > eps &&
-                  ((draw.outcome !== "miss" && watched.has(step.id)) ||
+                  (((draw.outcome === "hit" || draw.outcome === "crit") && watched.has(step.id)) ||
                     canLand(from + 1, advanced(codes, step.updates, draw.outcome, draw.matched), next))
               );
       }
@@ -1508,6 +1563,27 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       );
     }
 
+    // Occurrence probability: with probability 1 - chance the attack does not
+    // happen at all. That branch is a "none" draw — no miss, no landing, no
+    // crit, no match, 0 damage — labelled missNone so the chart conserves mass
+    // the way applyHitFrequency's freed mass does. Declared attacks only;
+    // riders already fire on their trigger's terms.
+    const chance = entry.attack !== -1 ? attackChances[entry.attack] : 1;
+    if (chance < 1) {
+      const none: Draw = {
+        outcome: "none",
+        matched: false,
+        spends: false,
+        slice: PMF.missNone(eps).scaleMass(1 - chance),
+      };
+      variants = variants.map((variant) =>
+        mergeDraws([
+          ...variant.map((draw) => ({ ...draw, slice: draw.slice.scaleMass(chance) })),
+          none,
+        ])
+      );
+    }
+
     const hit = rider && !slices ? riderPMF(entry.rider) : null;
     const negated =
       rider?.on === "not-fired" ? (fireSlots.get(rider.of) as number) : -1;
@@ -1547,6 +1623,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     steps,
     groupCount: groupSources.length,
     attackPMFs,
+    attackSingles,
     attackIds,
     riderIds,
     substituteIds,
