@@ -92,6 +92,11 @@ describe("attack({ source, chance })", () => {
     expect(t.stepStats("attack 2").hit).toBeCloseTo(0.65, 12);
   });
 
+  it("rejects a chance outside [0, 1]", () => {
+    expect(() => Turn.from({ attacks: [{ source: sword, chance: 1.5 }] })).toThrow(RangeError);
+    expect(() => Turn.from({ attacks: [{ source: sword, chance: -0.1 }] })).toThrow(RangeError);
+  });
+
   it("stepStats and toQuery agree with the walk", () => {
     const t = Turn.from({ attacks: [{ source: sword, chance: 0.5 }, sword] });
     expect(t.stepStats("attack 1").rolled).toBeCloseTo(1, 12);
