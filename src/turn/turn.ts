@@ -157,9 +157,12 @@ export class Turn {
    */
   attack(source: Source, options?: string | AttackOptions): Turn {
     this.refuseAttackAfterRider();
-    const { id, tag } = typeof options === "string" ? { id: options, tag: undefined } : (options ?? {});
+    const { id, tag, chance } =
+      typeof options === "string" ? { id: options, tag: undefined, chance: undefined } : (options ?? {});
     const entry: Attack =
-      id === undefined && tag === undefined ? source : { id, tag, source };
+      id === undefined && tag === undefined && chance === undefined
+        ? source
+        : { id, tag, chance, source };
     return this.with({ attacks: [...this.state.attacks, entry] });
   }
 
@@ -174,14 +177,17 @@ export class Turn {
    *
    * @throws {RangeError} if `count` is not a positive integer.
    */
-  attacks(count: number, source: Source, options: { tag?: string } = {}): Turn {
+  attacks(count: number, source: Source, options: { tag?: string; chance?: number } = {}): Turn {
     if (!Number.isInteger(count) || count < 1) {
       throw new RangeError(
         `attacks(count) needs a positive integer, got ${count}.`
       );
     }
     this.refuseAttackAfterRider();
-    const entry: Attack = options.tag === undefined ? source : { tag: options.tag, source };
+    const entry: Attack =
+      options.tag === undefined && options.chance === undefined
+        ? source
+        : { tag: options.tag, chance: options.chance, source };
     const added: Attack[] = new Array<Attack>(count).fill(entry);
     return this.with({ attacks: [...this.state.attacks, ...added] });
   }
@@ -525,7 +531,7 @@ export class Turn {
    * `outcomeTotals`, `outcomeDamageRanges`, `damageAttributionChartModel`.
    */
   toQuery(): DiceQuery {
-    return new DiceQuery([...this.plan.attackPMFs], this.pmf, this.eps);
+    return new DiceQuery([...this.plan.attackSingles], this.pmf, this.eps);
   }
 
   /**

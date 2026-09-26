@@ -412,3 +412,51 @@ describe("malformed sources from untyped callers", () => {
     ).toBe("not-an-attack");
   });
 });
+
+describe("strict spec validation", () => {
+  it("unknown-key: a wrapper with a key besides source/id/tag/chance", () => {
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ source: dagger, bogus: 1 } as never],
+        })
+      )
+    ).toBe("unknown-key");
+  });
+
+  it("accepts the chance key it previously ignored", () => {
+    const built = Turn.from({ attacks: [{ source: dagger, chance: 0.5 }] });
+    expect(built.mean()).toBeCloseTo(0.5 * turn([dagger]).mean(), 12);
+  });
+
+  it("non-string-id: a numeric attack id", () => {
+    expect(
+      codeOf(() => Turn.from({ attacks: [{ source: dagger, id: 5 } as never] }))
+    ).toBe("non-string-id");
+  });
+
+  it("non-string-id: a numeric tag", () => {
+    expect(
+      codeOf(() => Turn.from({ attacks: [{ source: dagger, tag: 7 } as never] }))
+    ).toBe("non-string-id");
+  });
+
+  it("non-string-id: a numeric rider id", () => {
+    expect(
+      codeOf(() =>
+        Turn.from({
+          attacks: [{ source: dagger }],
+          riders: [{ id: 3 as never, damage: d6, on: "first-hit" }],
+        })
+      )
+    ).toBe("non-string-id");
+  });
+
+  it("validates through the chaining builders too", () => {
+    expect(codeOf(() => turn().attack(dagger, { id: 5 } as never))).toBe(
+      "non-string-id"
+    );
+    const built = turn().attack(dagger, { chance: 0.5 });
+    expect(built.mean()).toBeCloseTo(0.5 * turn([dagger]).mean(), 12);
+  });
+});
