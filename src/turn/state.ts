@@ -33,11 +33,14 @@ export const CRIT_MATCH_BIT = 32;
 /** A group that has seen nothing yet: no first landing, no crit, no miss, no match. */
 export const START_CODE = FIRST_NONE << 2;
 
-export type StepOutcome = "hit" | "crit" | "miss";
+export type StepOutcome = "hit" | "crit" | "miss" | "none";
 
 /** Fold one source outcome into a group's state. `matched` only has an effect on
- * `"hit"`/`"crit"` — a miss rolls no dice, so it can never match. */
+ * `"hit"`/`"crit"` — a miss rolls no dice, so it can never match. A `"none"`
+ * outcome (an attack that did not happen) advances nothing: it is no miss, no
+ * landing, no crit, no match. */
 export function advance(code: number, outcome: StepOutcome, matched = false): number {
+  if (outcome === "none") return code;
   if (outcome === "miss") return code | MISS_BIT;
 
   const first = (code >> 2) & 0b11;

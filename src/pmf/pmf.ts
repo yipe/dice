@@ -1486,17 +1486,25 @@ export class PMF {
    * per-label maps of `damage value → probability mass attributable to that
    * label`. Summing over labels at a given value recovers that value's `p`.
    *
-   * Damage-bearing bins are split by `attr` weight (the share of damage each
-   * outcome contributed); the clean-miss bin at 0 is split by `count` weight
-   * (there is no damage to attribute). Attribution is computed on demand via
-   * {@link withAttribution} when absent, so builder-generated PMFs work too.
+   * Every bin is split by `count` weight. For a single, unconvolved source
+   * `count` holds the per-outcome probability mass (Σ count = p), so the split
+   * is the outcome's share of the bin. For a convolved PMF `count` holds the
+   * expected count across the folded sources (Σ count = N·p), which is the same
+   * *proportional* split: `p · count[k] / Σ count` sums to `p`, so the chart
+   * conserves mass either way. Splitting by `attr` instead (a damage-mass
+   * channel, Σ attr ≈ damage × p) only matches `count` within one bin of one
+   * source; after convolution one value arises from many `(a, b)` pairs with
+   * different damages, so a damage-mass split under-counts the label that
+   * contributed the smaller damage and the bucket total falls short of `p`.
+   *
+   * The clean-miss bin at 0 keeps its historical credit: only `missNone` is
+   * attributed, matching the pre-convolution behaviour a single source shows.
    *
    * This is the provenance core of the stacked damage-attribution chart — the
    * caller only maps these series into its rendering format (colors, binning,
    * axis labels).
    */
   attributionByValue(): Map<string, Map<number, number>> {
-    const src = this.hasAttribution() ? this : this.withAttribution();
     const result = new Map<string, Map<number, number>>();
 
     const add = (label: string, damage: number, mass: number): void => {
@@ -1509,30 +1517,23 @@ export class PMF {
       series.set(damage, (series.get(damage) ?? 0) + mass);
     };
 
-    for (const [damage, bin] of src.map) {
+    for (const [damage, bin] of this.map) {
       const p = bin.p || 0;
       if (p <= 0) continue;
-      const isMissBin = damage === 0;
 
-      // Damage-0 (clean miss): split by count, crediting the missNone label.
-      if (isMissBin) {
-        let totalCount = 0;
-        for (const k in bin.count) totalCount += (bin.count[k] as number) || 0;
-        if (totalCount > 0) {
-          const c = (bin.count[MISS_NONE_OUTCOME] as number) || 0;
-          add(MISS_NONE_OUTCOME, damage, (c / totalCount) * p);
-        }
+      let totalCount = 0;
+      for (const k in bin.count) totalCount += (bin.count[k] as number) || 0;
+      if (totalCount <= 0) continue;
+
+      // Damage-0 (clean miss): credit the missNone label only, as before.
+      if (damage === 0) {
+        const c = (bin.count[MISS_NONE_OUTCOME] as number) || 0;
+        add(MISS_NONE_OUTCOME, damage, (c / totalCount) * p);
         continue;
       }
 
-      // Damage-bearing bin: split by attribution weight.
-      let totalAttr = 0;
-      if (bin.attr) for (const k in bin.attr) totalAttr += (bin.attr[k] as number) || 0;
-      if (bin.attr && totalAttr > 0) {
-        for (const k in bin.attr) {
-          if (k === MISS_NONE_OUTCOME) continue;
-          add(k, damage, (((bin.attr[k] as number) || 0) / totalAttr) * p);
-        }
+      for (const k in bin.count) {
+        add(k, damage, (((bin.count[k] as number) || 0) / totalCount) * p);
       }
     }
 

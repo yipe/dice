@@ -128,6 +128,17 @@ export interface AttackOptions {
    * the way a positional `attack 2` can. A tag matching nothing is `unknown-id`.
    */
   tag?: string;
+  /**
+   * The probability the attack happens at all, in `[0, 1]`; defaults to 1. With
+   * `1 − chance` probability the attack does **not** happen: it deals no damage,
+   * is **not** a miss for `any-miss` / `first-miss`, and is **not** a landing for
+   * a hit trigger — the turn proceeds as if the attack were never declared. It
+   * replaces gating a source's PMF in place (`applyHitFrequency`), which a
+   * not-happened attack must not do: that folds the skipped mass into the
+   * missNone outcome and lets a skipped round spend a `next-attack` grant or fire
+   * a miss trigger.
+   */
+  chance?: number;
 }
 
 /**
@@ -247,7 +258,9 @@ export type TurnSpecErrorCode =
   | "no-rebindable-source"
   | "unsupported-trigger"
   | "unsupported-policy"
-  | "too-many-flags";
+  | "too-many-flags"
+  | "unknown-key"
+  | "non-string-id";
 
 /**
  * A malformed turn. `code` is a stable contract: consumer UIs map it to their own
