@@ -5,6 +5,45 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-09-26
+
+Occurrence probability on declared attacks, strict spec validation, and a chart fix that
+restores mass conservation on convolved PMFs.
+
+### Added
+
+- **`attack({ source, chance })`** — a declared attack may happen with probability `chance`
+  (in `[0, 1]`, default 1). With `1 − chance` probability it does not happen at all: it deals
+  no damage, is **not** a miss for `any-miss` / `first-miss`, and is **not** a landing for a
+  hit trigger — the turn proceeds as if the attack were never declared. It replaces gating a
+  source's PMF in place (`PMF.applyHitFrequency`), which folded the skipped mass into the
+  `missNone` outcome and let a skipped round spend a `next-attack` grant or fire a miss
+  trigger. `chance: 1` is byte-identical to omitting it; `chance: 0` contributes nothing.
+  Works through `Turn.from`, `turn().attack(source, { chance })`, `turn().attacks(n, source,
+  { chance })`, `mean()`, `pmf`, `toQuery()`, `stepStats` and `fireProbability`, and is exact
+  against a brute-force enumeration of occurrence × d20 outcomes, a `first-hit` and a
+  `first-miss` rider included. `toQuery()`'s single is the occurrence-gated marginal, so
+  `probAtLeastOne` and the chart stay consistent with the walk.
+
+### Fixed
+
+- **`damageAttributionChartModel` / `attributionByValue` now conserve mass on convolved PMFs.**
+  The chart split a bin's probability mass by the `attr` (damage-mass) channel, which only
+  matches the probability split within one bin of a single source. After `convolveMany`,
+  `Turn.pmf`, a provided combined, or a frequency-gated row, one value arises from many
+  `(a, b)` pairs with different damages, so a damage-mass split dropped the mass of every
+  miss+hit pair — the chart drew 0.69 to 0.77 of the mass instead of 1. It now splits by the
+  `count` channel (probability for a single source, expected count after convolution), which
+  recovers `p` exactly per bin. Non-convolved splits are unchanged, and a conservation test
+  covers each convolved kind.
+
+### Changed
+
+- **Strict spec validation.** `Turn.from` (and the attack builders) now throw a
+  `TurnSpecError` on an unknown attack key (`unknown-key`; valid keys are `source`, `id`,
+  `tag` and `chance`) and on a non-string id or tag (`non-string-id`), both of which 0.13.0
+  silently accepted.
+
 ## [0.13.0] - 2026-09-24
 
 Conditions can now be attached to the attack that grants them, and a turn reports per-step
