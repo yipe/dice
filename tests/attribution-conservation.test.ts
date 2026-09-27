@@ -40,6 +40,34 @@ describe("attribution chart conserves mass for convolved PMFs", () => {
   });
 });
 
+describe("attribution splits damage-bearing bins by damage share", () => {
+  it("a guaranteed miss convolved with an always-10 hit attributes the bin entirely to hit", () => {
+    // The miss deals 0, so the 10-damage bin is 100% hit and 0% missNone —
+    // not the 50/50 count split 0.14.0 produced.
+    const miss = PMF.missNone();
+    const always10 = d20.alwaysHits().onHit(roll.flat(10)).noCrit();
+    const model = new DiceQuery([miss, always10.toPMF()]).damageAttributionChartModel();
+
+    const bin = model.labels.indexOf(10);
+    expect(bin).toBeGreaterThanOrEqual(0);
+    expect(model.shares.get("hit")![bin]).toBeCloseTo(1, 12);
+    expect(model.shares.get("missNone")![bin]).toBe(0);
+  });
+
+  it("a crit 11 and a hit 6 that share a 17-damage bin split 11/17 and 6/17", () => {
+    // Damage share, not outcome-count share: the crit dealt 11 of the 17 total,
+    // the hit 6, so their chart shares are 11/17 and 6/17 (not 50/50).
+    const crit11 = d20.alwaysHits().alwaysCrits().onHit(roll.flat(11));
+    const hit6 = d20.alwaysHits().onHit(roll.flat(6)).noCrit();
+    const model = new DiceQuery([crit11.toPMF(), hit6.toPMF()]).damageAttributionChartModel();
+
+    const bin = model.labels.indexOf(17);
+    expect(bin).toBeGreaterThanOrEqual(0);
+    expect(model.shares.get("crit")![bin]).toBeCloseTo(11 / 17, 12);
+    expect(model.shares.get("hit")![bin]).toBeCloseTo(6 / 17, 12);
+  });
+});
+
 describe("attribution splits for non-convolved PMFs are unchanged", () => {
   it("single builder PMF keeps its per-value hit/crit/missNone splits", () => {
     const model = sword.toPMF().damageAttributionChartModel();
@@ -51,8 +79,9 @@ describe("attribution splits for non-convolved PMFs are unchanged", () => {
 
     // At 6, only a plain hit lands (0.1), so the whole bin is hit.
     expect(model.series.get("hit")![6]).toBeCloseTo(0.1, 12);
-    // At 7, a hit (0.1) and the start of the crit range coexist; the split is by
-    // the bin's own count weights, so hit keeps its full 0.1.
+    // At 7, a hit (0.1) and the start of the crit range coexist; a single source
+    // splits by damage share, which equals its count weights, so hit keeps its
+    // full 0.1.
     expect(model.series.get("hit")![7]).toBeCloseTo(0.1, 12);
     expect(model.series.get("crit")![7]).toBeCloseTo(0.0013888888888888885, 12);
     expect(model.totals[7]).toBeCloseTo(0.1 + 0.0013888888888888885, 12);
