@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.2] - 2026-09-26
+
+### Fixed
+
+- **attribution chart keeps hits and crits that deal 0 damage** (they were dropped from the
+  damage-0 bar, so the chart drew less than the full probability). `attributionByValue` credited
+  the damage-0 bin only to `missNone`, by count, so a hit or crit that landed at 0 — a zero-damage
+  attack, damage reduced to 0 by resistance or a negative modifier, an effect-only attack — lost
+  its mass. The 0 bin now splits by count across every label present: `missNone` keeps its count
+  share and a 0-damage hit or crit keeps its own, so every bin's drawn shares sum to its
+  probability. For an ordinary PMF (hits always deal at least 1) the 0 bin holds only `missNone`,
+  so nothing changes there.
+- **attribution chart conserves mass when a source deals negative damage** (resistance or a
+  negative modifier pushed a hit below 0, so a combined bin carried a negative `attr` beside
+  positive ones). The damage-share split normalised by a total that included the negative
+  contribution, then dropped the negative share, drawing more than the bin's probability. A bin
+  whose `attr` holds any negative contribution now falls back to the count split, so every bin's
+  drawn shares still sum to its probability.
+
 ## [0.14.1] - 2026-09-26
 
 ### Fixed

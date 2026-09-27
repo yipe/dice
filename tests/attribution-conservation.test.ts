@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import "../src/builder/ac";
-import { d20, roll } from "../src/builder/factory";
+import "../src/builder/dc";
+import { d20, flat, roll } from "../src/builder/factory";
 import { parse } from "../src/parser/parser";
 import { PMF } from "../src/pmf/pmf";
 import { DiceQuery } from "../src/pmf/query";
@@ -97,5 +98,54 @@ describe("attribution splits for non-convolved PMFs are unchanged", () => {
     const model = new DiceQuery([sword.toPMF()]).damageAttributionChartModel();
     expect(model.series.get("hit")![6]).toBeCloseTo(0.1, 12);
     expect(model.series.get("missNone")![0]).toBeCloseTo(0.35, 12);
+  });
+});
+
+describe("attribution credits hits and crits that deal 0 damage", () => {
+  it("a zero-damage hit conserves mass and credits hit and crit at 0", () => {
+    const zeroHit = d20.plus(5).ac(15).onHit(roll.flat(0));
+    const pmf = zeroHit.toPMF();
+    const model = pmf.damageAttributionChartModel();
+
+    // d20+5 vs AC 15: 0.45 miss / 0.5 hit / 0.05 crit, all landing at 0.
+    expect(chartMass(pmf)).toBeCloseTo(1, 12);
+    expect(model.series.get("missNone")![0]).toBeCloseTo(0.45, 12);
+    expect(model.series.get("hit")![0]).toBeCloseTo(0.5, 12);
+    expect(model.series.get("crit")![0]).toBeCloseTo(0.05, 12);
+  });
+
+  it("a zero-damage source convolved with a normal attack conserves mass", () => {
+    const zeroHit = d20.plus(5).ac(15).onHit(roll.flat(0));
+    const conv = PMF.convolveMany([zeroHit.toPMF(), sword.toPMF()]);
+    expect(conv.mass()).toBeCloseTo(1, 12);
+    expect(chartMass(conv)).toBeCloseTo(1, 12);
+  });
+
+  it("a normal attack's 0 bin is still 100% missNone", () => {
+    const model = sword.toPMF().damageAttributionChartModel();
+    expect(model.shares.get("missNone")![0]).toBeCloseTo(1, 12);
+    expect(model.series.get("hit")![0]).toBe(0);
+    expect(model.series.get("crit")![0]).toBe(0);
+  });
+});
+
+describe("attribution conserves mass when a source deals negative damage", () => {
+  it("a negative-damage hit convolved with a positive save falls back to count", () => {
+    // A hit that always deals −1 (resistance) convolved with a save that always
+    // deals 3 lands at damage 2 with attr { hit: −1, saveFail: 3 }. A
+    // damage-share split would credit saveFail 1.5×p and drop the negative hit,
+    // drawing 1.5 of mass 1; the split falls back to count, so each label keeps
+    // half and the chart conserves mass.
+    const negHit = d20.alwaysHits().onHit(roll.flat(-1)).noCrit();
+    const posSave = flat(10).dc(12).onSaveFailure(roll.flat(3));
+    const pmf = new DiceQuery([negHit.toPMF(), posSave.toPMF()]).combinedWithAttribution();
+
+    expect(chartMass(pmf)).toBeCloseTo(1, 12);
+
+    const model = pmf.damageAttributionChartModel();
+    const bin = model.labels.indexOf(2);
+    expect(bin).toBe(0);
+    expect(model.series.get("hit")![bin]).toBeCloseTo(0.5, 12);
+    expect(model.series.get("saveFail")![bin]).toBeCloseTo(0.5, 12);
   });
 });
