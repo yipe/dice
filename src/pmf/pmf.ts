@@ -1501,14 +1501,20 @@ export class PMF {
    * (a fixed crit 11 + hit 6 that sum to 17 splits 11/17 crit, 6/17 hit). The
    * denominator is the attr of the labels actually drawn, so the drawn shares
    * sum to `p` exactly and mass is conserved. `missNone` contributes 0 damage,
-   * so it never appears in a damage-bearing bin's split; the clean-miss bin at
-   * 0 credits only `missNone`, by `count`.
+   * so it never appears in a damage-bearing bin's split. The damage-0 bin
+   * splits by `count` across every label present: `missNone` keeps its count
+   * share, and a hit or crit that lands at 0 (a zero-damage attack, damage
+   * reduced to 0 by resistance or a negative modifier, an effect-only attack)
+   * keeps its own count share too, so the 0 bin's drawn shares still sum to
+   * `p`. For an ordinary PMF whose hits always deal at least 1, the 0 bin holds
+   * only `missNone`, so nothing changes there.
    *
    * Attribution is computed on demand via {@link withAttribution} when absent,
    * so builder-generated PMFs work too. Only when a damage bin genuinely
-   * carries no usable attr (absent or all-zero) does the split fall back to
-   * `count` for that bin — still excluding `missNone` — so that bin's mass is
-   * not dropped.
+   * carries no usable attr — absent, all-zero, or containing a negative
+   * contribution (a source whose damage was reduced below 0 by resistance or a
+   * negative modifier) — does the split fall back to `count` for that bin,
+   * still excluding `missNone`, so that bin's mass is not dropped.
    *
    * This is the provenance core of the stacked damage-attribution chart — the
    * caller only maps these series into its rendering format (colors, binning,
@@ -1532,13 +1538,19 @@ export class PMF {
       const p = bin.p || 0;
       if (p <= 0) continue;
 
-      // Damage-0 (clean miss): credit the missNone label only, by count.
+      // Damage-0 bin: split by count across every label present. `missNone`
+      // keeps its count share; a hit or crit that lands at 0 (a zero-damage
+      // attack, damage reduced to 0, an effect-only attack) keeps its own count
+      // share too, so the drawn shares sum to p. For an ordinary PMF (hits
+      // always deal at least 1) the 0 bin holds only `missNone`, so nothing
+      // changes there.
       if (damage === 0) {
         let totalCount = 0;
         for (const k in bin.count) totalCount += (bin.count[k] as number) || 0;
         if (totalCount > 0) {
-          const c = (bin.count[MISS_NONE_OUTCOME] as number) || 0;
-          add(MISS_NONE_OUTCOME, damage, (c / totalCount) * p);
+          for (const k in bin.count) {
+            add(k, damage, (((bin.count[k] as number) || 0) / totalCount) * p);
+          }
         }
         continue;
       }
@@ -1548,12 +1560,24 @@ export class PMF {
       // drawn shares always sum to p.
       const attr = bin.attr;
       let totalAttr = 0;
+      let attrUsable = attr !== undefined;
       if (attr) {
         for (const k in attr) {
-          if (k !== MISS_NONE_OUTCOME) totalAttr += (attr[k] as number) || 0;
+          if (k === MISS_NONE_OUTCOME) continue;
+          const v = (attr[k] as number) || 0;
+          // A negative contribution — a source whose damage was reduced below
+          // 0 (resistance, a negative modifier) — makes the damage-share split
+          // an invalid probability distribution: normalizing by a total that
+          // includes it would give that label a negative share, which `add`
+          // drops, drawing more than p. Fall back to the count split instead.
+          if (v < 0) {
+            attrUsable = false;
+            break;
+          }
+          totalAttr += v;
         }
       }
-      if (attr && totalAttr > 0) {
+      if (attrUsable && totalAttr > 0) {
         for (const k in attr) {
           if (k === MISS_NONE_OUTCOME) continue;
           add(k, damage, (((attr[k] as number) || 0) / totalAttr) * p);
@@ -1561,8 +1585,9 @@ export class PMF {
         continue;
       }
 
-      // attr genuinely cannot say (absent or all-zero): fall back to a count
-      // split — still excluding missNone — so this bin's mass is conserved.
+      // attr genuinely cannot say (absent, all-zero, or a negative
+      // contribution): fall back to a count split — still excluding missNone —
+      // so this bin's mass is conserved.
       let totalCount = 0;
       for (const k in bin.count) {
         if (k !== MISS_NONE_OUTCOME) totalCount += (bin.count[k] as number) || 0;
@@ -1620,9 +1645,10 @@ export class PMF {
    *
    * Built split-first-then-bin: the attribution split ({@link attributionByValue})
    * runs on the un-binned distribution, then the resulting series are coarsened.
-   * {@link rebin} is deliberately *not* used — rebinning first would fold any
-   * sub-`binSize` damage into the damage-0 bucket, which the split then mistakes
-   * for a clean miss and drops.
+   * {@link rebin} is deliberately *not* used — splitting the un-binned
+   * distribution first keeps each outcome's damage share attached to its exact
+   * damage value until the series are coarsened into buckets, rather than
+   * folding sub-`binSize` damage into the damage-0 bucket before the split.
    *
    * @param options.maxBuckets Coarsen to at most this many equal-width buckets
    *   when the integer support is wider (`range > maxBuckets`); omit for a dense,
