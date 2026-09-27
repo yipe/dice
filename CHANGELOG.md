@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-09-26
+
+### Fixed
+
+- **The attribution chart splits damage-bearing bins by damage share again** (0.14.0 split by
+  outcome count, which labeled damage dealt by a hit as partly a Miss); mass is still conserved.
+  `attributionByValue` now splits a damage-bearing bin by `attr` — the damage each outcome
+  contributed — normalised over the labels actually drawn, so a guaranteed miss convolved with an
+  always-10 hit draws 100% hit (not 50% missNone / 50% hit), and a crit 11 + hit 6 that sum to 17
+  draw 11/17 crit / 6/17 hit (not 50/50). The mass leak 0.13.0 saw (0.69–0.77 drawn) is fixed at
+  its source: `withAttribution` no longer fabricates `attr[missNone] = damage × count[missNone]` on
+  a convolved bin — `missNone` is a clean miss, so it contributes 0 damage and is never attributed.
+  Where a damage bin genuinely carries no usable `attr`, the split falls back to `count` (still
+  excluding `missNone`), so no bin's mass is dropped. The clean-miss bin at 0 keeps crediting only
+  `missNone`, by count.
+
 ## [0.14.0] - 2026-09-26
 
 Occurrence probability on declared attacks, strict spec validation, and a chart fix that
