@@ -16,6 +16,7 @@ import {
   FIRST_NONE,
   MATCH_BIT,
   MISS_BIT,
+  START_CODE,
 } from "./state";
 import type {
   Attack,
@@ -50,7 +51,12 @@ export type FireMode = "hit" | "crit" | null;
  */
 export interface TurnPlan {
   steps: readonly Step[];
-  /** One entry per distinct `of` set; each holds the step indices that update it. */
+  /**
+   * How many slots of group codes the walk carries per state: the PEAK number of groups live
+   * at once, not the number of distinct `of` sets. A group is live from the first step that
+   * can advance it to the last step that reads it, and groups whose lives do not overlap
+   * share a slot (see `releases`).
+   */
   groupCount: number;
   /** Declared attacks only, in order — the walk's full (ungated) marginals. */
   attackPMFs: readonly PMF[];
@@ -78,19 +84,19 @@ export interface TurnPlan {
   fireSlots: ReadonlyMap<string, number>;
   slotCount: number;
   /**
-   * `every-hit` rider id → the group index whose "something landed" bit answers
+   * `every-hit` rider id → the group slot whose "something landed" bit answers
    * P(it fired at least once). Such riders are folded into their sources' slices
    * rather than becoming steps, so they have no step index.
    */
   perHitGroups: ReadonlyMap<string, number>;
   /**
-   * The LAST step index (in final walk order) that reads each group, by group
-   * index — `steps.length` for a group `perHitGroups` still needs at the final
-   * collapse. Once the walk passes a group's last reader, its specific code
-   * stops discriminating any future decision, so `Turn.resolve`'s `merge` stops
-   * keying on it past that point — the dominant cost fix for a long `dice-match`
-   * chain (a group read by exactly one downstream step, the common shape, would
-   * otherwise keep splitting states for every step after that single read).
+   * The LAST step index (in final walk order) that reads each group slot (for a slot several
+   * groups share in turn, the last read of the last group), and `steps.length` for a slot
+   * `perHitGroups` still needs at the final collapse. Once the walk passes a slot's last
+   * reader, its specific code stops discriminating any future decision, so `Turn.resolve`'s
+   * `merge` stops keying on it past that point: the dominant cost fix for a long `dice-match`
+   * chain (a group read by exactly one downstream step, the common shape, would otherwise
+   * keep splitting states for every step after that single read).
    */
   groupLastReadStep: readonly number[];
   /** Every condition id, in declaration order. */
@@ -173,6 +179,23 @@ function advanced(
 }
 
 /**
+ * `codes` with every slot in `releases` reset to the code of a group that has seen nothing;
+ * `codes` itself when none of them needs it.
+ */
+export function released<Codes extends readonly number[]>(
+  codes: Codes,
+  releases: readonly number[]
+): Codes | number[] {
+  let next: number[] | undefined;
+  for (const slot of releases) {
+    if (codes[slot] === START_CODE) continue;
+    next ??= [...codes];
+    next[slot] = START_CODE;
+  }
+  return next ?? codes;
+}
+
+/**
  * One condition, applied at one of its source steps. When the drawn outcome
  * qualifies, the draw splits by `chance`: `grants` are set on one part, `onSave`
  * on the other.
@@ -240,9 +263,15 @@ export interface Step {
   select: (codes: readonly number[], fired: readonly FireMode[], flags: number) => number;
   /** Pure-damage payloads, mass 1 each. */
   damage: { hit: PMF; crit: PMF } | null;
-  /** Group indices this step's outcome advances. */
+  /** Group slots this step's outcome advances. */
   updates: readonly number[];
-  /** Group index this step's trigger reads, or -1 for `not-fired` / always-fires. */
+  /**
+   * Slots whose group is last read at this step and which a later group reuses: the walk
+   * resets them to the start code once the step is done, whether or not it fired, so the
+   * next group starts from nothing.
+   */
+  releases: readonly number[];
+  /** Group slot this step's trigger reads, or -1 for `not-fired` / always-fires. */
   reads: number;
   /** Fire slot this step writes when it fires, or -1 for a declared attack. */
   slot: number;
@@ -1029,9 +1058,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // --- groups --------------------------------------------------------------
   // One group per distinct source set. Sharing matters: sneak attack and Fire's
   // Burn over the same two daggers are ONE group, so they resolve jointly.
-  // Substitutes allocate none: each owns a fire slot instead.
+  // Substitutes allocate none: each owns a fire slot instead. The cap counts groups
+  // live at once, not source sets: see the group slots below.
   const groupIndexByKey = new Map<string, number>();
   const groupSources: string[][] = [];
+  const groupKeys: string[] = [];
   const groupOf = (sourceIds: readonly string[]): number => {
     // JSON, not a delimiter join: an id is consumer-supplied, and a delimiter
     // that can appear inside one makes the encoding non-injective, so two
@@ -1039,28 +1070,22 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const key = JSON.stringify([...sourceIds].sort());
     const existing = groupIndexByKey.get(key);
     if (existing !== undefined) return existing;
-    if (groupSources.length >= MAX_TRIGGER_GROUPS) {
-      fail(
-        "too-many-groups",
-        key,
-        `A turn may track at most ${MAX_TRIGGER_GROUPS} distinct trigger source sets.`
-      );
-    }
     const index = groupSources.length;
     groupIndexByKey.set(key, index);
     groupSources.push([...sourceIds]);
+    groupKeys.push(key);
     return index;
   };
 
   const readsByRider = new Map<number, number>();
-  const perHitGroups = new Map<string, number>();
+  const everyHitGroups = new Map<string, number>();
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
     if (!READS_GROUP[rider.on]) continue;
     const group = groupOf(sourceIdsByNode[node]);
     readsByRider.set(node, group);
-    if (rider.on === "every-hit") perHitGroups.set(riderIds[node], group);
+    if (rider.on === "every-hit") everyHitGroups.set(riderIds[node], group);
   }
   // A condition reuses the group its `of` already has: a first-hit grant and a first-hit
   // rider over the same attacks share one. Only first-hit / first-miss read it.
@@ -1181,6 +1206,68 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       if (flag.grant.until === "next-attack") consumesAt[reader] |= 1 << flag.bit;
     }
   }
+
+  // --- group slots -----------------------------------------------------------
+  // A group is live from the first step that can advance it to the last step that reads it: the
+  // end of the walk for an `every-hit` rider, which reads its group at the final collapse.
+  // Groups whose lives do not overlap share one slot of the walk's per-state group codes, so the
+  // cap counts live groups rather than source sets: each beam of a bounce chain dies after its
+  // one reader. A slot is reset when its group dies (`Step.releases`), so the next group starts
+  // from a group that has seen nothing. A group nothing reads (a grant no later attack reads)
+  // gets no slot.
+  const groupFirstStep = groupSources.map((sourceIds) => {
+    const watched = new Set(sourceIds);
+    return sequence.findIndex((entry) => watched.has(entry.id));
+  });
+  const groupLastStep = new Array<number>(groupSources.length).fill(-1);
+  const readAt = (group: number, position: number): void => {
+    if (group !== -1) groupLastStep[group] = Math.max(groupLastStep[group], position);
+  };
+  sequence.forEach((entry, position) => {
+    if (entry.rider !== -1) readAt(readsByRider.get(entry.rider) ?? -1, position);
+  });
+  conditions.forEach((_, index) => {
+    const { main, onSave, applyAt } = conditionFlags[index];
+    if ((bitsOf(main) | bitsOf(onSave)) === 0) return;
+    // A first-hit / first-miss grant reads its group's pre-draw code at each source step.
+    for (const position of applyAt) readAt(conditionGroups[index], position);
+  });
+  for (const group of everyHitGroups.values()) readAt(group, sequence.length);
+
+  const slotOfGroup = new Array<number>(groupSources.length).fill(-1);
+  const slotLastStep: number[] = [];
+  const slotGroups: number[][] = [];
+  const firstStepOf = (group: number): number => Math.min(groupFirstStep[group], groupLastStep[group]);
+  groupSources
+    .map((_, group) => group)
+    .filter((group) => groupLastStep[group] !== -1)
+    .sort((a, b) => firstStepOf(a) - firstStepOf(b) || a - b)
+    .forEach((group) => {
+      // The lowest slot whose group is dead by the time this one first advances. Strictly
+      // dead: a step reads its group before it advances another, but the release comes after.
+      let slot = slotLastStep.findIndex((last) => last < firstStepOf(group));
+      if (slot === -1) {
+        if (slotLastStep.length >= MAX_TRIGGER_GROUPS) {
+          fail(
+            "too-many-groups",
+            groupKeys[group],
+            `A turn may keep at most ${MAX_TRIGGER_GROUPS} trigger source sets live at once; ${groupKeys[group]} would be the ${MAX_TRIGGER_GROUPS + 1}th.`
+          );
+        }
+        slot = slotLastStep.length;
+        slotLastStep.push(-1);
+        slotGroups.push([]);
+      }
+      slotLastStep[slot] = groupLastStep[group];
+      slotGroups[slot].push(group);
+      slotOfGroup[group] = slot;
+    });
+  const slotOf = (group: number): number => (group === -1 ? -1 : slotOfGroup[group]);
+  const releasesAt: number[][] = sequence.map(() => []);
+  slotGroups.forEach((groups, slot) => {
+    for (const group of groups.slice(0, -1)) releasesAt[groupLastStep[group]].push(slot);
+  });
+
   const grantsAt: GrantApplication[][] = sequence.map(() => []);
   conditions.forEach((condition, index) => {
     const { main, onSave, lastingOnly, applyAt } = conditionFlags[index];
@@ -1191,7 +1278,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       grantsAt[position].push({
         condition: index,
         on: condition.on,
-        reads: conditionGroups[index],
+        reads: slotOf(conditionGroups[index]),
         chance: condition.chance ?? 1,
         grants,
         onSave: onSaveBits,
@@ -1330,11 +1417,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
   // --- steps -----------------------------------------------------------------
   const updatesById = new Map<string, number[]>();
-  groupSources.forEach((sourceIds, groupIndex) => {
+  groupSources.forEach((sourceIds, group) => {
+    const slot = slotOfGroup[group];
+    if (slot === -1) return;
     for (const sourceId of sourceIds) {
       const existing = updatesById.get(sourceId);
-      if (existing) existing.push(groupIndex);
-      else updatesById.set(sourceId, [groupIndex]);
+      if (existing) existing.push(slot);
+      else updatesById.set(sourceId, [slot]);
     }
   });
 
@@ -1362,17 +1451,21 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       const mode = fireMode(step, codes, fired);
       let result: boolean;
       if (mode === null) {
-        result = canLand(from + 1, codes, fired);
+        result = canLand(from + 1, released(codes, step.releases), fired);
       } else {
         const next = step.slot === -1 ? fired : fired.map((slot, index) => (index === step.slot ? mode : slot));
         result =
           step.variants.length === 0
-            ? canLand(from + 1, codes, next)
+            ? canLand(from + 1, released(codes, step.releases), next)
             : step.variants[0].some(
                 (draw) =>
                   draw.slice.mass() > eps &&
                   (((draw.outcome === "hit" || draw.outcome === "crit") && watched.has(step.id)) ||
-                    canLand(from + 1, advanced(codes, step.updates, draw.outcome, draw.matched), next))
+                    canLand(
+                      from + 1,
+                      released(advanced(codes, step.updates, draw.outcome, draw.matched), step.releases),
+                      next
+                    ))
               );
       }
       memo.set(key, result);
@@ -1386,7 +1479,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const rider = entry.rider === -1 ? null : riders[entry.rider];
     const slices =
       entry.attack !== -1
-        ? (attackSlices[entry.attack] ?? {
+        ? (attackSlices[entry.attack] ??
+          {
             hit: attackPMFs[entry.attack],
             crit: PMF.emptyMass(),
             miss: PMF.emptyMass(),
@@ -1473,7 +1567,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           if (fired[spendSlot] !== null) return 0;
           let mask = 0;
           choices.forEach((choice, bit) => {
-            if (canLand(stepIndex + 1, advanced(codes, updates, choice.outcome, choice.matched), fired)) {
+            const after = released(advanced(codes, updates, choice.outcome, choice.matched), releasesAt[stepIndex]);
+            if (canLand(stepIndex + 1, after, fired)) {
               mask |= 1 << bit;
             }
           });
@@ -1594,7 +1689,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       select,
       damage: hit && rider ? { hit, crit: critPMF(rider, hit, eps) } : null,
       updates,
-      reads: rider ? (readsByRider.get(entry.rider) ?? -1) : -1,
+      releases: releasesAt[stepIndex],
+      reads: rider ? slotOf(readsByRider.get(entry.rider) ?? -1) : -1,
       slot: rider ? (fireSlots.get(entry.id) as number) : -1,
       negates: negated,
       spendSlot,
@@ -1606,22 +1702,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     });
   });
 
-  // Group last-read indices (see the `groupLastReadStep` field docs). `perHitGroups` groups are
-  // read only at the final collapse, so they stay live the whole walk.
-  const groupLastReadStep = new Array<number>(groupSources.length).fill(-1);
-  steps.forEach((step, stepIndex) => {
-    // A first-hit / first-miss grant reads its group's pre-draw code at its source step.
-    for (const reads of [step.reads, ...step.grants.map((app) => app.reads)]) {
-      if (reads !== -1) groupLastReadStep[reads] = Math.max(groupLastReadStep[reads], stepIndex);
-    }
-  });
-  for (const group of perHitGroups.values()) {
-    groupLastReadStep[group] = steps.length;
-  }
-
   return {
     steps,
-    groupCount: groupSources.length,
+    groupCount: slotLastStep.length,
     attackPMFs,
     attackSingles,
     attackIds,
@@ -1630,8 +1713,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     rerollIds,
     fireSlots,
     slotCount: fireSlots.size,
-    perHitGroups,
-    groupLastReadStep,
+    perHitGroups: new Map(
+      [...everyHitGroups].map(([id, group]): [string, number] => [id, slotOfGroup[group]])
+    ),
+    groupLastReadStep: slotLastStep,
     conditionIds,
     flagLastReadStep: liveFlags.map((flag) => flag.lastRead),
   };

@@ -915,6 +915,11 @@ call that introduced it, not later at `.mean()`. An attack wrapper carries only 
 `tag` and `chance`: any other key is `unknown-key`, and an id or tag that is not a string is
 `non-string-id`.
 
+`too-many-groups` counts the source sets a turn keeps live at once, at most `MAX_TRIGGER_GROUPS` (9). A
+group is live from the first attack it watches to the last rider that reads it, and groups whose
+lives do not overlap share a slot, so a turn may name more source sets than that as long as no more
+are live together. A `bounce()` chain keeps two live whatever its length.
+
 Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
 rider watches. Left out, it is filled in at that call: the attacks declared so far, plus any reroll
 declared so far. So declare attacks first — `.attack()` after such a rider throws
