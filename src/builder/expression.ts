@@ -201,6 +201,11 @@ export function printNode(node: ExpressionNode, options: PrintOptions = {}): str
       return `(${printNode(node.child)}) // 2`;
     case "scale":
       return printScale(printNode(node.child), node.numerator, node.denominator, node.rounding);
+    case "rerollUpTo":
+      throw new Error(
+        `toExpression() cannot represent rerollUpTo(${node.budget}): the string grammar has no reroll-up-to-k syntax. ` +
+          `Use the builder's own PMF (.toPMF()/.pmf) instead of round-tripping through toExpression()/parse().`
+      );
     case "add":
       return joinTerms(
         node.children.map(({ node: child, sign }) =>
@@ -243,6 +248,7 @@ export function nodeRange(node: ExpressionNode): [number, number] {
     }
     case "d20Roll":
     case "maxOf":
+    case "rerollUpTo":
       return nodeRange(node.child);
     case "half": {
       const [lo, hi] = nodeRange(node.child);
