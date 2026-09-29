@@ -121,6 +121,34 @@ describe("convolve is a function of content", () => {
   });
 });
 
+describe("power() of an unnormalized PMF", () => {
+  /** Equal content, opposite map order: `mass()` sums in map order, so the two masses differ in the last bit. */
+  function unnormalized(descending: boolean): PMF {
+    let state = 7;
+    const entries = Array.from({ length: 8 }, (_, index): [number, Bin] => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      const p = 0.01 + (state % 9973) / 40000;
+      return [index + 1, { p, count: { hit: p } }];
+    });
+    return new PMF(new Map(descending ? entries.reverse() : entries), EPS, false);
+  }
+
+  it("does not depend on whether an equal PMF was raised first", () => {
+    const a = unnormalized(false);
+    const b = unnormalized(true);
+    expect(a.fingerprint()).toBe(b.fingerprint());
+    expect(a.mass()).not.toBe(b.mass()); // the premise: normalizing them differs in the last bit
+
+    PMF.clearCache();
+    const cold = bits(b.power(3));
+    PMF.clearCache();
+    const raisedFirst = a.power(3);
+    expect(raisedFirst.mass()).toBeCloseTo(1, 12);
+    const warm = bits(b.power(3));
+    expect(warm).toBe(cold);
+  });
+});
+
 describe("a Turn is a function of its spec", () => {
   const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
   const spec = () =>

@@ -536,12 +536,15 @@ export class PMF {
 
     const epsilon = eps ?? this.epsilon;
 
-    const key = this.getPowerCacheKey(n, epsilon);
+    // Keyed on, and computed from, the normalized base: `normalize()` divides by `mass()`, which
+    // sums in map order, so two equal unnormalized PMFs can normalize to different last bits and
+    // must not share an entry keyed on their (equal) fingerprint.
+    let base: PMF = this.normalized ? this : this.normalize();
+    const key = base.getPowerCacheKey(n, epsilon);
     const cached = pmfCache.get(key);
     if (cached) return cached;
 
     // Start from the base PMF and accumulate n-1 additional powers
-    let base: PMF = this.normalized ? this : this.normalize();
     let result: PMF = base;
     let exp = n - 1;
 

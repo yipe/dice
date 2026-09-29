@@ -38,7 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a result moves in its last bits (at most about 3e-15 relative on the turns and pools measured);
   where the two orders agree, the result is bit-for-bit what 0.14.2 returned.
 - The `convolve` and `power` cache keys are the operands' `fingerprint()` alone (with `eps`,
-  `raw` and the exponent); they no longer spell out the operands' identifiers.
+  `raw` and the exponent); they no longer spell out the operands' identifiers. `power()` keys on
+  the normalized base it computes from, so two equal unnormalized PMFs whose maps were built in
+  opposite orders (their `mass()` differs in the last bit) never share a cached result.
 
 ### Added
 
