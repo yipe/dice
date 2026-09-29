@@ -303,11 +303,35 @@ including under `alwaysHits()` and `alwaysCrits()`. A parsed string cannot be a 
 `rerollDamage(k)` rerolls a face when its kept value, after any `minimumDamageDie` floor, is below
 a fresh die's expected value, and never lowers a payload's own `reroll` or `minimum`.
 
+**Reroll up to k dice.** `roll(2, d6).rerollUpTo(1)` sees both dice, rerolls the one worth
+rerolling and keeps the new roll (Empowered Spell, Piercer): mean 8.2361, where letting only the
+first die keep the better of two gives 7.9722. It rerolls the up-to-k dice with the largest
+positive expected gain (for identical dice, the lowest faces below the die's mean; a subtracted die
+when it shows high), across every die group of the roll, so it is the best play for the most
+damage. A budget of every die is `reroll(f)` on each die, `f` the faces below its mean
+(`roll(4, d6).rerollUpTo(4)` is `roll(4, d6).reroll(3)`). A rerolled die is a fresh roll under its own
+`reroll`/`minimum`; equal gains on different kinds of die go to the higher-mean kind, so group order
+never matters. On a crit the dice double and the budget does not
+(`roll(2, d6).rerollUpTo(1).doubleDice()` is 4d6 with one reroll). The roll must be plain dice
+(a keep, `bestOf`, roll type or explode throws), and the result has no string spelling
+(`toExpression()` throws). `roll(2, d6).rerollUpTo(1, { rolls: 2 })` is Savage Attacker with the
+reroll: roll the dice twice, keep the roll worth more after its own best rerolls, then reroll only
+that one (9.1971). That is not `rerollUpTo(1).maxOf(2)`, which rerolls both rolls and keeps the higher
+final total.
+`rolls` models "choose the Savage roll, then Piercer rerolls a die in it". A player who may use the
+reroll before choosing does better (1d8: 6.469 against 6.156; 1d12: 9.479 against 8.993; 2d6: 9.302
+against 9.197), and that order is not modelled.
+On an attack, `rerollDamageUpTo(k, { rolls })` does the same for the base payload only (hit, and an
+explicit `onCrit`; a crit's auto-doubled dice reroll up to the same k), leaving
+`plusSeparateDamage` channels alone, in any call order with `rerollDamage`, `minimumDamageDie` and
+`onCrit`; `rolls` rolls the whole base payload again and the budget never reaches those channels.
+`toExpression()` throws and `diceMatchInfo()` has no descriptor for it.
+
 **Strings from builders.** `toExpression()` prints a string that `parse()` reads back to the
 builder's own distribution: a term after the first is parenthesised when it is an expression of its
 own, `~+` joins a term to a running total that can be 0, and an attack always carries its crit clause
 (`noCrit()` prints `xcrit0 (<hit payload>)`, which crits on no natural face). Explode, pool-wide explode, `scaleResult(…, "round")`,
-fractional scale factors, `plusSeparateDamage()` and `halfOnMiss()` have no spelling and throw.
+fractional scale factors, `plusSeparateDamage()`, `halfOnMiss()`, `rerollUpTo()` and `rerollDamageUpTo()` have no spelling and throw.
 Strings have no natural-1 miss or natural-20 hit.
 
 ### Core Class Flow

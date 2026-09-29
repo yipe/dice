@@ -10,10 +10,19 @@ import {
   clearDieCaches,
   perDieKeepReading,
   pmfFromRollBuilder,
+  rerollablePool,
   resolveRootD20,
 } from "./ast";
-import { requireFinite } from "./arguments";
-import { configTerms, joinTerms, nodeRange, printScale, rootDieExpression, type ExpressionTerm } from "./expression";
+import { requireFinite, rerollUpToArguments } from "./arguments";
+import {
+  configTerms,
+  joinTerms,
+  nodeRange,
+  printNode,
+  printScale,
+  rootDieExpression,
+  type ExpressionTerm,
+} from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import type { RollConfig, RollType } from "./types";
@@ -114,6 +123,16 @@ export const defaultConfig: RollConfig = {
   keep: undefined,
   rollType: "flat",
 };
+
+/** Options of {@link RollBuilder.rerollUpTo} and `AttackBuilder.rerollDamageUpTo`. */
+export interface RerollUpToOptions {
+  /**
+   * Roll the dice this many times and keep the roll that is worth most once its own rerolls are
+   * spent (Savage Attacker with a reroll budget), then reroll only in that roll. Default 1: no
+   * choice. Models "choose the roll, then reroll a die in it", not rerolling before the choice.
+   */
+  rolls?: number;
+}
 
 /**
  * Index of the config holding a check's natural roll — the die whose 1 misses and whose 20 hits and
@@ -739,6 +758,52 @@ export class RollBuilder {
     return new MaxOfRollBuilder(this, countOrOther);
   }
 
+  /**
+   * Once every die is seen, reroll up to `budget` of them and keep each new roll (Empowered Spell,
+   * Piercer). The best play, for the most damage, rerolls the dice with the largest positive expected
+   * gain: for identical dice the lowest faces below the die's mean, and a subtracted die when it shows
+   * high. A die showing its die's mean keeps its roll. Dice count across every group of this roll
+   * (`roll(2, d6).plus(roll(1, d8))` is a pool of three); flats never reroll. `roll(2, d6).rerollUpTo(1)`
+   * has mean 8.2361 (7.9722 if only the first die could be rerolled, keeping the better of two), and a
+   * budget of every die equals `reroll(f)` on each die with `f` the faces below its mean. A rerolled die
+   * is a fresh roll of the same die, under its own `reroll` and `minimum`. Equal gains on different kinds
+   * of die go to the kind with the higher mean, so the order of the groups never matters. The budget is
+   * a non-negative integer; a budget of 0 rerolls nothing.
+   *
+   * On a crit the dice double and the budget does not (`scaleDice()`, `doubleDice()`). The roll must
+   * be plain dice: a keep, `bestOf`, a roll type, `explode`/`explodePool`, or an already transformed,
+   * pooled or parsed roll throws. Set `reroll`/`minimum` first: the result is a transformed roll
+   * (`plus()` adds outside the pool, `toExpression()` has no spelling and throws).
+   *
+   * With `{ rolls: n }` the pool is rolled `n` times; each roll is scored by its expected total
+   * after its own best rerolls, the best score is kept and only that roll is rerolled.
+   * `roll(2, d6).rerollUpTo(1, { rolls: 2 })` is Savage Attacker's best of two with a Piercer
+   * reroll. That differs from `rerollUpTo(1).maxOf(2)`, which rerolls both rolls and keeps the
+   * higher final total. This models "choose the roll, then reroll a die in it". A player who may
+   * spend the reroll before choosing which roll to use does better (1d8: 6.469 against 6.156; 1d12:
+   * 9.479 against 8.993; 2d6: 9.302 against 9.197); that order is not modelled. On an attack,
+   * `rolls` rolls the whole base payload again, and the budget never reaches `plusSeparateDamage`
+   * channels.
+   */
+  rerollUpTo(budget: number, options?: RerollUpToOptions): RerollUpToRollBuilder {
+    const { budget: dice, rolls } = rerollUpToArguments(budget, options, "rerollUpTo()");
+    if (this instanceof RerollUpToRollBuilder) {
+      throw new Error(
+        "Cannot rerollUpTo() a roll that already has a rerollUpTo() pool: one reroll budget per pool. " +
+          "Set the budget once, on the dice, or use { rolls } for a best of several rolls."
+      );
+    }
+    if (this instanceof TransformedRollBuilder || this.hasHiddenState()) {
+      throw new Error(
+        "Cannot rerollUpTo() a half, scaled, max-of, pooled, parsed or summed roll: it has no plain dice to " +
+          "reroll. Call rerollUpTo() on the dice, before half(), scaleResult(), maxOf(), keepHighestAll() or sumRolls()."
+      );
+    }
+    const pool = new RollBuilder(this.getSubRollConfigs());
+    rerollablePool(pool.toAST());
+    return new RerollUpToRollBuilder(pool, dice, rolls);
+  }
+
   // These methods are implemented via prototype augmentation in ac.ts and dc.ts
   // They are declared here to provide proper TypeScript types
   ac(_targetAC: number): ACBuilder {
@@ -977,6 +1042,61 @@ export class MaxOfRollBuilder extends TransformedRollBuilder {
 
   copy(): MaxOfRollBuilder {
     return new MaxOfRollBuilder(this.innerRoll.copy(), this.count);
+  }
+}
+
+/**
+ * A pool of plain dice that may reroll up to `budget` of them, keeping each new roll: see
+ * {@link RollBuilder.rerollUpTo}. Built only by that method. Crit doubling scales the dice inside
+ * and keeps the budget.
+ */
+export class RerollUpToRollBuilder extends TransformedRollBuilder {
+  protected readonly verb = "rerollUpTo()";
+
+  constructor(
+    private readonly innerRoll: RollBuilder,
+    private readonly budget: number,
+    private readonly rolls: number = 1
+  ) {
+    super(0); // dummy, we override methods
+  }
+
+  override hasHiddenState(): boolean {
+    return true;
+  }
+
+  override cacheKey(): string | null {
+    return null; // the reroll pool is not captured by subRollConfigs
+  }
+
+  override get lastConfig(): RollConfig {
+    return (this.innerRoll as unknown as { lastConfig: RollConfig }).lastConfig;
+  }
+
+  override getSubRollConfigs(): readonly RollConfig[] {
+    return this.innerRoll.getSubRollConfigs();
+  }
+
+  override toAST(): ExpressionNode {
+    return { type: "rerollUpTo", budget: this.budget, rolls: this.rolls, child: this.innerRoll.toAST() };
+  }
+
+  /** Always throws: the string grammar has no reroll-up-to-k syntax. */
+  override toExpression(): string {
+    return printNode(this.toAST());
+  }
+
+  override toPMF(eps: number = 0): PMF {
+    return pmfFromRollBuilder(this, eps);
+  }
+
+  /** Scales the dice inside the pool; the reroll budget and the number of rolls stay. */
+  override scaleDice(scale: number): RollBuilder {
+    return new RerollUpToRollBuilder(this.innerRoll.scaleDice(scale), this.budget, this.rolls);
+  }
+
+  override copy(): RerollUpToRollBuilder {
+    return new RerollUpToRollBuilder(this.innerRoll.copy(), this.budget, this.rolls);
   }
 }
 
