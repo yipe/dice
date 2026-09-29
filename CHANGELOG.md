@@ -22,6 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Mixture` is exported from `@yipe/dice/builder`** (the root already exported it), the same class
   as the root's.
+- **`SaveBuilder.onSaveSuccess(payload: RollBuilder | number)`** (chain it after `onSaveFailure`): a
+  success deals a payload of its own, where `saveHalf()` fixes it at `floor(failure / 2)`. The payload
+  is read the way the failure payload is, and a number is a flat payload. The success keeps the label
+  `saveHalf`, whatever the payload rolls (a flat `0` included: `onSaveSuccess(0)` is not the plain
+  save's `missNone`); `OutcomeType` has no other label for a success that deals damage. The last of
+  `saveHalf()` and `onSaveSuccess()` wins. `resolve().saveSuccess` is the payload's PMF, and
+  `onSaveSuccess(failure.half())` resolves bit for bit to `saveHalf()`. The `SaveBuilder`
+  constructor's third argument now also accepts the success payload (a `RollBuilder`) beside
+  `"normal"` and `"half"`.
+- **`toExpression()` prints a success payload** as `save (payload)`, a clause the parser already reads:
+  `(d20 + 5 DC 15) * (2d6) save (1d4)`. `parse()` of it gives the save's own distribution, bin by bin
+  and label by label. A save with a success payload and no failure effect prints its failure as
+  `* (0)`, so the payload is not lost. The strings of a plain and a `saveHalf()` save are unchanged.
+- **The resolved-save cache key names the success payload**, so two saves that differ only there never
+  share a PMF. A payload that opts out of caching (a parsed string, `half()`, a scale) keeps the save
+  uncached, as a failure effect does.
+- The README documents the `save (Y)` clause and the `saveHalf` label of a success that deals damage.
 
 ## [0.14.2] - 2026-09-26
 

@@ -179,6 +179,20 @@ RollBuilder (d20, d6, roll(), etc.)
     └─ .toPMF() ──► PMF
 ```
 
+**A save's success.** `onSaveFailure(x)` alone deals nothing on a success, `.saveHalf()` deals `x` halved and
+rounded down, and `.onSaveSuccess(y)` deals `y`, a `RollBuilder` or a number, read the way `x` is. The last of
+`saveHalf()` and `onSaveSuccess()` wins. A success that deals damage is labelled `saveHalf` whatever it rolls,
+0 included, so `onSaveSuccess(0)` is not the plain save's `missNone`. `toExpression()` spells the success as
+`save (y)`, which `parse()` reads back to the same distribution:
+
+```ts
+d20.plus(5).dc(15).onSaveFailure(roll(2, d6)).onSaveSuccess(d4).toExpression();
+// "(d20 + 5 DC 15) * (2d6) save (1d4)"
+```
+
+A success that halves before a scale, the way a vulnerable target halves a fireball's dice before
+doubling them, is `onSaveSuccess(base.half().scaleResult(2))` beside `onSaveFailure(base.scaleResult(2))`.
+
 **Crits double the damage dice, never the flats.** An `onHit` payload with no `onCrit` override
 crits with its dice doubled: `roll(2, d6).plus(5)` and the string `"2d6+5"` both crit as `4d6 + 5`.
 A pool doubles inside, then pools — `roll(2, d6).plus(3).keepHighestAll(2, 1)` crits as
@@ -458,7 +472,7 @@ associates left to right**: `1d6 + 2 * 3` is `(1d6 + 2) * 3`. Parenthesise to gr
 | `X & Y` | A mix weighted by each side's count of outcomes (see the refused shapes above). |
 | `X reroll R` | Rolls X, and on a result in the face set R rolls X again and keeps the second roll. |
 | `X AC T`, `X DC T` | An attack check (X where X ≥ T, else 0) and a saving throw (0 on a save, 1 on a failure). A total of exactly 0 that meets a T of 0 or less lands, though it reads 0 like a miss: `(d20 - 5 AC 0) * (1d6)` hits on a natural 5 and crits on a 20, like `d20.minus(5).ac(0).onHit(roll(1, d6))`. |
-| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… pc` | Outcome clauses after an attack's or a save's payload. `xcrit0 (Y)` never crits: every landing is a hit. |
+| `… crit (Y)`, `… xcritN (Y)`, `… miss (Y)`, `… save half`, `… save (Y)`, `… pc` | Outcome clauses after an attack's or a save's payload. `xcrit0 (Y)` never crits: every landing is a hit. `save half` deals the payload halved and rounded down on a success, `save (Y)` deals Y. |
 
 **Rerolls.** `reroll N` rerolls the face N only; `reroll dN` rerolls every face from 1 to N; the
 builder's `.reroll(N)` rerolls every face up to N, like `reroll dN`. On a d6 they differ from N = 2
@@ -471,8 +485,8 @@ The reroll decides on the raw face and a minimum applies after: `3>(d6 reroll 1)
 `roll(1, d6).reroll(1).minimum(3)` prints) is 25/6.
 
 **Labels.** An attack labels its outcomes `hit`, `crit`, `missNone` and `missDamage`. A save labels a
-failed save `saveFail` (whatever the payload rolls, 0 included), a halved success `saveHalf`, and a
-success with no `save half` `missNone`, like the builder's `onSaveFailure()`. A landed hit whose
+failed save `saveFail` (whatever the payload rolls, 0 included), a success that deals damage (`save half`,
+`save (Y)`) `saveHalf`, and a success with neither clause `missNone`, like the builder's `onSaveFailure()`. A landed hit whose
 payload deals 0 is still `hit` (a 0-damage crit is `crit`), like the builder, and so is an AC
 check's landed total of exactly 0; only a miss is `missNone`.
 
