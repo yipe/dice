@@ -5,7 +5,7 @@ import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { pmfFromRollBuilder } from "./ast";
 import type { DCBuilder } from "./dc";
-import { ParsedRollBuilder, type RollBuilder } from "./roll";
+import { ParsedRollBuilder, RollBuilder } from "./roll";
 import type { CheckBuilder, SaveResolution } from "./types";
 
 export type SaveOutcome = "normal" | "half";
@@ -23,42 +23,97 @@ export function clearSaveCache(): void {
   savePMFCache.clear();
 }
 
+/** What a save's payload deals: a builder reads through {@link pmfFromRollBuilder}, a parsed string through its own PMF. */
+function payloadPMF(effect: RollBuilder, eps: number): PMF {
+  return effect instanceof ParsedRollBuilder ? effect.toPMF(eps) : pmfFromRollBuilder(effect);
+}
+
 export class SaveBuilder implements CheckBuilder {
+  /**
+   * @param check the DC check
+   * @param failureEffect what a failed save deals; none means a failure deals 0
+   * @param saveOutcome what a success deals: nothing (`"normal"`), the failure payload halved and floored
+   *   (`"half"`), or a payload of its own (a {@link RollBuilder}, see {@link onSaveSuccess}); never both
+   */
   constructor(
     readonly check: DCBuilder,
     private readonly failureEffect?: RollBuilder,
-    private readonly saveOutcome: SaveOutcome = "normal"
+    private readonly saveOutcome: SaveOutcome | RollBuilder = "normal"
   ) {}
 
+  /**
+   * A success deals the failure payload halved, rounded down. Mutually exclusive with {@link onSaveSuccess}, as
+   * `halfOnMiss()` is with `onMiss()`: the success can be one or the other, so this throws after `onSaveSuccess()`.
+   */
   saveHalf(): SaveBuilder {
+    if (this.saveOutcome instanceof RollBuilder) {
+      throw new Error(
+        "saveHalf() cannot be combined with onSaveSuccess(): the success branch can only be one or the other."
+      );
+    }
     return new SaveBuilder(this.check, this.failureEffect, "half");
   }
 
+  /**
+   * A success deals a payload of its own, where `saveHalf()` fixes it at half the failure. The arguments are
+   * `onSaveFailure`'s: a number, a string, a `RollBuilder`, `(count, die)`, `(count, sides)` or either with a
+   * modifier, read the way the failure payload is. A second `onSaveSuccess` replaces the first, as a second
+   * `onMiss` does; without either it and `saveHalf()`, a success deals nothing. It throws after `saveHalf()`
+   * (the success can be one or the other).
+   *
+   * The success is labelled `saveHalf`, as under `saveHalf()`: the label marks a success that still deals
+   * damage, and `OutcomeType` has no other. A payload that rolls 0 keeps it, as a half of 1 does. A number is
+   * a flat payload (`onSaveSuccess(0)` is a success that deals 0, not the plain save's `missNone`).
+   *
+   * {@link toExpression} spells it `save (payload)`, the grammar's clause for a success payload.
+   */
+  onSaveSuccess(val: number): SaveBuilder;
+  onSaveSuccess(val: string): SaveBuilder;
+  onSaveSuccess(val: RollBuilder): SaveBuilder;
+  onSaveSuccess(count: number, die: RollBuilder): SaveBuilder;
+  onSaveSuccess(count: number, sides: number): SaveBuilder;
+  onSaveSuccess(count: number, die: RollBuilder, modifier: number): SaveBuilder;
+  onSaveSuccess(count: number, sides: number, modifier: number): SaveBuilder;
+  onSaveSuccess(...args: any[]): SaveBuilder {
+    if (this.saveOutcome === "half") {
+      throw new Error(
+        "onSaveSuccess() cannot be combined with saveHalf(): the success branch can only be one or the other."
+      );
+    }
+    return new SaveBuilder(this.check, this.failureEffect, RollBuilder.fromArgs(...args));
+  }
+
+  /**
+   * The save as an expression string that `parse()` reads back to this save's distribution: the check, the
+   * failure payload, then `save half` or `save (payload)` for a success that deals damage. A save with no
+   * failure effect prints as its bare check, unless it has an {@link onSaveSuccess} payload: that prints
+   * `* (0)` for the failure, so the success payload is not lost.
+   */
   toExpression(): string {
     const checkPart = this.check.toExpression();
-    if (!this.failureEffect) return checkPart;
+    const success = this.saveOutcome;
+    if (!this.failureEffect && !(success instanceof RollBuilder)) return checkPart;
 
-    const failureEffectPart = this.failureEffect.toExpression();
+    const failureEffectPart = this.failureEffect ? this.failureEffect.toExpression() : "0";
     const result = `${checkPart} * (${failureEffectPart})`;
-    return this.saveOutcome === "half" ? `${result} save half` : result;
+    if (success instanceof RollBuilder) return `${result} save (${success.toExpression()})`;
+    return success === "half" ? `${result} save half` : result;
   }
 
   /**
    * The save's outcome: `check` is the DC check's own PMF (success at 0, failure at 1, as
    * {@link DCBuilder.toPMF}), `weights` its success/failure chances, `saveFail` the failure payload
-   * and `saveSuccess` what a success deals (half, floored, under `saveHalf()`; else 0).
+   * and `saveSuccess` what a success deals (half, floored, under `saveHalf()`; the payload under
+   * `onSaveSuccess()`; else 0).
    */
   resolve(eps: number = EPS): SaveResolution {
     const { pSuccess: psuccess, pFail: pfail } = this.check.saveProbabilities();
-    const failPMF = this.failureEffect
-      ? this.failureEffect instanceof ParsedRollBuilder
-        ? this.failureEffect.toPMF(eps)
-        : pmfFromRollBuilder(this.failureEffect)
-      : PMF.delta(0);
+    const failPMF = this.failureEffect ? payloadPMF(this.failureEffect, eps) : PMF.delta(0);
     const onSuccess = this.saveOutcome ?? "half";
 
     let successPMF: PMF = PMF.delta(0, eps);
     if (onSuccess === "half") successPMF = failPMF.scaleDamage(0.5, "floor");
+    else if (onSuccess instanceof RollBuilder) successPMF = payloadPMF(onSuccess, eps);
 
     const successLabel: OutcomeType =
       onSuccess === "normal" ? "missNone" : "saveHalf";
@@ -79,9 +134,10 @@ export class SaveBuilder implements CheckBuilder {
 
   /**
    * A cheap, complete key for this save's resolved PMF, or `null` when it can't be cached soundly.
-   * {@link resolve} reads exactly three things: the DC check (via `saveProbabilities`/`toPMF`), the failure
-   * effect's PMF, and the save outcome — so composing their keys pins it. A `ParsedRollBuilder` failure
-   * effect returns `null`, which correctly forces this uncached.
+   * {@link resolve} reads exactly four things: the DC check (via `saveProbabilities`/`toPMF`), the failure
+   * effect's PMF, the save outcome and, under `onSaveSuccess()`, the success payload's PMF — so composing
+   * their keys pins it. A `ParsedRollBuilder` failure or success effect returns `null`, which correctly
+   * forces this uncached.
    */
   private cacheKey(eps: number): string | null {
     const checkKey = this.check.cacheKey();
@@ -94,7 +150,17 @@ export class SaveBuilder implements CheckBuilder {
       failKey = k;
     }
 
-    return `${checkKey}*F${failKey}*O${this.saveOutcome}*e${eps}`;
+    const outcome = this.saveOutcome;
+    let outcomeKey: string;
+    if (outcome instanceof RollBuilder) {
+      const k = outcome.cacheKey();
+      if (k === null) return null;
+      outcomeKey = `S${k}`;
+    } else {
+      outcomeKey = outcome;
+    }
+
+    return `${checkKey}*F${failKey}*O${outcomeKey}*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.
