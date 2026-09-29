@@ -48,6 +48,24 @@ class FrozenBinMap extends Map<number, Bin> {
 }
 
 /**
+ * A 64-bit text hash (two 32-bit lanes, cyrb53 style) as 16 hex digits. It only names a PMF for
+ * debugging (see {@link PMF.identifier}); nothing keys or orders on it, so a collision costs a
+ * confusing name and never a wrong number.
+ */
+function hashText(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
  * Complete numeric model for the stacked damage-attribution chart, produced by
  * {@link PMF.damageAttributionChartModel}. Carries every dice-and-probability
  * value the chart needs; a renderer only maps these numbers into its own format
@@ -80,9 +98,6 @@ export interface DamageAttributionChartModel {
  * Probability Mass Function for discrete damage distributions.
  */
 export class PMF {
-  // Unique ID generator for anonymous PMFs to avoid cache key collisions
-  private static __anonIdCounter = 1;
-
   // Cached computed values
   private _support?: number[];
   private _min?: number;
@@ -92,6 +107,8 @@ export class PMF {
   private _variance?: number;
   private _stdev?: number;
   private _fingerprint?: string;
+  private _contentId?: string;
+  private readonly _identifier?: string;
   private _cumulative?: { values: number[]; below: number[]; above: number[] };
   private _frozen = false;
 
@@ -99,14 +116,31 @@ export class PMF {
    * @param map Damage value → bin. Typed read-only: a PMF is immutable once built. A PMF returned
    *   from the library's caches is frozen: its bins, its map and the `map` property itself reject
    *   writes (see {@link freeze}).
+   * @param identifier A name to keep for debugging, such as a parsed expression. Left out, the
+   *   {@link identifier} is derived from the content.
    */
   constructor(
     public readonly map: ReadonlyMap<number, Bin> = new Map(),
     public readonly epsilon = EPS,
     public readonly normalized = false,
-    public readonly identifier: string = `anon#${PMF.__anonIdCounter++}`,
+    identifier?: string,
     private readonly _preservedProvenance = true
-  ) {}
+  ) {
+    this._identifier = identifier;
+  }
+
+  /**
+   * A name for debugging and `toJSON`. Nothing in the library reads it as a cache key or as an
+   * ordering key: both come from {@link fingerprint}, the content.
+   *
+   * A name given at construction is kept (a parsed expression, `"zero"`, `"empty"`), and
+   * `normalize()` and `compact()` hand theirs on. Every other PMF is named from its content,
+   * `pmf#` and 16 hex digits, so equal content reads the same however the PMF was built, and a
+   * name never grows with the number of operations behind it.
+   */
+  get identifier(): string {
+    return this._identifier ?? (this._contentId ??= `pmf#${hashText(this.fingerprint())}`);
+  }
 
   /**
    * A PMF cache that freezes every stored PMF and follows `setCachingEnabled`. The library's
@@ -208,9 +242,6 @@ export class PMF {
 
     // Choose epsilon. You can also pick Math.min for a tighter threshold.
     const eps = successPMF.epsilon ?? failurePMF.epsilon;
-    const id = `branch(${failurePMF.identifier}*${q.toFixed(6)} + ${
-      successPMF.identifier
-    }*${p.toFixed(6)})`;
 
     // Proper Bernoulli mixture: q·failure ⊕ p·success, assembled in a single
     // pass. The previous `empty().addScaled(failure,q).addScaled(success,p)`
@@ -226,7 +257,7 @@ export class PMF {
       PMF.mergeInto(resultMap, damageValue, PMF.scaleBin(bin, p));
     }
 
-    return new PMF(resultMap, eps, false, id);
+    return new PMF(resultMap, eps, false);
   }
 
   /**
@@ -434,13 +465,7 @@ export class PMF {
       });
     }
 
-    // Use a different identifier to avoid cache collisions with non-attributed version
-    return new PMF(
-      newMap,
-      this.epsilon,
-      this.normalized,
-      `${this.identifier}~attr`
-    );
+    return new PMF(newMap, this.epsilon, this.normalized);
   }
 
   /**
@@ -489,16 +514,10 @@ export class PMF {
   }
 
   private getPowerCacheKey(n: number, eps: number): string {
-    // Includes fingerprint() (per-bin probability/count/attr content), matching convolve()'s
-    // cache key: the identifier alone is not content-unique. `mapDamage`/`scaleDamage`,
-    // `normalize()`, and `compact()` all keep the PARENT's identifier while producing a
-    // numerically different PMF
-    // (e.g. `X.mapDamage(f).power(2)` and `X.mapDamage(g).power(2)` would otherwise collide on
-    // the same key `map(X)+map(X)@eps` and silently return each other's cached result).
-    const id = this.identifier;
-    let key = `${id}`;
-    for (let i = 1; i < n; i++) key += `+${id}`;
-    return `${key}@${eps}|${this.fingerprint()}`;
+    // Content, like convolve()'s key: `mapDamage`/`scaleDamage`, `normalize()` and `compact()`
+    // can give two numerically different PMFs the same name, and equal PMFs built apart
+    // should share an entry. `n` stands for the `n` operands the key used to spell out.
+    return `pow${n}@${eps}|${this.fingerprint()}`;
   }
 
   /**
@@ -541,7 +560,7 @@ export class PMF {
       result.map,
       result.epsilon,
       result.normalized,
-      result.identifier,
+      undefined,
       false
     );
     pmfCache.set(key, folded);
@@ -613,7 +632,7 @@ export class PMF {
         attr: normalizedAttributes,
       });
     }
-    return new PMF(normalizedMap, this.epsilon, true, this.identifier);
+    return new PMF(normalizedMap, this.epsilon, true, this._identifier);
   }
 
   /**
@@ -663,7 +682,7 @@ export class PMF {
       compactedMap.set(damageValue, cleanedBin);
     }
 
-    return new PMF(compactedMap, eps, this.normalized, this.identifier);
+    return new PMF(compactedMap, eps, this.normalized, this._identifier);
   }
 
   // Note: The "support" of a PMF is the set of all non-zero probability outcomes.
@@ -829,12 +848,7 @@ export class PMF {
       );
     }
 
-    return new PMF(
-      resultMap,
-      this.epsilon,
-      false,
-      `${this.identifier}+scaled(${branch.identifier},${probability})`
-    );
+    return new PMF(resultMap, this.epsilon, false);
   }
 
   /**
@@ -877,12 +891,7 @@ export class PMF {
       });
     }
 
-    return new PMF(
-      newMap,
-      this.epsilon,
-      false,
-      `freq(${this.identifier},${freq})`
-    );
+    return new PMF(newMap, this.epsilon, false);
   }
 
   /**
@@ -905,8 +914,8 @@ export class PMF {
       if (f < 1) b.set(damage, PMF.scaleBin(bin, 1 - f));
     }
     return [
-      new PMF(a, this.epsilon, false, `split+(${this.identifier})`),
-      new PMF(b, this.epsilon, false, `split-(${this.identifier})`),
+      new PMF(a, this.epsilon, false),
+      new PMF(b, this.epsilon, false),
     ];
   }
 
@@ -955,12 +964,7 @@ export class PMF {
       resultMap.set(damage, PMF.scaleBin(bin, cdf + prevCdf));
     }
 
-    return new PMF(
-      resultMap,
-      this.epsilon,
-      this.normalized,
-      `maxOfTwo(${this.identifier})`
-    );
+    return new PMF(resultMap, this.epsilon, this.normalized);
   }
 
   scaleMass(factor: number): PMF {
@@ -970,12 +974,7 @@ export class PMF {
     for (const [damageValue, probabilityBin] of this.map) {
       scaledMap.set(damageValue, PMF.scaleBin(probabilityBin, factor));
     }
-    return new PMF(
-      scaledMap,
-      this.epsilon,
-      false,
-      `scale(${this.identifier},${factor})`
-    );
+    return new PMF(scaledMap, this.epsilon, false);
   }
 
   mapDamage(damageTransformFunction: (damageValue: number) => number): PMF {
@@ -988,12 +987,7 @@ export class PMF {
         PMF.cloneBin(probabilityBin)
       );
     }
-    return new PMF(
-      transformedMap,
-      this.epsilon,
-      this.normalized,
-      `map(${this.identifier})`
-    );
+    return new PMF(transformedMap, this.epsilon, this.normalized);
   }
 
   /**
@@ -1037,29 +1031,18 @@ export class PMF {
     });
   }
 
-  private getPMFCombineCacheKey(
-    p1: PMF,
-    p2: PMF,
-    eps: number,
-    raw: boolean
-  ): string {
-    const [id1, id2] = [p1.identifier, p2.identifier].sort();
-
-    return `v4:${raw ? "RAW" : "N"}:${id1}+${id2}@${eps}|${p1.fingerprint()}|${p2.fingerprint()}`;
-  }
-
   /**
    * A content fingerprint of every bin (probability, per-label `count`, per-label `attr`) plus
-   * the `normalized` flag, so convolution/power cache keys change whenever the underlying
-   * numbers do. Mass/bin-count/face-sum alone are not content-unique: `mapDamage` variants can
-   * keep the same identifier, support, mass, and face sum while differing in per-bin
-   * probabilities or in the `count`/`attr` channels `convolve()`/`power()` actually propagate --
-   * that previously let `power()` return one PMF's cached result for a different PMF. Memoized
-   * because a PMF is immutable once constructed -- this avoids re-deriving the key on every
-   * convolve()/power() call (including cache hits). Bin order is sorted by damage value (and
-   * label keys sorted within each bin) so two equal-content PMFs built via different code paths
-   * fingerprint identically regardless of Map insertion order. Label keys are JSON-encoded, so a
-   * label containing the separators cannot make two different bins read the same.
+   * the `normalized` flag. It is the key of the convolution and power caches and the order of a
+   * convolve's operands, so it changes whenever the underlying numbers do. Mass/bin-count/
+   * face-sum alone are not content-unique: `mapDamage` variants can share a name, support, mass
+   * and face sum while differing in per-bin probabilities or in the `count`/`attr` channels
+   * `convolve()`/`power()` actually propagate. Memoized because a PMF is immutable once
+   * constructed, so a convolve() or power() call, cache hits included, does not rebuild it. Bin
+   * order is sorted by damage value (and label keys sorted within each bin) so two equal-content
+   * PMFs built via different code paths fingerprint identically regardless of Map insertion
+   * order. Label keys are JSON-encoded, so a label containing the separators cannot make two
+   * different bins read the same.
    */
   fingerprint(): string {
     if (this._fingerprint === undefined) {
@@ -1080,6 +1063,15 @@ export class PMF {
     return this._fingerprint;
   }
 
+  /**
+   * The distribution of the sum of this PMF and `other`. The operands are ordered by
+   * {@link fingerprint} (their content) and each is walked in ascending damage order, so the
+   * result does not depend on which PMF was created first, on which operand is `this`, on how
+   * either map was built, or on what the cache holds: a float sum depends on the order its terms
+   * are added in, and `a.convolve(b)` and `b.convolve(a)` add the same terms in the same order.
+   * The one map-order dependence left is upstream of the walk: a non-raw convolve first
+   * normalizes an operand whose mass is not 1, and `mass()` adds in map order.
+   */
   convolve(other: PMF, eps?: number, raw = false): PMF {
     const epsilon = eps ?? this.epsilon;
 
@@ -1089,33 +1081,54 @@ export class PMF {
     const A0 = norm(this);
     const B0 = norm(other);
 
-    const [A, B] = A0.identifier <= B0.identifier ? [A0, B0] : [B0, A0];
-    const cacheKey = this.getPMFCombineCacheKey(A, B, epsilon, raw);
+    const [A, B] = A0.fingerprint() <= B0.fingerprint() ? [A0, B0] : [B0, A0];
+    const cacheKey = `v5:${raw ? "RAW" : "N"}@${epsilon}|${A.fingerprint()}|${B.fingerprint()}`;
     const cached = pmfCache.get(cacheKey);
     if (cached) return cached;
 
+    // Both operands are walked in ascending damage order (`support()`, memoized): the terms of a
+    // float sum are added in an order that depends on content alone, not on how a map was built.
     // Accumulate directly into each destination bin instead of building a
     // temporary Bin per (a,b) pair and merging it. The probability channel
     // (`dest.p += ap*bp`) accumulates in the same order as before, so it is
     // bit-identical; only the per-label `count`/`attr` sums re-associate, which
     // shifts them by at most a few ULP (far below the eps pruning threshold).
-    // Label entries are listed once per bin, outside the pair loop: enumerating
-    // the keys of a (frozen, cached) bin per pair costs more than the arithmetic.
-    const labelEntries = (m: OutcomeLabelMap | undefined): [string, number][] | undefined =>
-      m === undefined ? undefined : (Object.entries(m) as [string, number][]);
-    const bEntries = [...B.map].map(([bVal, bBin]) => ({
-      bVal,
-      bp: bBin.p,
-      count: labelEntries(bBin.count) as [string, number][],
-      attr: labelEntries(bBin.attr),
-    }));
+    // A bin's labels are listed once, outside the pair loop, as a key array and a value array:
+    // enumerating the keys of a (frozen, cached) bin per pair costs more than the arithmetic, and
+    // an indexed loop over two arrays costs less than destructuring an entry per label. The sums
+    // are the same, in the same order.
+    const keysOf = (m: OutcomeLabelMap | undefined): string[] | undefined =>
+      m === undefined ? undefined : Object.keys(m);
+    const valuesOf = (
+      m: OutcomeLabelMap | undefined,
+      keys: string[] | undefined
+    ): number[] | undefined =>
+      m === undefined || keys === undefined ? undefined : keys.map((key) => m[key] as number);
+    const bDamages = B.support();
+    const bProbability = new Array<number>(bDamages.length);
+    const bCountKeys = new Array<string[]>(bDamages.length);
+    const bCountValues = new Array<number[]>(bDamages.length);
+    const bAttrKeys = new Array<string[] | undefined>(bDamages.length);
+    const bAttrValues = new Array<number[] | undefined>(bDamages.length);
+    bDamages.forEach((bVal, j) => {
+      const bBin = B.map.get(bVal) as Bin;
+      bProbability[j] = bBin.p;
+      bCountKeys[j] = keysOf(bBin.count) as string[];
+      bCountValues[j] = valuesOf(bBin.count, bCountKeys[j]) as number[];
+      bAttrKeys[j] = keysOf(bBin.attr);
+      bAttrValues[j] = valuesOf(bBin.attr, bAttrKeys[j]);
+    });
     const combinedMap = new Map<number, Bin>();
-    for (const [aVal, aBin] of A.map) {
+    for (const aVal of A.support()) {
+      const aBin = A.map.get(aVal) as Bin;
       const ap = aBin.p;
-      const aCount = labelEntries(aBin.count) as [string, number][];
-      const aAttr = labelEntries(aBin.attr);
-      for (const { bVal, bp, count: bCount, attr: bAttr } of bEntries) {
-        const dmg = aVal + bVal;
+      const aCountKeys = keysOf(aBin.count) as string[];
+      const aCountValues = valuesOf(aBin.count, aCountKeys) as number[];
+      const aAttrKeys = keysOf(aBin.attr);
+      const aAttrValues = valuesOf(aBin.attr, aAttrKeys);
+      for (let j = 0; j < bDamages.length; j++) {
+        const bp = bProbability[j];
+        const dmg = aVal + bDamages[j];
 
         let dest = combinedMap.get(dmg);
         if (dest === undefined) {
@@ -1126,27 +1139,42 @@ export class PMF {
         dest.p += ap * bp;
 
         const dc = dest.count;
-        for (const [k, v] of aCount) dc[k] = (dc[k] || 0) + v * bp;
-        for (const [k, v] of bCount) dc[k] = (dc[k] || 0) + v * ap;
+        for (let i = 0; i < aCountKeys.length; i++) {
+          const k = aCountKeys[i];
+          dc[k] = (dc[k] || 0) + aCountValues[i] * bp;
+        }
+        const bCK = bCountKeys[j];
+        const bCV = bCountValues[j];
+        for (let i = 0; i < bCK.length; i++) {
+          const k = bCK[i];
+          dc[k] = (dc[k] || 0) + bCV[i] * ap;
+        }
 
-        if (aAttr || bAttr) {
+        const bAK = bAttrKeys[j];
+        if (aAttrKeys || bAK) {
           let da = dest.attr;
           if (da === undefined) {
             da = {};
             dest.attr = da;
           }
-          if (aAttr) for (const [k, v] of aAttr) da[k] = (da[k] || 0) + v * bp;
-          if (bAttr) for (const [k, v] of bAttr) da[k] = (da[k] || 0) + v * ap;
+          if (aAttrKeys && aAttrValues) {
+            for (let i = 0; i < aAttrKeys.length; i++) {
+              const k = aAttrKeys[i];
+              da[k] = (da[k] || 0) + aAttrValues[i] * bp;
+            }
+          }
+          const bAV = bAttrValues[j];
+          if (bAK && bAV) {
+            for (let i = 0; i < bAK.length; i++) {
+              const k = bAK[i];
+              da[k] = (da[k] || 0) + bAV[i] * ap;
+            }
+          }
         }
       }
     }
 
-    let result = new PMF(
-      combinedMap,
-      epsilon,
-      !raw,
-      `${A.identifier}${raw ? "*" : "+"}${B.identifier}`
-    );
+    let result = new PMF(combinedMap, epsilon, !raw);
 
     // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
     const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
@@ -1254,7 +1282,7 @@ export class PMF {
       if (dmg > maxDamage) maxDamage = dmg;
     }
     if (peak === 0)
-      return new PMF(new Map(this.map), epsRel, false, this.identifier);
+      return new PMF(new Map(this.map), epsRel, false, this._identifier);
 
     const thresh = epsRel * peak;
     const entries = [...this.map.entries()];
@@ -1307,7 +1335,7 @@ export class PMF {
     }
 
     // Return non-normalized PMF
-    return new PMF(prunedMap, epsRel, false, `prune(${this.identifier})`);
+    return new PMF(prunedMap, epsRel, false);
   }
 
   /** Probability mass at exactly x. */
@@ -1837,8 +1865,7 @@ export class PMF {
     return new PMF(
       filteredMap,
       this.epsilon,
-      false, // don't normalize by default
-      `filter(${this.identifier},${outcome})`
+      false // don't normalize by default
     );
   }
   /**
@@ -1933,7 +1960,7 @@ export class PMF {
     }
 
     const sorted = new Map([...merged.entries()].sort((a, b) => a[0] - b[0]));
-    return new PMF(sorted, eps, this.normalized, `mapValues(${this.identifier})`);
+    return new PMF(sorted, eps, this.normalized);
   }
 
   static fromMap(
