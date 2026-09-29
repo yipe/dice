@@ -24,7 +24,9 @@ import type {
   ConditionSpec,
   Damage,
   GrantSpec,
+  ProbeSpec,
   Rider,
+  SaveLanding,
   SubstitutePolicy,
   SubstituteSpec,
   ToPMF,
@@ -68,6 +70,8 @@ export interface TurnPlan {
   riderIds: readonly string[];
   /** Every substitute id, in declaration order. */
   substituteIds: readonly string[];
+  /** Every probe id, in declaration order. */
+  probeIds: readonly string[];
   /**
    * Ids of the attack-shaped `any-miss` / `first-miss` riders, in declaration
    * order: a reroll continues the attacks it watches, so `Turn`'s chaining
@@ -90,13 +94,18 @@ export interface TurnPlan {
    */
   perHitGroups: ReadonlyMap<string, number>;
   /**
+   * Probe id → the group slot whose "something crit" bit answers its probability. Read at
+   * the final collapse like `perHitGroups`, so its group stays live the whole walk.
+   */
+  probes: ReadonlyMap<string, number>;
+  /**
    * The LAST step index (in final walk order) that reads each group slot (for a slot several
    * groups share in turn, the last read of the last group), and `steps.length` for a slot
-   * `perHitGroups` still needs at the final collapse. Once the walk passes a slot's last
-   * reader, its specific code stops discriminating any future decision, so `Turn.resolve`'s
+   * `perHitGroups` or `probes` still need at the final collapse. Once the walk passes a slot's
+   * last reader, its specific code stops discriminating any future decision, so `Turn.resolve`'s
    * `merge` stops keying on it past that point: the dominant cost fix for a long `dice-match`
-   * chain (a group read by exactly one downstream step, the common shape, would otherwise
-   * keep splitting states for every step after that single read).
+   * chain (a group read by exactly one downstream step, the common shape, would otherwise keep
+   * splitting states for every step after that single read).
    */
   groupLastReadStep: readonly number[];
   /** Every condition id, in declaration order. */
@@ -126,7 +135,15 @@ export interface Draw {
   matched: boolean;
   spends: boolean;
   slice: PMF;
+  /**
+   * Set on a save row's draws only: a group keyed by a landing kind advances by that kind's
+   * entry instead of `outcome`, which is what step statistics and grants read.
+   */
+  byKind?: ByKind;
 }
+
+/** What a save row's draw is to a rider reading the row under each landing kind. */
+export type ByKind = Readonly<Record<SaveLanding, StepOutcome>>;
 
 /**
  * The draws of one attack step under one state-dependent context. Masses sum to 1.
@@ -158,7 +175,8 @@ function mergeDraws(draws: readonly Draw[]): Draw[] {
       (other) =>
         other.outcome === draw.outcome &&
         other.matched === draw.matched &&
-        other.spends === draw.spends
+        other.spends === draw.spends &&
+        other.byKind === draw.byKind
     );
     if (index === -1) merged.push(draw);
     else merged[index] = { ...merged[index], slice: merged[index].slice.add(draw.slice) };
@@ -166,15 +184,27 @@ function mergeDraws(draws: readonly Draw[]): Draw[] {
   return merged;
 }
 
-/** `codes` with `outcome` folded into each group in `updates`. */
+/**
+ * `codes` with `outcome` folded into each group in `updates`; a group with a landing kind (in
+ * `kinds`, aligned with `updates`) folds in the draw's `byKind` entry for it instead.
+ */
 function advanced(
   codes: readonly number[],
   updates: readonly number[],
+  kinds: readonly (SaveLanding | null)[],
   outcome: StepOutcome,
-  matched: boolean
+  matched: boolean,
+  byKind?: ByKind
 ): number[] {
   const next = [...codes];
-  for (const group of updates) next[group] = advance(next[group], outcome, matched);
+  updates.forEach((group, index) => {
+    const kind = kinds[index];
+    next[group] = advance(
+      next[group],
+      kind === null || byKind === undefined ? outcome : byKind[kind],
+      matched
+    );
+  });
   return next;
 }
 
@@ -265,6 +295,8 @@ export interface Step {
   damage: { hit: PMF; crit: PMF } | null;
   /** Group slots this step's outcome advances. */
   updates: readonly number[];
+  /** Per entry of `updates`, the landing kind of the group's rider when this step is a save row, else null. */
+  updateKinds: readonly (SaveLanding | null)[];
   /**
    * Slots whose group is last read at this step and which a later group reuses: the walk
    * resets them to the start code once the step is done, whether or not it fired, so the
@@ -522,6 +554,59 @@ function sliceSource(
 }
 
 /**
+ * Whether a declared attack with no hit or crit outcome is a save: its PMF carries a save's
+ * labels, or, when a save that cannot fail deals nothing on success (only `missNone`), the
+ * builder resolves to a save's `weights`.
+ */
+function isSaveShaped(source: Damage, pmf: PMF, eps: number): boolean {
+  const labels = pmf.outcomes();
+  if (labels.includes("saveFail") || labels.includes("saveHalf")) return true;
+  const resolvable = source as { resolve?: (eps?: number) => { weights?: { fail?: unknown } } };
+  if (typeof resolvable.resolve !== "function") return false;
+  try {
+    return typeof resolvable.resolve(eps).weights?.fail === "number";
+  } catch {
+    // Not a builder whose resolution says: it is no save, and the caller reports why.
+    return false;
+  }
+}
+
+/**
+ * A save row split into the four classes its landing kinds tell apart, by outcome label and by
+ * whether damage was dealt: it failed and dealt damage; it failed and dealt none; it passed and
+ * dealt damage (`saveHalf`); everything else. Their masses sum to the row's.
+ */
+type SaveClasses = readonly [PMF, PMF, PMF, PMF];
+
+/**
+ * Whether each class lands under each kind. `fail` is decided by the label alone. `damage` is
+ * "when you deal damage": a failure or a pass that dealt some.
+ */
+const CLASS_LANDS: readonly Readonly<Record<SaveLanding, boolean>>[] = [
+  { fail: true, damage: true },
+  { fail: true, damage: false },
+  { fail: false, damage: true },
+  { fail: false, damage: false },
+];
+
+const CLASS_OUTCOMES: readonly ByKind[] = CLASS_LANDS.map((lands) => ({
+  fail: lands.fail ? "hit" : "miss",
+  damage: lands.damage ? "hit" : "miss",
+}));
+
+function saveClasses(pmf: PMF): SaveClasses {
+  const labels = pmf.outcomes();
+  const label = (name: string): PMF => (labels.includes(name) ? pmf.filterOutcome(name) : PMF.emptyMass());
+  const dealt = (part: PMF): [PMF, PMF] => part.splitByFactor((value) => (value > 0 ? 1 : 0));
+  const [failed, failedForNothing] = dealt(label("saveFail"));
+  const [passed, passedForNothing] = dealt(label("saveHalf"));
+  const rest = labels
+    .filter((name) => name !== "saveFail" && name !== "saveHalf")
+    .reduce((all, name) => all.add(pmf.filterOutcome(name)), passedForNothing);
+  return [failed, failedForNothing, passed, rest];
+}
+
+/**
  * A source's payload split at the base: what transforms and match odds may read,
  * and the `plusSeparateDamage` channels convolved in after them.
  *
@@ -683,6 +768,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const riders = spec.riders ?? [];
   const substitutes: readonly SubstituteSpec[] = spec.substitutes ?? [];
   const declaredConditions: readonly ConditionSpec[] = spec.conditions ?? [];
+  const probes: readonly ProbeSpec[] = spec.observe ?? [];
 
   // --- attacks -------------------------------------------------------------
   const attackIds: string[] = [];
@@ -745,8 +831,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const conditionIds = conditions.map((condition, index) =>
     stringId(condition.id, `condition ${index + 1}`)
   );
+  const probeIds = probes.map((probe, index) => stringId(probe.id, `probe ${index + 1}`));
   const seen = new Set<string>();
-  for (const id of [...attackIds, ...riderIds, ...substituteIds, ...conditionIds]) {
+  for (const id of [...attackIds, ...riderIds, ...substituteIds, ...conditionIds, ...probeIds]) {
     if (seen.has(id)) fail("duplicate-id", id, `Duplicate id "${id}".`);
     seen.add(id);
   }
@@ -760,6 +847,22 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         riderIds[index],
         `Rider "${riderIds[index]}" triggers on "${String(rider.on)}", which is not a trigger. Use first-hit, any-crit, any-miss, first-miss, every-hit, dice-match or not-fired.`
       );
+    }
+    if (rider.landing !== undefined) {
+      if (rider.landing !== "fail" && rider.landing !== "damage") {
+        fail(
+          "unsupported-trigger",
+          riderIds[index],
+          `Rider "${riderIds[index]}" declares landing "${String(rider.landing)}". Use "fail" or "damage".`
+        );
+      }
+      if (rider.on === "not-fired") {
+        fail(
+          "unsupported-trigger",
+          riderIds[index],
+          `Rider "${riderIds[index]}" declares a landing on "not-fired", which watches a rider, not attacks. A landing says how to read a save among attack sources.`
+        );
+      }
     }
     if (isTransform(rider.damage)) {
       fail(
@@ -813,6 +916,15 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       }
     }
   });
+  probes.forEach((probe, index) => {
+    if ((probe.on as string) !== "any-crit") {
+      fail(
+        "unsupported-trigger",
+        probeIds[index],
+        `Probe "${probeIds[index]}" observes "${String(probe.on)}", which is not a probe. Use any-crit.`
+      );
+    }
+  });
   substitutes.forEach((substitute, index) => {
     const id = substituteIds[index];
     if (substitute.on !== "first-hit" || substitute.substitute !== "reroll-keep-higher") {
@@ -835,6 +947,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const riderIndexById = new Map(riderIds.map((id, index) => [id, index]));
   const substituteIndexById = new Map(substituteIds.map((id, index) => [id, index]));
   const conditionIdSet = new Set(conditionIds);
+  const probeIdSet = new Set(probeIds);
 
   // Riders' own PMFs and slices, built on first use: validation, `rerollIds` and
   // the steps all need them, and resolving a builder is not free.
@@ -852,6 +965,52 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       riderSlices[riderIndex] = sliceSource(riderPMF(riderIndex), riders[riderIndex].damage, eps);
     }
     return riderSlices[riderIndex] as SourceSlices | null;
+  };
+  /**
+   * Whether `sourceId` is a save row: a declared attack with no hit or crit outcome that is a
+   * save. A rider can watch one only by declaring how it lands.
+   */
+  const saveRows = new Map<string, boolean>();
+  const isSaveRow = (sourceId: string): boolean => {
+    let known = saveRows.get(sourceId);
+    if (known === undefined) {
+      const index = attackIndexById.get(sourceId);
+      known =
+        index !== undefined &&
+        attackSlices[index] === null &&
+        isSaveShaped(attackSources[index], attackPMFs[index], eps);
+      saveRows.set(sourceId, known);
+    }
+    return known;
+  };
+  const classesById = new Map<string, SaveClasses>();
+  const classesOf = (sourceId: string): SaveClasses => {
+    let classes = classesById.get(sourceId);
+    if (classes === undefined) {
+      classes = saveClasses(attackPMFs[attackIndexById.get(sourceId) as number]);
+      classesById.set(sourceId, classes);
+    }
+    return classes;
+  };
+  /** The landing kinds riders declare for each watched save row. */
+  const landingKinds = new Map<string, Set<SaveLanding>>();
+  /**
+   * `sourceId`'s slices as a rider reading it under `landing` sees them (only for checking what
+   * the rider can do with it: the walk draws the row by class), or null when it is no save row or
+   * no kind is declared.
+   */
+  const saveSlices = (sourceId: string, landing: SaveLanding | undefined): SourceSlices | null => {
+    if (landing === undefined || !isSaveRow(sourceId)) return null;
+    const kinds = landingKinds.get(sourceId) ?? new Set<SaveLanding>();
+    kinds.add(landing);
+    landingKinds.set(sourceId, kinds);
+    const classes = classesOf(sourceId);
+    const sum = (wanted: boolean): PMF =>
+      classes.reduce(
+        (all, part, index) => (CLASS_LANDS[index][landing] === wanted ? all.add(part) : all),
+        PMF.emptyMass()
+      );
+    return { hit: sum(true), crit: PMF.emptyMass(), miss: sum(false) };
   };
   /**
    * Per rider: whether its payload is a list of more than one attack (a flurry's two
@@ -886,18 +1045,35 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const resolveSources = (
     ownerId: string,
     of: readonly string[],
-    watchesDice: boolean
+    watchesDice: boolean,
+    landing?: SaveLanding,
+    skipUncrittable = false
   ): string[] => {
     const sourceIds: string[] = [];
+    const skipped = new Set<string>();
     for (const entry of of) {
       if (attackIndexById.has(entry) || riderIndexById.has(entry)) {
         sourceIds.push(entry);
-      } else if (substituteIndexById.has(entry) || conditionIdSet.has(entry)) {
-        const kind = substituteIndexById.has(entry) ? "substitute" : "condition";
+      } else if (
+        substituteIndexById.has(entry) ||
+        conditionIdSet.has(entry) ||
+        probeIdSet.has(entry)
+      ) {
+        const kind = substituteIndexById.has(entry)
+          ? "substitute"
+          : conditionIdSet.has(entry)
+            ? "condition"
+            : "probe";
+        const effect =
+          kind === "substitute"
+            ? "changes damage"
+            : kind === "condition"
+              ? "changes later attack rolls"
+              : "only reports a probability";
         fail(
           "not-an-attack",
           entry,
-          `"${ownerId}" watches "${entry}", a ${kind}. A ${kind} changes ${kind === "substitute" ? "damage" : "later attack rolls"}; it rolls no attack to watch.`
+          `"${ownerId}" watches "${entry}", a ${kind}. A ${kind} ${effect}; it rolls no attack to watch.`
         );
       } else if (attackIdsByTag.has(entry)) {
         sourceIds.push(...(attackIdsByTag.get(entry) as string[]));
@@ -932,12 +1108,21 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           `"${ownerId}" watches "${sourceId}", a list of several attacks. A list rider resolves as one payload, not as attacks that each land, so it cannot be watched. Declare each attack as its own rider with its own id, and name those.`
         );
       }
-      const slices = slicesOf(sourceId);
+      const slices = slicesOf(sourceId) ?? saveSlices(sourceId, landing);
       if (!slices) {
+        // A probe over `crit` skips the rows that cannot crit: a save or a flat payload.
+        if (skipUncrittable && attackIndexById.has(sourceId)) {
+          skipped.add(sourceId);
+          continue;
+        }
         fail(
           "not-an-attack",
           sourceId,
-          `"${ownerId}" triggers on "${sourceId}", which has no hit/crit outcomes.`
+          `"${ownerId}" triggers on "${sourceId}", which has no hit/crit outcomes.${
+            landing === undefined && isSaveRow(sourceId)
+              ? ' It is a save: a rider can watch a save row by declaring `landing` ("fail" or "damage").'
+              : ""
+          }`
         );
       } else if (watchesDice) {
         const info = matchInfoOf(sourceId);
@@ -952,7 +1137,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         }
       }
     }
-    return unique;
+    return skipped.size === 0 ? unique : unique.filter((sourceId) => !skipped.has(sourceId));
   };
 
   // Attack-shaped `any-miss` / `first-miss` riders: a reroll continues the attacks it
@@ -982,7 +1167,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     ...riders.map((rider, index) => {
       const id = riderIds[index];
       if (rider.on !== "not-fired") {
-        return resolveSources(id, rider.of ?? defaultOf(index), rider.on === "dice-match");
+        return resolveSources(id, rider.of ?? defaultOf(index), rider.on === "dice-match", rider.landing);
       }
       const target = rider.of;
       if (target === id) {
@@ -1012,6 +1197,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // Per condition: the source ids whose outcomes apply its grants.
   const conditionSources = conditions.map((condition, index) =>
     resolveSources(conditionIds[index], condition.of ?? defaultOf(riderCount), false)
+  );
+  // Per probe: the source ids whose crits it reports.
+  const probeSources = probes.map((probe, index) =>
+    resolveSources(probeIds[index], probe.of ?? defaultOf(riderCount), false, undefined, true)
   );
 
   // --- ordering ------------------------------------------------------------
@@ -1063,17 +1252,22 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const groupIndexByKey = new Map<string, number>();
   const groupSources: string[][] = [];
   const groupKeys: string[] = [];
-  const groupOf = (sourceIds: readonly string[]): number => {
+  const groupLandings: (SaveLanding | null)[] = [];
+  const groupOf = (sourceIds: readonly string[], landing?: SaveLanding): number => {
+    // A landing kind splits a group only through the save rows among its sources: two riders
+    // over the same sources with different kinds read the row differently, so they cannot share.
+    const kind = landing !== undefined && sourceIds.some(isSaveRow) ? landing : null;
     // JSON, not a delimiter join: an id is consumer-supplied, and a delimiter
     // that can appear inside one makes the encoding non-injective, so two
     // distinct source sets could share a group.
-    const key = JSON.stringify([...sourceIds].sort());
+    const key = JSON.stringify([[...sourceIds].sort(), kind]);
     const existing = groupIndexByKey.get(key);
     if (existing !== undefined) return existing;
     const index = groupSources.length;
     groupIndexByKey.set(key, index);
     groupSources.push([...sourceIds]);
     groupKeys.push(key);
+    groupLandings.push(kind);
     return index;
   };
 
@@ -1083,7 +1277,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     if (node >= riderCount) continue;
     const rider = riders[node];
     if (!READS_GROUP[rider.on]) continue;
-    const group = groupOf(sourceIdsByNode[node]);
+    const group = groupOf(sourceIdsByNode[node], rider.landing);
     readsByRider.set(node, group);
     if (rider.on === "every-hit") everyHitGroups.set(riderIds[node], group);
   }
@@ -1091,6 +1285,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // rider over the same attacks share one. Only first-hit / first-miss read it.
   const conditionGroups = conditions.map((condition, index) =>
     GRANT_TRIGGERS[condition.on].readsGroup ? groupOf(conditionSources[index]) : -1
+  );
+  // A probe reads the crit bit of its sources' group at the final collapse, sharing the group
+  // any rider over the same sources has.
+  const probeGroups = probes.map((_, index) =>
+    probeSources[index].length === 0 ? -1 : groupOf(probeSources[index])
   );
 
   // --- fire slots ----------------------------------------------------------
@@ -1209,7 +1408,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
   // --- group slots -----------------------------------------------------------
   // A group is live from the first step that can advance it to the last step that reads it: the
-  // end of the walk for an `every-hit` rider, which reads its group at the final collapse.
+  // end of the walk for an `every-hit` rider or a probe, which read theirs at the final collapse.
   // Groups whose lives do not overlap share one slot of the walk's per-state group codes, so the
   // cap counts live groups rather than source sets: each beam of a bounce chain dies after its
   // one reader. A slot is reset when its group dies (`Step.releases`), so the next group starts
@@ -1232,7 +1431,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     // A first-hit / first-miss grant reads its group's pre-draw code at each source step.
     for (const position of applyAt) readAt(conditionGroups[index], position);
   });
-  for (const group of everyHitGroups.values()) readAt(group, sequence.length);
+  for (const group of [...everyHitGroups.values(), ...probeGroups]) readAt(group, sequence.length);
 
   const slotOfGroup = new Array<number>(groupSources.length).fill(-1);
   const slotLastStep: number[] = [];
@@ -1291,13 +1490,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // --- per-hit fold ----------------------------------------------------------
   // `every-hit` riders are not steps: they are convolved into each source's own
   // hit/crit slices, so one hit means one application with no extra state.
-  const perHitBySource = new Map<string, { hit: PMF; crit: PMF }[]>();
+  const perHitBySource = new Map<string, { hit: PMF; crit: PMF; landing?: SaveLanding }[]>();
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
     if (rider.on !== "every-hit") continue;
     const hit = toPMF(rider.damage, eps, riderIds[node]);
-    const payload = { hit, crit: critPMF(rider, hit, eps) };
+    const payload = { hit, crit: critPMF(rider, hit, eps), landing: rider.landing };
     for (const sourceId of sourceIdsByNode[node]) {
       const existing = perHitBySource.get(sourceId);
       if (existing) existing.push(payload);
@@ -1416,16 +1615,38 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   };
 
   // --- steps -----------------------------------------------------------------
-  const updatesById = new Map<string, number[]>();
+  const updatesById = new Map<string, { slots: number[]; kinds: (SaveLanding | null)[] }>();
   groupSources.forEach((sourceIds, group) => {
     const slot = slotOfGroup[group];
     if (slot === -1) return;
     for (const sourceId of sourceIds) {
-      const existing = updatesById.get(sourceId);
-      if (existing) existing.push(slot);
-      else updatesById.set(sourceId, [slot]);
+      const existing = updatesById.get(sourceId) ?? { slots: [], kinds: [] };
+      updatesById.set(sourceId, existing);
+      existing.slots.push(slot);
+      existing.kinds.push(isSaveRow(sourceId) ? groupLandings[group] : null);
     }
   });
+
+  /**
+   * A watched save row's draws, one per class (see {@link SaveClasses}): every class carries what
+   * it is to a rider reading the row under each kind, and the `every-hit` riders that land on it
+   * under their own kind are folded in. Every class keeps the `outcome` a row nobody watches has,
+   * a hit, so the row's own statistics do not depend on which riders read it.
+   */
+  const saveRowDraws = (sourceId: string): Draw[] =>
+    classesOf(sourceId).map((slice, index) => {
+      let folded = slice;
+      for (const payload of perHitBySource.get(sourceId) ?? []) {
+        if (CLASS_LANDS[index][payload.landing ?? "fail"]) folded = folded.convolve(payload.hit, eps, true);
+      }
+      return {
+        outcome: "hit",
+        matched: false,
+        spends: false,
+        slice: folded,
+        byKind: CLASS_OUTCOMES[index],
+      };
+    });
 
   /**
    * Per substitute: can a step it watches still land, from step `from` on, in the
@@ -1463,7 +1684,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
                   (((draw.outcome === "hit" || draw.outcome === "crit") && watched.has(step.id)) ||
                     canLand(
                       from + 1,
-                      released(advanced(codes, step.updates, draw.outcome, draw.matched), step.releases),
+                      released(
+                        advanced(codes, step.updates, step.updateKinds, draw.outcome, draw.matched, draw.byKind),
+                        step.releases
+                      ),
                       next
                     ))
               );
@@ -1526,7 +1750,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       }
     }
 
-    const updates = updatesById.get(entry.id) ?? [];
+    const { slots: updates, kinds: updateKinds } = updatesById.get(entry.id) ?? { slots: [], kinds: [] };
+    const watchedKinds = entry.attack !== -1 ? landingKinds.get(entry.id) : undefined;
     let variants: StepVariant[] = [];
     let select: Step["select"] = plainSelect;
     const substitute = slices ? substituteBySource.get(entry.id) : undefined;
@@ -1567,7 +1792,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           if (fired[spendSlot] !== null) return 0;
           let mask = 0;
           choices.forEach((choice, bit) => {
-            const after = released(advanced(codes, updates, choice.outcome, choice.matched), releasesAt[stepIndex]);
+            const after = released(
+              advanced(codes, updates, updateKinds, choice.outcome, choice.matched),
+              releasesAt[stepIndex]
+            );
             if (canLand(stepIndex + 1, after, fired)) {
               mask |= 1 << bit;
             }
@@ -1577,7 +1805,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       };
     };
 
-    if (slices && readMask === 0) {
+    if (watchedKinds !== undefined) {
+      variants = [saveRowDraws(entry.id)];
+    } else if (slices && readMask === 0) {
       ({ variants, select } = table(slices));
     } else if (slices) {
       // Read flags select a roll context: the source re-derived through `withCheck` with
@@ -1689,6 +1919,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       select,
       damage: hit && rider ? { hit, crit: critPMF(rider, hit, eps) } : null,
       updates,
+      updateKinds,
       releases: releasesAt[stepIndex],
       reads: rider ? slotOf(readsByRider.get(entry.rider) ?? -1) : -1,
       slot: rider ? (fireSlots.get(entry.id) as number) : -1,
@@ -1710,11 +1941,15 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     attackIds,
     riderIds,
     substituteIds,
+    probeIds,
     rerollIds,
     fireSlots,
     slotCount: fireSlots.size,
     perHitGroups: new Map(
       [...everyHitGroups].map(([id, group]): [string, number] => [id, slotOfGroup[group]])
+    ),
+    probes: new Map(
+      probeIds.map((id, index): [string, number] => [id, slotOf(probeGroups[index])])
     ),
     groupLastReadStep: slotLastStep,
     conditionIds,

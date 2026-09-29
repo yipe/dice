@@ -94,6 +94,21 @@ export type Source = Damage;
  */
 export type RiderDamage = Damage | readonly Damage[];
 
+/**
+ * How a rider reads a save row among its sources, since a save has no hit or crit to land on:
+ *
+ * - `fail`: a failed save lands, whatever damage it dealt; a success never does.
+ * - `damage`: "when you deal damage". A failed save that dealt damage lands, and so does a success
+ *   under `saveHalf()` that dealt some. A save that dealt nothing (a failure of 0, a pass whose
+ *   half floors to 0, a pass with no `saveHalf()`) does not.
+ *
+ * Everything else is a miss to the rider: `first-miss` and `any-miss` fire on it. It applies to the
+ * save rows among a rider's sources only; an attack lands on a hit or a crit whatever it says. A
+ * save row is unwatchable without it (`not-an-attack`). A landed save is a hit and never a crit, so
+ * `any-crit` never fires over one. Riders may read one save row under different kinds.
+ */
+export type SaveLanding = "fail" | "damage";
+
 /** Everything about a rider except what it does and when — see `Turn.onFirstHit`. */
 export interface RiderOptions {
   /** Required only if another rider names this one in `of`. */
@@ -111,12 +126,19 @@ export interface RiderOptions {
    * giving it one is an `unused-crit-damage` error.
    */
   critDamage?: RiderDamage;
+  /**
+   * How this rider reads a save row among its `of` (see {@link SaveLanding}). Attack
+   * sources ignore it. A `not-fired` rider carrying one is `unsupported-trigger`: it
+   * watches a rider, not attacks.
+   */
+  landing?: SaveLanding;
 }
 
 export type Rider = Trigger & {
   id?: string;
   damage: RiderDamage;
   critDamage?: RiderDamage;
+  landing?: SaveLanding;
 };
 
 /** How an attack is declared: `id` names it for `of`; `tag` groups it with others. */
@@ -237,11 +259,33 @@ export interface ConditionSpec {
   onSave?: readonly GrantSpec[];
 }
 
+/**
+ * A probability the walk reports without adding any damage: read it with
+ * {@link Turn.fireProbability}. JSON-safe. Only `any-crit` exists today: P(at least one of `of`
+ * crit), from the walk itself, so a `critOnHit` grant, a reroll, a substitute and a
+ * `chance` on the attack are all accounted for. A row that cannot crit (a save, a flat
+ * payload) is skipped, so the default `of` works on a mixed turn; a probe with no source
+ * that can crit reports 0.
+ *
+ * `of` takes the same names as a rider's (attack ids, attack-shaped rider ids, tags) and
+ * defaults to every declared attack plus every attack-shaped `any-miss` / `first-miss` rider,
+ * the way a condition's does. `id` defaults to `probe 1`, `probe 2`, … in declaration order. A
+ * probe keeps its source group live to the end of the walk, so it counts against
+ * {@link MAX_TRIGGER_GROUPS} for the whole turn, and no `of` can name it.
+ */
+export interface ProbeSpec {
+  id?: string;
+  on: "any-crit";
+  of?: readonly string[];
+}
+
 export interface TurnSpec {
   attacks: readonly Attack[];
   riders?: readonly Rider[];
   substitutes?: readonly SubstituteSpec[];
   conditions?: readonly ConditionSpec[];
+  /** Probabilities to report; see {@link ProbeSpec}. They add no damage. */
+  observe?: readonly ProbeSpec[];
 }
 
 export type TurnSpecErrorCode =
@@ -282,10 +326,10 @@ export class TurnSpecError extends Error {
  * How many distinct `of` sets a single turn may keep live at once.
  *
  * A group is live from the first step that can advance it to the last step that reads it (to the
- * end of the walk, for an `every-hit` rider), and two groups whose lives do not overlap share one
- * slot, so a turn may name more than this many source sets as long as no more than this many are
- * live together. A `bounce()` chain has two live at a time whatever its length: each beam's group
- * dies after its one reader.
+ * end of the walk, for an `every-hit` rider or a probe), and two groups whose lives do not overlap
+ * share one slot, so a turn may name more than this many source sets as long as no more than this
+ * many are live together. A `bounce()` chain has two live at a time whatever its length: each
+ * beam's group dies after its one reader.
  *
  * Each live group multiplies the state space, so the cap is a cost ceiling rather than a modelling
  * limit. Measured on four attacks with two riders per group (every group fed by multiple
