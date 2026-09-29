@@ -893,6 +893,50 @@ grant. `chance: 1` is the default and byte-identical to leaving it out:
 turn([sword, sword]).attack(sword, { chance: 0.5 });  // the third swing happens half the time
 ```
 
+#### Riders over saving throws
+
+A save has no hit or crit to land on, so a rider cannot watch one until it says how the save lands.
+Pass `landing`: `"fail"` counts a failed save as a hit; `"damage"` counts a failed save or a pass that
+deals save-for-half damage, as long as it dealt some (the "when you deal damage" reading). An attack
+among the sources lands on a hit or a crit either way, and a save never crits:
+
+```ts
+const fireball = d20.dc(15).onSaveFailure(roll(8, d6)).saveHalf();
+
+const t = turn([dagger, fireball]).onFirstHit(roll(2, d6), { landing: "fail", id: "rider" });
+t.fireProbability("rider"); // 0.8950: unless the dagger missed (0.35) and the target passed (0.30)
+t.mean();                   // 34.6900, and 28.0750 without the rider
+```
+
+The rider fires in the mode of the first thing that landed, in the order the rows are declared: a
+dagger crit doubles its dice, a failed save does not. `"fail"` reads the outcome label alone, so a
+failure that dealt 0 still lands; `"damage"` needs damage above 0, so a pass whose halved damage
+floors to 0 does not. `first-miss` and `any-miss` fire on a save that did not
+land. Riders may read one save row under different kinds: a `"fail"` feature and a `"damage"` feature
+over the same save each see it their own way. Without `landing` a save row is `not-an-attack`, as
+before. Only a declared save row can be watched this way, not a save that a rider carries as its
+damage.
+
+#### Probes: P(any crit) without the damage
+
+`observeAnyCrit(id)` reports the probability that at least one source crit, through
+`fireProbability(id)`, and adds no damage. It comes from the walk itself, so a crit-on-hit grant, a
+reroll, a substitute and an attack's `chance` are all counted. The probe watches `of`, which defaults
+like a rider's, and skips the rows that cannot crit (a save, a flat payload), so it works on a mixed
+turn; a probe with nothing that can crit reports 0:
+
+```ts
+turn().attacks(4, sword).observeAnyCrit("crit").fireProbability("crit"); // 0.1855, which is 1 - 0.95^4
+turn([sword, sword, sword]).observeAnyCrit("outer", { of: ["attack 1", "attack 3"] });
+```
+
+A probe is read from a walk that carries no damage distribution, only the probability of each path,
+so it costs a small fraction of `mean()` (a 7-attack turn with five kinds of riders: 0.3ms against
+108ms). Reading `pmf`, `mean()`, `toQuery()` or any other id's `fireProbability` still walks the
+damage. A probe keeps the group of its sources live to the end of the walk, so it counts against
+`MAX_TRIGGER_GROUPS` for the whole turn. In plain data it is `TurnSpec.observe`:
+`{ id, on: "any-crit", of }`, and `probeIds` lists them.
+
 #### Ids, errors, and plain data
 
 Nothing above needs an `id`: attacks and riders get `attack 1`, `rider 2`, … in declaration order,
@@ -920,7 +964,7 @@ group is live from the first attack it watches to the last rider that reads it, 
 lives do not overlap share a slot, so a turn may name more source sets than that as long as no more
 are live together. A `bounce()` chain keeps two live whatever its length.
 
-Each `onX` method takes an optional `{ id, of, critDamage }`, where `of` picks which attacks the
+Each `onX` method takes an optional `{ id, of, critDamage, landing }`, where `of` picks which attacks the
 rider watches. Left out, it is filled in at that call: the attacks declared so far, plus any reroll
 declared so far. So declare attacks first — `.attack()` after such a rider throws
 `attack-after-rider` rather than silently leaving the new attack out. `Turn.from` fills an omitted
