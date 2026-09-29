@@ -106,6 +106,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to read `anon#7`, `branch(…)`, `map(…)`, `a+b`, …). The constructor's `identifier` argument
   is optional, and the property is a getter. Nothing in the library reads it: cache keys and
   operand order come from `fingerprint()`. `toJSON()` and `toJSONString()` carry the new text.
+- **`too-many-groups` counts trigger groups live at once, not source sets** (`bounce({ max })` with
+  `max` past 9 threw, though every beam's group dies after its one reader). `MAX_TRIGGER_GROUPS`
+  (still 9) was checked against the total number of distinct `of` sets a turn named. A group is
+  now live from the first step that can advance it to the last step that reads it (to the end of
+  the walk for an `every-hit` rider), and groups whose lives do not overlap share one slot of the
+  walk's group codes, which is reset when its group dies. The cap is the peak number of slots, so a
+  bounce chain of any length keeps two live, and a turn that rerolls or grants per attack no
+  longer counts each attack's source set against the cap. A group nothing reads (a grant no later
+  attack reads) takes no slot. No API change: every turn that fit the old cap walks to the same
+  bits (checked against the release before it on 1800 random turns: distribution,
+  `fireProbability`, `stepStats` and the walk's state counts all identical, 44 of them with a
+  slot reused); a turn with more than 9 groups live at once still throws. A chain's state space
+  grows linearly with its length: a 40-beam Chromatic Orb chain walks in about 2.4s.
 
 ## [0.14.2] - 2026-09-26
 

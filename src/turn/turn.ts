@@ -4,7 +4,7 @@ import { DiceQuery } from "../pmf/query";
 import type { ConditionOptions, Grant, Transform } from "./effects";
 import { grantSpec, isGrant, isTransform, substituteFields } from "./effects";
 import type { FireMode, TurnPlan } from "./plan";
-import { buildPlan, fireMode, grantApplies } from "./plan";
+import { buildPlan, fireMode, grantApplies, released } from "./plan";
 import { advance, FIRST_NONE, START_CODE } from "./state";
 import type {
   Attack,
@@ -694,12 +694,15 @@ export class Turn {
       });
 
       const merge = (state: State): void => {
+        // A slot whose group dies at this step is reset too, for the same reason, so the group
+        // that reuses the slot starts from nothing.
+        const codes = released(state.codes, step.releases);
         // Whether each rider fired (and each substitute was spent) is part of the
         // state: two paths that agree on group codes but disagree on a slot must
         // not merge — `not-fired`, `first-miss`, a substitute's variant choice AND
         // the final `fireMass` collapse all read `state.fired`.
         let codesKey = "";
-        for (const g of liveGroups) codesKey += String.fromCharCode(state.codes[g]);
+        for (const g of liveGroups) codesKey += String.fromCharCode(codes[g]);
         const flags = state.flags & liveFlags;
         const key =
           codesKey +
@@ -714,7 +717,7 @@ export class Turn {
             existing.applied = existing.applied.map((mass, c) => mass + state.applied[c]);
           }
         } else {
-          next.set(key, { ...state, flags });
+          next.set(key, { ...state, codes, flags });
         }
       };
 
@@ -949,11 +952,10 @@ export function turn(
  * does not terminate the recursion (Chromatic Orb bounces are not literally
  * unbounded — DMs cap them by fiat or table size — and something has to).
  *
- * Each beam after the first is its own {@link MAX_TRIGGER_GROUPS}-counted trigger
- * group (`of: [<previous beam's id>]` is a distinct source set every time), so
- * `max` is effectively capped at the turn's remaining group budget — a chain
- * asking for more throws `TurnSpecError("too-many-groups", ...)` the same way
- * any other over-budget turn would, not a silent truncation.
+ * Each beam after the first is its own trigger group (`of: [<previous beam's id>]` is a
+ * distinct source set every time), but a beam's group dies after its one reader, so only two
+ * are live at once and any `max` fits {@link MAX_TRIGGER_GROUPS}: the walk grows with `max`,
+ * not against the group cap.
  */
 export function bounce({ source, max }: { source: Source; max: number }): Turn {
   if (!Number.isInteger(max) || max < 0) {
