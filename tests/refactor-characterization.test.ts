@@ -106,14 +106,6 @@ describe("refactor characterization: PMF.branch (item 4)", () => {
     ));
   it("gate(0.5)", () =>
     expectPMFMatches(pmfToObj(parse("2d6+3").gate(0.5, parse("1d8+1"))), "gate_0.5"));
-  it("preserves identifier (feeds convolve cache key)", () => {
-    const a = parse("2d6+3");
-    const b = parse("1d8+1");
-    const out = PMF.branch(a, b, 0.3);
-    expect(out.identifier).toBe(
-      `branch(${b.identifier}*${(0.7).toFixed(6)} + ${a.identifier}*${(0.3).toFixed(6)})`
-    );
-  });
 });
 
 describe("refactor characterization: reroll (item 5)", () => {

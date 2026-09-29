@@ -99,10 +99,10 @@ describe("PMF Advanced Operations", () => {
       expect(power2squared.mass()).toBeCloseTo(power4.mass(), 10);
     });
 
-    it("does not collide across mapDamage variants that share an identifier but differ in content (regression)", () => {
-      // mapDamage keeps the PARENT's identifier regardless of the mapping function, so
-      // `d6.mapDamage(f)` and `d6.mapDamage(g)` produce the SAME identifier `map(<d6-id>)` for
-      // two numerically different PMFs. power()'s cache key must not collide on that alone.
+    it("does not collide across mapDamage variants that differ only in content (regression)", () => {
+      // `d6.mapDamage(f)` and `d6.mapDamage(g)` are two numerically different PMFs built from one
+      // parent, once under a name the mapping function did not change. power()'s cache key is
+      // their content, so it cannot hand one's cached result to the other.
       const identity = d6.mapDamage((v) => v);
       const scaled = d6.mapDamage((v) => v * 100);
       const powIdentity = identity.power(2);
@@ -113,9 +113,9 @@ describe("PMF Advanced Operations", () => {
 
     it("fingerprint() distinguishes same-identifier PMFs with identical mass/bin-count/face-sum but different per-bin probabilities (regression)", () => {
       // The old fingerprint was `mass|binCount|faceSum` -- content-blind to the actual
-      // probabilities. Two PMFs sharing an identifier (as mapDamage variants do) with the same
-      // support {1,2,3,4}, mass 1, and face sum 10 but different per-bin probabilities produced
-      // the SAME fingerprint, so power() could return the first cached result for the second.
+      // probabilities. Two PMFs given one name with the same support {1,2,3,4}, mass 1, and
+      // face sum 10 but different per-bin probabilities produced the SAME fingerprint, so
+      // power() could return the first cached result for the second.
       const sameId = "shared-identifier";
       const uniform4 = new PMF(
         new Map<number, Bin>([
@@ -334,14 +334,6 @@ describe("PMF Advanced Operations", () => {
         expect(zeroOut.pAt(2)).toBeCloseTo(1 / 6, 12);
         expect(zeroOut.pAt(3)).toBeCloseTo(1 / 6, 12);
       });
-
-      it("should update identifier", () => {
-        const original = d6.identifier;
-        const mapped = d6.mapDamage((x) => x + 1);
-
-        expect(mapped.identifier).toContain("map");
-        expect(mapped.identifier).toContain(original);
-      });
     });
 
     describe("scaleDamage", () => {
@@ -518,11 +510,6 @@ describe("PMF Advanced Operations", () => {
 
         expect(scaled.outcomeAt(1, "crit")).toBeCloseTo(0.125, 12); // 0.5 * 0.25
         expect(scaled.outcomeAt(6, "crit")).toBeCloseTo(0.125, 12);
-      });
-
-      it("should update identifier", () => {
-        const scaled = d6.scaleMass(0.75);
-        expect(scaled.identifier).toContain("scale");
       });
     });
   });

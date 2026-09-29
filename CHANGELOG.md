@@ -17,6 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or vanished, and the PMF arithmetic is untouched. Because the module state is shared too, a
   cache toggle or `clearParserCache()` called through the root entry now reaches the code the
   `/builder` entry runs; it used to change only the root's own copy.
+- **A `Turn` of about 20 attacks with riders threw `RangeError: Invalid string length`** (or ran out
+  of memory). `convolve`, `add`, `addScaled`, `branch`, `mixN`, `scaleMass`, `mapDamage`,
+  `filterOutcome` and the other derived-PMF methods built the result's `identifier` by embedding
+  its operands' identifiers, so a walk that merges states doubled or tripled the string every
+  step. A derived PMF now carries no name of its own: its `identifier` is `pmf#` and 16 hex digits
+  of a hash of its content, computed the first time it is read (`toJSON` reads it). It never grows,
+  and equal content reads the same however the PMF was built. A name given at construction (a
+  parsed expression, `"zero"`, `"empty"`, `"missNone"`, a name passed to `new PMF`, a `fromJSON`
+  round trip) is kept, and `normalize()` and `compact()` pass theirs on. A 34-attack turn with
+  Sneak Attack, Divine Smite, Hunter's Mark and a reroll now walks.
+- **`convolve` and `power` results depended on creation order and on the cache.** `convolve` put
+  its operands in order by identifier, and identifiers of an unnamed PMF came from a global
+  counter, so two equal PMFs created in a different order added the same float terms in a
+  different order and could differ in the last bits. `convolve` now orders its operands by
+  `fingerprint()` (their content) and walks each in ascending damage order, so its result is a
+  function of the two PMFs' content, the epsilon and `raw` alone. `a.convolve(b)`, `b.convolve(a)`, a rebuilt PMF, a
+  PMF whose map was built in another order and a recomputation after the cache evicted the entry
+  all return the same bits. Where the content order differs from the identifier order 0.14.2 used,
+  a result moves in its last bits (at most about 3e-15 relative on the turns and pools measured);
+  where the two orders agree, the result is bit-for-bit what 0.14.2 returned.
+- The `convolve` and `power` cache keys are the operands' `fingerprint()` alone (with `eps`,
+  `raw` and the exponent); they no longer spell out the operands' identifiers. `power()` keys on
+  the normalized base it computes from, so two equal unnormalized PMFs whose maps were built in
+  opposite orders (their `mass()` differs in the last bit) never share a cached result.
 
 ### Added
 
@@ -41,6 +65,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share a PMF. A payload that opts out of caching (a parsed string, `half()`, a scale) keeps the save
   uncached, as a failure effect does.
 - The README documents the `save (Y)` clause and the `saveHalf` label of a success that deals damage.
+
+### Changed
+
+- **`convolve` is cheaper on labelled PMFs.** It lists each bin's labels once as a key array and a
+  value array and sums from those with indexed loops, instead of destructuring an entry per label
+  per pair. The sums are the same, in the same order, so the bits do not change. A `Turn` walk
+  spends about a fifth less CPU (see the PR for timings).
+- **`PMF.identifier` text.** It is now `pmf#<16 hex digits>` for a PMF built without a name (it
+  used to read `anon#7`, `branch(…)`, `map(…)`, `a+b`, …). The constructor's `identifier` argument
+  is optional, and the property is a getter. Nothing in the library reads it: cache keys and
+  operand order come from `fingerprint()`. `toJSON()` and `toJSONString()` carry the new text.
 
 ## [0.14.2] - 2026-09-26
 
