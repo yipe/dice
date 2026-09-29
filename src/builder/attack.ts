@@ -6,21 +6,28 @@ import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
-import { pmfFromRollBuilder, resolveRootD20 } from "./ast";
+import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
-import { requireFinite } from "./arguments";
+import { requireFinite, rerollUpToArguments } from "./arguments";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
   naturalRollIndex,
   ParsedRollBuilder,
   RollBuilder,
+  type RerollUpToOptions,
 } from "./roll";
 import type { AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
 import type { ConditionOptions, Grant } from "../turn/effects";
 
 type ActionEffect = RollBuilder;
+
+/** A `rerollDamageUpTo()` budget and the number of whole rolls it chooses from. */
+interface RerollPoolSpec {
+  readonly budget: number;
+  readonly rolls: number;
+}
 
 /**
  * A condition a builder carries into a turn: when this attack's outcome fires,
@@ -69,7 +76,10 @@ export class AttackBuilder implements CheckBuilder {
     private readonly minimumDieValue?: number,
     private readonly halfOnMissFlag: boolean = false,
     /** Conditions carried into a turn, read by `Turn` into one `ConditionSpec` each. */
-    readonly attached: readonly AttachedCondition[] = []
+    readonly attached: readonly AttachedCondition[] = [],
+    // The `rerollDamageUpTo()` budget, applied last to the base payload's dice (hit, and the crit
+    // branch, whose dice double while the budget does not), so it never depends on call order.
+    private readonly rerollPool?: RerollPoolSpec
   ) {}
 
   onCrit(val: number): AttackBuilder;
@@ -83,6 +93,7 @@ export class AttackBuilder implements CheckBuilder {
     // The explicit crit is base payload: carry any rerollDamage/minimumDamageDie already set, so
     // the result does not depend on whether onCrit() came before or after them.
     const damageRoll = this.withStoredBaseTransforms(RollBuilder.fromArgs(...args));
+    if (this.rerollPool) AttackBuilder.requirePlainDice(damageRoll, "rerollDamageUpTo");
     return new AttackBuilder(
       this.check,
       this.hitEffect,
@@ -92,7 +103,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -119,7 +131,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -133,7 +146,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -153,7 +167,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -191,7 +206,8 @@ export class AttackBuilder implements CheckBuilder {
       threshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -224,7 +240,49 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       minimum,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
+    );
+  }
+
+  /**
+   * Lets the BASE payload (hit, and the crit branch when it is explicit) reroll up to `budget` of its
+   * dice once all are seen, keeping each new roll: Piercer, Empowered Spell. `plusSeparateDamage`
+   * channels are never rerolled. On a crit the dice double and the budget does not, so a crit
+   * usually rerolls fewer dice than it rolls. Best play for the most damage; see
+   * {@link RollBuilder.rerollUpTo} for the policy. With `{ rolls: 2 }` the payload is rolled twice
+   * first and the roll worth more after its own rerolls is used (Savage Attacker with Piercer).
+   *
+   * Applied after `rerollDamage`, `minimumDamageDie` and `onCrit`, whatever the call order: the
+   * dice it acts on already carry their `reroll` and `minimum`. Refuses a payload that is not plain
+   * dice (a parsed string, a keep, a roll type, a half/scale/max/pooled/composite payload).
+   * Repeating the same call is a no-op; a different budget or roll count throws. No string spelling
+   * exists, so `toExpression()` throws, and a `dice-match` trigger has no descriptor for the attack.
+   */
+  rerollDamageUpTo(budget: number, options?: RerollUpToOptions): AttackBuilder {
+    const spec = rerollUpToArguments(budget, options, "rerollDamageUpTo()");
+    if (this.rerollPool !== undefined) {
+      if (spec.budget === this.rerollPool.budget && spec.rolls === this.rerollPool.rolls) return this;
+      throw new Error(
+        `Conflicting rerollDamageUpTo(): already set to ${this.rerollPool.budget} (${this.rerollPool.rolls} roll(s)), ` +
+          `cannot change to ${spec.budget} (${spec.rolls} roll(s)). Repeating the same call is a no-op.`
+      );
+    }
+    // Refuse at the call, not at the first resolve.
+    for (const effect of [this.hitEffect, this.critEffect]) {
+      if (effect) AttackBuilder.requirePlainDice(effect, "rerollDamageUpTo");
+    }
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      this.attached,
+      spec
     );
   }
 
@@ -250,7 +308,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       true,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -270,7 +329,8 @@ export class AttackBuilder implements CheckBuilder {
       this.rerollThreshold,
       this.minimumDieValue,
       this.halfOnMissFlag,
-      this.attached
+      this.attached,
+      this.rerollPool
     );
   }
 
@@ -330,7 +390,8 @@ export class AttackBuilder implements CheckBuilder {
                   onSave: Array.isArray(gate.onSave) ? [...gate.onSave] : gate.onSave,
                 },
         },
-      ]
+      ],
+      this.rerollPool
     );
   }
 
@@ -425,6 +486,33 @@ export class AttackBuilder implements CheckBuilder {
     );
   }
 
+  /** Refuses a payload with no dice descriptor: a parsed string or a half/scale/maxOf/pooled/composite roll. */
+  private static requireDiceDescriptor(effect: ActionEffect, methodName: string): void {
+    if (effect.cacheKey() === null) {
+      throw new Error(
+        `${methodName}() requires a dice descriptor: a parsed string or a half/scale/maxOf/pooled/composite payload has none.`
+      );
+    }
+  }
+
+  /** Refuses a payload `rerollUpTo` cannot pool: no dice descriptor, or dice that are not plain (a keep, a roll type, explode). */
+  private static requirePlainDice(effect: ActionEffect, methodName: string): void {
+    AttackBuilder.requireDiceDescriptor(effect, methodName);
+    try {
+      rerollablePool(effect.toAST());
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      throw new Error(error.message.replace(/^rerollUpTo\(\)/, `${methodName}()`));
+    }
+  }
+
+  /** `effect`, a plain roll of the base payload's dice, with the stored `rerollDamageUpTo` budget applied. */
+  private pooled(effect: ActionEffect): ActionEffect {
+    return this.rerollPool
+      ? effect.rerollUpTo(this.rerollPool.budget, { rolls: this.rerollPool.rolls })
+      : effect;
+  }
+
   /**
    * Shared by `rerollDamage`/`minimumDamageDie`: rewrite every die-bearing `RollConfig` of a
    * base-payload effect. Refuses (rather than silently no-oping) an effect with no real dice
@@ -436,11 +524,7 @@ export class AttackBuilder implements CheckBuilder {
     methodName: string,
     mapConfig: (config: RollConfig) => RollConfig
   ): ActionEffect {
-    if (effect.cacheKey() === null) {
-      throw new Error(
-        `${methodName}() requires a dice descriptor: a parsed string or a half/scale/maxOf/pooled/composite payload has none.`
-      );
-    }
+    AttackBuilder.requireDiceDescriptor(effect, methodName);
     const configs = effect.getSubRollConfigs().map((c) => (c.sides > 0 ? mapConfig(c) : c));
     return new RollBuilder(configs);
   }
@@ -459,6 +543,11 @@ export class AttackBuilder implements CheckBuilder {
     if (this.separateDamage.length > 0 || this.halfOnMissFlag) {
       throw new Error(
         "toExpression() cannot represent plusSeparateDamage() or halfOnMiss(): the expression grammar has no separate damage channel or half-on-miss clause. Use toPMF() instead."
+      );
+    }
+    if (this.rerollPool) {
+      throw new Error(
+        "toExpression() cannot represent rerollDamageUpTo(): the expression grammar has no reroll-up-to-k syntax. Use toPMF() instead."
       );
     }
     const check = this.check;
@@ -588,7 +677,7 @@ export class AttackBuilder implements CheckBuilder {
         ? effect.toPMF(eps)
         : pmfFromRollBuilder(effect, eps);
 
-    const hitBasePMF = this.hitEffect ? toEffectPMF(this.hitEffect) : PMF.delta(0, eps);
+    const hitBasePMF = this.hitEffect ? toEffectPMF(this.pooled(this.hitEffect)) : PMF.delta(0, eps);
 
     let critBasePMF: PMF | null = null;
     let phit = pHit;
@@ -605,7 +694,7 @@ export class AttackBuilder implements CheckBuilder {
       const critBuilder = this.critEffect ?? this.hitEffect?.copy().doubleDice();
 
       if (critBuilder) {
-        critBasePMF = toEffectPMF(critBuilder);
+        critBasePMF = toEffectPMF(this.pooled(critBuilder));
       }
     }
 
@@ -693,6 +782,8 @@ export class AttackBuilder implements CheckBuilder {
    * separate channel, so their dice never count toward a match.
    */
   diceMatchInfo(_eps: number = EPS): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
+    // A reroll budget makes the dice that land not the dice that were rolled: no descriptor.
+    if (this.rerollPool) return { hit: null, crit: null };
     const hit = this.matchInfoForEffect(this.hitEffect);
 
     let critEffect: RollBuilder | undefined;
@@ -792,9 +883,10 @@ export class AttackBuilder implements CheckBuilder {
       channelsKey += `|${k}`;
     }
 
+    const poolKey = this.rerollPool ? `${this.rerollPool.budget}x${this.rerollPool.rolls}` : "";
     return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*S${channelsKey}*half${
       this.halfOnMissFlag ? 1 : 0
-    }*e${eps}`;
+    }*U${poolKey}*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.

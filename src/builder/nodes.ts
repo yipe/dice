@@ -8,7 +8,8 @@ export type ExpressionNode =
   | HalfNode
   | MaxOfNode
   | MaxNode
-  | ScaleNode;
+  | ScaleNode
+  | RerollUpToNode;
 
 export type DieNode = {
   type: "die";
@@ -83,5 +84,20 @@ export type ScaleNode = {
   numerator: number;
   denominator: number;
   rounding: "floor" | "round" | "ceil";
+  child: ExpressionNode;
+};
+
+/**
+ * A pool that may reroll up to `budget` of its dice, keeping every new roll, once the whole pool is
+ * seen. `child` holds the pool's plain dice and flats (`die`, `sum` of a die, `add`, `constant`);
+ * the dice are what rerolls act on, the flats never change. With `rolls` above 1 the pool is
+ * rolled that many times and the roll whose expected total after its own rerolls is highest is
+ * kept (rolls worth the same are interchangeable, so a tie changes nothing), then rerolled: Savage
+ * Attacker with a reroll budget.
+ */
+export type RerollUpToNode = {
+  type: "rerollUpTo";
+  budget: number;
+  rolls: number;
   child: ExpressionNode;
 };

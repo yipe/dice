@@ -65,6 +65,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share a PMF. A payload that opts out of caching (a parsed string, `half()`, a scale) keeps the save
   uncached, as a failure effect does.
 - The README documents the `save (Y)` clause and the `saveHalf` label of a success that deals damage.
+- **`rerollUpTo(k)`: reroll up to k dice once all are seen, keeping the new rolls** (Empowered Spell,
+  Piercer). `roll(2, d6).rerollUpTo(1)` rerolls the die worth rerolling, mean 8.2361 (7.9722 when only the
+  first die can keep the better of two). The play is optimal for expected damage: the up-to-k dice with the
+  largest positive gain `mean - shown` reroll (for identical dice the lowest faces below the die's mean, a
+  subtracted die when it shows high), across every die group of the roll, mixed dice included. Equal gains on
+  different kinds of die go to the higher-mean kind, so the order of the groups never matters. A rerolled die
+  is a fresh roll of the same die under its own `reroll` and `minimum`; a die showing its mean keeps its roll.
+  A budget covering every die is the per-die must-use reroll (`roll(4, d6).rerollUpTo(4)` is
+  `roll(4, d6).reroll(3)`); a budget of 0 is the plain roll. The distribution is exact: a DP over the faces
+  by gain, after `keepHighestAll`'s, whose state is the dice not yet placed and the dice rerolled per kind
+  (a pool of 17 dice in 5 kinds resolves in about a second). Returns a `RerollUpToRollBuilder`, a
+  transformed roll: `plus()` adds outside the pool, `doubleDice()`/`scaleDice()` double the dice and keep
+  the budget (a crit), and `toExpression()` throws (the string grammar has no spelling). The roll must be
+  plain dice: a keep, `bestOf`, a roll type, `explode`, `explodePool`, or an already transformed, pooled or
+  parsed roll throws.
+- **`rerollUpTo(k, { rolls })`: Savage Attacker's best of several rolls with a reroll budget.** The pool is
+  rolled `rolls` times, each roll is scored by its expected total after its own best rerolls, the best is
+  kept, and only that roll is rerolled: `roll(2, d6).rerollUpTo(1, { rolls: 2 })` has mean 9.1971. It is
+  not `rerollUpTo(1).maxOf(2)`, which rerolls every roll and keeps the highest final total. With a budget of 0
+  it is `maxOf(rolls)`. Exact, and checked against a brute force that lists every roll and tries every reroll set.
+  This models "choose the roll, then reroll a die in it". A player who may use the reroll before choosing
+  which roll to keep does better (1d8: 6.469 against 6.156; 1d12: 9.479 against 8.993; 2d6: 9.302 against
+  9.197); that order is not modelled.
+- **`AttackBuilder.rerollDamageUpTo(k, { rolls })`**: the same for the attack's base payload only (the hit and
+  an explicit `onCrit`; an auto crit doubles the dice and keeps the budget). `rolls` rolls the whole base payload
+  again, and `plusSeparateDamage` channels are never rerolled by the budget. Applied after `rerollDamage`, `minimumDamageDie` and `onCrit`, so call order does not matter;
+  repeating the same call is a no-op and a different budget throws. `toExpression()` throws and
+  `diceMatchInfo()` returns no descriptor for such an attack.
+- Existing behaviour is unchanged bit for bit: a digest of attack, pool, keep, reroll and turn PMFs taken on
+  origin/main (after #20) still matches.
 
 ### Changed
 

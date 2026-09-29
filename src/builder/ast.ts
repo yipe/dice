@@ -11,6 +11,7 @@ import type {
   MaxOfNode,
   SumNode,
 } from "./nodes";
+import { rerollUpToPMF, type PoolDieKind } from "./reroll-pool";
 import { naturalRollIndex, type RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
@@ -274,6 +275,21 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
         const denom = node.denominator === 0 ? 1 : node.denominator;
         return childPMF.scaleDamage(node.numerator, node.rounding, denom);
       }
+
+      case "rerollUpTo": {
+        const { groups, flat } = rerollablePool(node.child);
+        const kinds: PoolDieKind[] = groups.map(({ die, count, sign }) => {
+          const single = resolveSingleDie(die, eps);
+          const faces = single.support();
+          return {
+            values: faces.map((face) => sign * face),
+            probs: faces.map((face) => single.pAt(face)),
+            count,
+          };
+        });
+        const rerolled = rerollUpToPMF(kinds, node.budget, node.rolls, eps);
+        return flat === 0 ? rerolled : rerolled.mapDamage((v) => v + flat);
+      }
     }
   })();
 
@@ -504,6 +520,61 @@ function resolveExplodingPool(
   return f(count, budget);
 }
 
+/**
+ * The dice a `rerollUpTo` pool rerolls, read off its child: every die group with its die, count and
+ * sign (a subtracted group is rerolled when it shows high), and the flat total, which rerolls never
+ * touch. A child holding anything but plain dice and flats has no single meaning for "reroll a
+ * die" (a keep, a best of N, a roll type, an exploding die), so it throws instead.
+ */
+export function rerollablePool(node: ExpressionNode): {
+  groups: { die: DieNode; count: number; sign: 1 | -1 }[];
+  flat: number;
+} {
+  const groups: { die: DieNode; count: number; sign: 1 | -1 }[] = [];
+  let flat = 0;
+  const refuse = (what: string): never => {
+    throw new Error(
+      `rerollUpTo() rerolls plain dice, and this roll has ${what}. Set reroll and minimum on the dice, ` +
+        `and pool them last.`
+    );
+  };
+  const walk = (part: ExpressionNode, sign: 1 | -1): void => {
+    switch (part.type) {
+      case "constant":
+        flat += sign * part.value;
+        return;
+      case "die":
+        if (part.explode! > 0) refuse(`an exploding d${part.sides} (explode(${part.explode}))`);
+        groups.push({ die: part, count: 1, sign });
+        return;
+      case "sum": {
+        if (part.explodePoolBudget! > 0) refuse(`a pool-wide exploding-dice budget (explodePool(${part.explodePoolBudget}))`);
+        if (part.child.type === "keep") return refuse("a keep, or a die rolled with advantage or disadvantage");
+        if (part.child.type !== "die") return refuse(`a ${part.child.type} inside a pool of dice`);
+        const count = Math.max(0, Math.floor(part.count));
+        if (part.child.explode! > 0) refuse(`an exploding d${part.child.sides} (explode(${part.child.explode}))`);
+        if (count > 0) groups.push({ die: part.child, count, sign });
+        return;
+      }
+      case "add":
+        for (const child of part.children) walk(child.node, (sign * child.sign) as 1 | -1);
+        return;
+      case "keep":
+        return refuse("a keep (keepHighest, keepLowest or bestOf)");
+      case "maxOf":
+        return refuse("a best of several rolls of a group (keepHighest(N, 1) or maxOf)");
+      case "d20Roll":
+        return refuse("a d20 rolled with advantage, disadvantage or elven accuracy");
+      case "rerollUpTo":
+        return refuse("a rerollUpTo() pool already");
+      default:
+        return refuse(`a ${part.type} transform`);
+    }
+  };
+  walk(node, 1);
+  return { groups, flat };
+}
+
 // Getters
 
 function findDie(node: ExpressionNode): DieNode | undefined {
@@ -517,6 +588,7 @@ function findDie(node: ExpressionNode): DieNode | undefined {
     case "half":
     case "maxOf":
     case "scale":
+    case "rerollUpTo":
       return findDie(node.child);
     case "keep":
       return findDie(node.child.child);
@@ -808,6 +880,8 @@ export function getASTSignature(node: ExpressionNode): string {
       return `scale{n:${node.numerator},d:${node.denominator},r:${
         node.rounding
       },ch:${getASTSignature(node.child)}}`;
+    case "rerollUpTo":
+      return `rerollUpTo{b:${node.budget},r:${node.rolls},ch:${getASTSignature(node.child)}}`;
     case "max":
       return `max[${node.children.map(getASTSignature).join(",")}]`;
     case "add": {
