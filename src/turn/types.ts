@@ -279,22 +279,24 @@ export class TurnSpecError extends Error {
 }
 
 /**
- * How many distinct `of` sets a single turn may track.
+ * How many distinct `of` sets a single turn may keep live at once.
  *
- * Each group multiplies the state space, so the cap is a cost ceiling rather
- * than a modelling limit. Measured on four attacks with two riders per group
- * (every group fed by multiple independent sources — the expensive, dense
- * case): 2.1ms for one group, 3.1 for two, 5.9 for three, 23.5 for four —
- * roughly 4x per group. A `bounce()` chain is the opposite case — each group
- * is fed by exactly ONE step, and the chain is strictly sequential (group N+1
- * only ever reads a nonzero state once group N has already resolved), so its
- * reachable state space grows close to linearly rather than combinatorially;
- * see `dice-match.test.ts`'s latency measurement.
+ * A group is live from the first step that can advance it to the last step that reads it (to the
+ * end of the walk, for an `every-hit` rider), and two groups whose lives do not overlap share one
+ * slot, so a turn may name more than this many source sets as long as no more than this many are
+ * live together. A `bounce()` chain has two live at a time whatever its length: each beam's group
+ * dies after its one reader.
  *
- * 9, not 4: Chromatic Orb's `effectCountScaling: 'spell_level_plus_one'` needs
- * up to `1 + 9 = 10` beams at a 9th-level slot — 9 additional bounces beyond
- * the first. A non-bounce turn tracking 9 independent dense groups would be
- * the pathological case the latency table above warns about; real builds use
- * one or two (the goliath rogue/monk/paladin uses one).
+ * Each live group multiplies the state space, so the cap is a cost ceiling rather than a modelling
+ * limit. Measured on four attacks with two riders per group (every group fed by multiple
+ * independent sources, the expensive dense case): 2.1ms for one group, 3.1 for two, 5.9 for
+ * three, 23.5 for four, roughly 4x per group. A `bounce()` chain is the opposite case: each group
+ * is fed by exactly ONE step, and the chain is strictly sequential (group N+1 only ever reads a
+ * nonzero state once group N has already resolved), so its reachable state space grows close to
+ * linearly rather than combinatorially; see `dice-match.test.ts`'s latency measurement.
+ *
+ * 9, not 4: a turn tracking 9 independent dense groups is the pathological case the latency table
+ * above warns about, but every turn 0.14 accepted stays valid, and real builds use one or two (the
+ * goliath rogue/monk/paladin uses one).
  */
 export const MAX_TRIGGER_GROUPS = 9;

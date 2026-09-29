@@ -3,6 +3,7 @@ import { calculateBounceOdds } from "../common/bounce";
 import type { DiceMatchInfo } from "../common/types";
 import { bounce, d8, d20, roll, turn, TurnSpecError } from "../builder";
 import type { AttackBuilder } from "../builder";
+import { inspectTurn } from "./turn";
 import { MAX_TRIGGER_GROUPS } from "./types";
 
 /** Mass-weighted average of `info`'s per-damage match probability over `pmf`'s own bins — the
@@ -192,8 +193,12 @@ describe("bounce() sugar and two-beam correlation", () => {
     expect(() => bounce({ source: chromaticOrb(3), max: 1.5 })).toThrow(RangeError);
   });
 
-  it("a chain longer than the trigger-group budget throws too-many-groups", () => {
-    expect(() => bounce({ source: chromaticOrb(3), max: MAX_TRIGGER_GROUPS + 1 })).toThrow(TurnSpecError);
+  it("a chain longer than the trigger-group budget resolves: a beam's group dies after its one reader", () => {
+    const past = bounce({ source: chromaticOrb(3), max: MAX_TRIGGER_GROUPS + 1 });
+    expect(past.riderIds.length).toBe(MAX_TRIGGER_GROUPS + 1);
+    // Each extra beam can only add: the chain of 10 follow-on beams out-deals the chain of 9.
+    expect(past.mean()).toBeGreaterThan(bounce({ source: chromaticOrb(3), max: MAX_TRIGGER_GROUPS }).mean());
+    expect(inspectTurn(past).groupCount).toBe(2);
   });
 
   it("two-beam chain at pHit=0.6, 3d8: mean 9.770625, variance 92.944 (not the scalar-gate 74.902)", () => {
