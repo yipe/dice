@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The root and `/builder` entries share one `PMF` class** (a PMF made by one entry failed
+  `instanceof PMF` in the other, so `Turn` refused it as a source, rider or crit damage with
+  `not-an-attack`). The build bundled each entry separately (`splitting: false`), so each carried
+  its own copy of `PMF`, `Mixture`, the error classes and the caches. tsup now splits the shared
+  modules into a chunk both entries import, in both the ESM and the CJS output. No export moved
+  or vanished, and the PMF arithmetic is untouched. Because the module state is shared too, a
+  cache toggle or `clearParserCache()` called through the root entry now reaches the code the
+  `/builder` entry runs; it used to change only the root's own copy.
+
+### Added
+
+- **`Mixture` is exported from `@yipe/dice/builder`** (the root already exported it), the same class
+  as the root's.
+
 ## [0.14.2] - 2026-09-26
 
 ### Fixed

@@ -361,6 +361,10 @@ PMF
 └── identifier: string         (cache key / debug name)
 ```
 
+The two entries (`@yipe/dice` and `@yipe/dice/builder`) share one `PMF` class, one `Mixture` class and one
+set of error classes. A PMF made through either entry is an instance of the other's `PMF`, and a `Turn`
+takes PMFs from either as attacks, riders and crit damage. `Mixture` is exported from both.
+
 ### Main Flow Example
 
 Here's how a simple attack flows through the system:
