@@ -14,5 +14,10 @@ export default defineConfig({
   minify: false,
   target: "es2020",
   outDir: "dist",
-  splitting: false,
+  // The root and `/builder` entries share modules (`PMF`, the error classes, the caches).
+  // Without splitting each entry bundles its own copy, so a `PMF` built through one entry
+  // fails `instanceof PMF` in the other and `Turn` refuses it (`not-an-attack`). Splitting
+  // moves the shared modules into one chunk both entries import. `splitting` also covers
+  // the CJS output (tsup's `cjsSplitting` follows it).
+  splitting: true,
 });
