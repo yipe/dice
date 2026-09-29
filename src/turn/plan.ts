@@ -24,8 +24,11 @@ import type {
   ConditionSpec,
   Damage,
   GrantSpec,
+  PerSource,
   ProbeSpec,
   Rider,
+  RiderDamage,
+  RiderPayload,
   SaveLanding,
   SubstitutePolicy,
   SubstituteSpec,
@@ -34,7 +37,7 @@ import type {
   TurnSpec,
   TurnSpecErrorCode,
 } from "./types";
-import { MAX_TRIGGER_GROUPS, TurnSpecError } from "./types";
+import { MAX_CAPPED_COUNTERS, MAX_TRIGGER_GROUPS, TurnSpecError } from "./types";
 
 /**
  * How many granted-modifier flags a turn may carry in its walk state at once. Each
@@ -99,6 +102,18 @@ export interface TurnPlan {
    */
   probes: ReadonlyMap<string, number>;
   /**
+   * Every `every-hit` rider id, in declaration order: the index space of `Draw.applies`
+   * and of the expected-application tallies.
+   */
+  everyHitIds: readonly string[];
+  /**
+   * Per counter, the cap of the `every-hit` riders that share it. A capped rider's counter
+   * counts landings it applied to among its sources, so two riders with the same sources
+   * and the same `max` share one. A step watched by a counter draws from its
+   * with-rider variant while the walk's count is below the cap.
+   */
+  counterMax: readonly number[];
+  /**
    * The LAST step index (in final walk order) that reads each group slot (for a slot several
    * groups share in turn, the last read of the last group), and `steps.length` for a slot
    * `perHitGroups` or `probes` still need at the final collapse. Once the walk passes a slot's
@@ -128,12 +143,19 @@ interface SourceSlices {
 /**
  * One outcome a step's walk convolves in: which group-state outcome it advances,
  * whether it counts as a dice-match, whether drawing it spends the step's
- * substitute, and the sub-mass PMF itself.
+ * substitute, the every-hit riders it applies (indices into
+ * {@link TurnPlan.everyHitIds}, hit and crit draws only) and the counters those
+ * advance, and the sub-mass PMF itself.
  */
 export interface Draw {
   outcome: StepOutcome;
   matched: boolean;
   spends: boolean;
+  applies: readonly number[];
+  /** Indices into {@link TurnPlan.counterMax}: each a capped rider's landings so far. */
+  bumps: readonly number[];
+  /** Fire slots a first-hit rider with a payload per source marks when this draw applies it. */
+  fires: readonly number[];
   slice: PMF;
   /**
    * Set on a save row's draws only: a group keyed by a landing kind advances by that kind's
@@ -280,23 +302,35 @@ export interface Step {
   /** Declared attacks always fire; riders consult their trigger. */
   trigger: Trigger | null;
   /**
-   * Every precomputed draw set for this step; index 0 is the plain one. A step with
-   * no state dependence has exactly one. Nothing is transformed inside the walk:
+   * Every precomputed draw set for this step; index 0 is the plain one, with no capped
+   * rider applying. A step with no state dependence has exactly one. Nothing is
+   * transformed inside the walk:
    * {@link Step.select} picks one of these at the draw site.
    */
   variants: readonly StepVariant[];
   /**
    * Which variant to draw from, given the state's group codes, its fire slots with
-   * this step's own firing already recorded, and its flag bits before this step
-   * consumes any.
+   * this step's own firing already recorded, its flag bits before this step
+   * consumes any, and its counters of capped `every-hit` landings so far.
    */
-  select: (codes: readonly number[], fired: readonly FireMode[], flags: number) => number;
+  select: (
+    codes: readonly number[],
+    fired: readonly FireMode[],
+    flags: number,
+    counts: readonly number[]
+  ) => number;
   /** Pure-damage payloads, mass 1 each. */
   damage: { hit: PMF; crit: PMF } | null;
   /** Group slots this step's outcome advances. */
   updates: readonly number[];
   /** Per entry of `updates`, the landing kind of the group's rider when this step is a save row, else null. */
   updateKinds: readonly (SaveLanding | null)[];
+  /**
+   * Per counter, the count at or below which it is equivalent to 0 once this step has run:
+   * the cap minus the watched steps still to come, since below that the cap can never
+   * bind again. Lets the walk merge states that differ only by such a count.
+   */
+  settled: readonly number[];
   /**
    * Slots whose group is last read at this step and which a later group reuses: the walk
    * resets them to the start code once the step is done, whether or not it fired, so the
@@ -462,7 +496,7 @@ function toPMF(
  * like the builder it stands for: a bare `PMF`, a `ToPMF` without `doubleDice()` (an attack or save
  * builder), and a parsed string `doubleDice()` cannot rewrite (an attack or save string, `d4d6`).
  */
-function critPMF(rider: Rider, base: PMF, eps: number): PMF {
+function critPMF(rider: RiderPayload, base: PMF, eps: number): PMF {
   if (rider.critDamage !== undefined) return toPMF(rider.critDamage, eps);
 
   const parts = Array.isArray(rider.damage)
@@ -760,12 +794,37 @@ function conditionFromAttached(
   };
 }
 
+/** A rider's payload per source; a spec that is not typed can carry one on any trigger. */
+function perSourceOf(rider: Rider): PerSource | undefined {
+  return "perSource" in rider ? rider.perSource : undefined;
+}
+
+/** A `first-hit` rider with a payload per source: folded into its sources' draws, not a step. */
+function isFirstHitFold(rider: Rider): boolean {
+  return rider.on === "first-hit" && perSourceOf(rider) !== undefined;
+}
+
 export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const fail = (code: TurnSpecErrorCode, id: string, message: string): never => {
     throw new TurnSpecError(code, id, message);
   };
 
-  const riders = spec.riders ?? [];
+  const declaredRiders = spec.riders ?? [];
+  // `every-hit` capped at 1 IS `first-hit`: lowered here, before anything reads the riders, so
+  // it takes the same step, fire slot, `otherwise` / `not-fired`, `of` naming and arithmetic.
+  const riders: readonly Rider[] = declaredRiders.map((rider) => {
+    if (rider.on !== "every-hit" || rider.max !== 1) return rider;
+    const { id, of, damage, critDamage, perSource, landing } = rider;
+    return {
+      on: "first-hit",
+      damage,
+      ...(landing === undefined ? {} : { landing }),
+      ...(id === undefined ? {} : { id }),
+      ...(of === undefined ? {} : { of }),
+      ...(critDamage === undefined ? {} : { critDamage }),
+      ...(perSource === undefined ? {} : { perSource }),
+    };
+  });
   const substitutes: readonly SubstituteSpec[] = spec.substitutes ?? [];
   const declaredConditions: readonly ConditionSpec[] = spec.conditions ?? [];
   const probes: readonly ProbeSpec[] = spec.observe ?? [];
@@ -838,53 +897,91 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     seen.add(id);
   }
 
+  /** Refuses a payload no rider can carry: a transform, a grant, or a source's attached condition. */
+  const refusePayload = (id: string, on: string, damage: Damage | readonly Damage[]): void => {
+    if (isTransform(damage)) {
+      fail(
+        "unsupported-trigger",
+        id,
+        `Rider "${id}" carries a transform on "${on}". A transform is only accepted by onFirstHit.`
+      );
+    }
+    const parts: readonly unknown[] = Array.isArray(damage) ? damage : [damage];
+    if (parts.some(isGrant)) {
+      fail(
+        "unsupported-trigger",
+        id,
+        `Rider "${id}" carries a grant on "${on}". A grant is only accepted by onEveryHit, onFirstHit and onAnyCrit.`
+      );
+    }
+    if (parts.some((part) => attachedConditionsOf(part) !== undefined)) {
+      fail(
+        "unsupported-trigger",
+        id,
+        `Rider "${id}" carries a condition attached to its source (AttackBuilder.onEveryHit / onAnyCrit). Attachment is only read from declared attacks; spell this condition with the turn's verbs instead.`
+      );
+    }
+  };
+
   riders.forEach((rider, index) => {
+    const id = riderIds[index];
     // Every trigger but `not-fired` reads a group, so READS_GROUP names them all; anything else
     // would build a step `fireMode` never fires.
     if (rider.on !== "not-fired" && !Object.prototype.hasOwnProperty.call(READS_GROUP, rider.on)) {
       fail(
         "unsupported-trigger",
-        riderIds[index],
-        `Rider "${riderIds[index]}" triggers on "${String(rider.on)}", which is not a trigger. Use first-hit, any-crit, any-miss, first-miss, every-hit, dice-match or not-fired.`
+        id,
+        `Rider "${id}" triggers on "${String(rider.on)}", which is not a trigger. Use first-hit, any-crit, any-miss, first-miss, every-hit, dice-match or not-fired.`
       );
     }
     if (rider.landing !== undefined) {
       if (rider.landing !== "fail" && rider.landing !== "damage") {
         fail(
           "unsupported-trigger",
-          riderIds[index],
-          `Rider "${riderIds[index]}" declares landing "${String(rider.landing)}". Use "fail" or "damage".`
+          id,
+          `Rider "${id}" declares landing "${String(rider.landing)}". Use "fail" or "damage".`
         );
       }
       if (rider.on === "not-fired") {
         fail(
           "unsupported-trigger",
-          riderIds[index],
-          `Rider "${riderIds[index]}" declares a landing on "not-fired", which watches a rider, not attacks. A landing says how to read a save among attack sources.`
+          id,
+          `Rider "${id}" declares a landing on "not-fired", which watches a rider, not attacks. A landing says how to read a save among attack sources.`
         );
       }
     }
-    if (isTransform(rider.damage)) {
-      fail(
-        "unsupported-trigger",
-        riderIds[index],
-        `Rider "${riderIds[index]}" carries a transform on "${rider.on}". A transform is only accepted by onFirstHit.`
-      );
+    refusePayload(id, rider.on, rider.damage);
+    // `max` and `perSource` are spelled on the rider, so a spec that is not typed can put them on
+    // any trigger: refuse rather than ignore, which would deal uncapped damage.
+    const declared = declaredRiders[index];
+    const max = "max" in declared ? declared.max : undefined;
+    if (max !== undefined) {
+      if (declared.on !== "every-hit") {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" has a max on "${declared.on}". Only every-hit riders are capped; first-hit already applies once.`
+        );
+      }
+      if (typeof max !== "number" || !Number.isInteger(max) || max < 1) {
+        throw new RangeError(`Rider "${id}" needs a positive integer max, got ${String(max)}.`);
+      }
     }
-    const parts: readonly unknown[] = Array.isArray(rider.damage) ? rider.damage : [rider.damage];
-    if (parts.some(isGrant)) {
-      fail(
-        "unsupported-trigger",
-        riderIds[index],
-        `Rider "${riderIds[index]}" carries a grant on "${rider.on}". A grant is only accepted by onEveryHit, onFirstHit and onAnyCrit.`
-      );
-    }
-    if (parts.some((part) => attachedConditionsOf(part) !== undefined)) {
-      fail(
-        "unsupported-trigger",
-        riderIds[index],
-        `Rider "${riderIds[index]}" carries a condition attached to its source (AttackBuilder.onEveryHit / onAnyCrit). Attachment is only read from declared attacks; spell this condition with the turn's verbs instead.`
-      );
+    const perSource = perSourceOf(rider);
+    if (perSource !== undefined) {
+      if (rider.on !== "every-hit" && rider.on !== "first-hit") {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" has a payload per source on "${rider.on}". Only first-hit and every-hit riders take one.`
+        );
+      }
+      for (const [sourceId, payload] of Object.entries(perSource)) {
+        if (typeof payload !== "object" || payload === null || payload.damage === undefined) {
+          fail("not-an-attack", sourceId, `Rider "${id}" has no damage in its payload for "${sourceId}".`);
+        }
+        refusePayload(id, rider.on, payload.damage);
+      }
     }
   });
   conditions.forEach((condition, index) => {
@@ -1101,6 +1198,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           `"${ownerId}" triggers on "${sourceId}", an every-hit rider. Those are folded into their own sources rather than resolved separately, so they cannot be triggered on — point at the attacks instead.`
         );
       }
+      if (riderIndex !== undefined && isFirstHitFold(riders[riderIndex])) {
+        fail(
+          "not-an-attack",
+          sourceId,
+          `"${ownerId}" triggers on "${sourceId}", a first-hit rider with a payload per source. Those are folded into their own sources rather than resolved separately, so they cannot be triggered on — point at the attacks instead.`
+        );
+      }
       if (riderIndex !== undefined && attackLists[riderIndex]) {
         fail(
           "not-an-attack",
@@ -1276,7 +1380,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
-    if (!READS_GROUP[rider.on]) continue;
+    // A folded first-hit rider needs no group: it is applied inside its sources' draws.
+    if (!READS_GROUP[rider.on] || isFirstHitFold(rider)) continue;
     const group = groupOf(sourceIdsByNode[node], rider.landing);
     readsByRider.set(node, group);
     if (rider.on === "every-hit") everyHitGroups.set(riderIds[node], group);
@@ -1308,7 +1413,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
-    if (rider.on === "every-hit" || rider.on === "first-miss") continue;
+    if (rider.on === "every-hit" || rider.on === "first-miss" || isFirstHitFold(rider)) continue;
     sequence.push({ id: riderIds[node], attack: -1, rider: node });
   }
   for (const node of order) {
@@ -1490,25 +1595,173 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // --- per-hit fold ----------------------------------------------------------
   // `every-hit` riders are not steps: they are convolved into each source's own
   // hit/crit slices, so one hit means one application with no extra state.
-  const perHitBySource = new Map<string, { hit: PMF; crit: PMF; landing?: SaveLanding }[]>();
+  //
+  // A capped rider (`max`) is folded the same way but only into a source step's
+  // WITH-rider variants. Every source step it watches carries a variant with the rider
+  // and one without, and `Step.select` picks the with-rider one while the rider's
+  // counter is below `max`; a hit or crit drawn from it advances the counter. Riders
+  // with the same sources and the same `max` share one counter, since they apply on
+  // exactly the same landings. The walk state holds one count per counter.
+  interface HitPayload {
+    /** Index into `everyHitIds`, or -1 for a first-hit rider. */
+    rider: number;
+    /** The fire slot a first-hit rider marks when it applies, or -1. */
+    slot: number;
+    /** The rider's counter's bit in a source's variant mask, or 0 when uncapped. */
+    bit: number;
+    /** How the rider reads a save row among its sources (see {@link SaveLanding}). */
+    landing: SaveLanding | undefined;
+    hit: PMF;
+    crit: PMF;
+  }
+  const everyHitIds = riderIds.filter((_, index) => riders[index].on === "every-hit");
+  const counterMax: number[] = [];
+  /** Per counter, the landing kind its riders read a save row under; undefined when no source is a save row. */
+  const counterLanding: (SaveLanding | undefined)[] = [];
+  const counterIdByKey = new Map<string, number>();
+  const perHitBySource = new Map<string, HitPayload[]>();
+  /**
+   * Per source, the distinct counters that watch it, in payload order: bit i of a variant mask
+   * says whether counter i's riders apply in that variant.
+   */
+  const countersBySource = new Map<string, number[]>();
+  const payloadOf = (payload: RiderPayload, id: string): { hit: PMF; crit: PMF } => {
+    const hit = toPMF(payload.damage, eps, id);
+    return { hit, crit: critPMF(payload, hit, eps) };
+  };
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
-    if (rider.on !== "every-hit") continue;
-    const hit = toPMF(rider.damage, eps, riderIds[node]);
-    const payload = { hit, crit: critPMF(rider, hit, eps), landing: rider.landing };
-    for (const sourceId of sourceIdsByNode[node]) {
+    if (rider.on !== "every-hit" && !isFirstHitFold(rider)) continue;
+    const id = riderIds[node];
+    const sources = sourceIdsByNode[node];
+    const own = new Map(Object.entries(perSourceOf(rider) ?? {}));
+    for (const key of own.keys()) {
+      if (!sources.includes(key)) {
+        fail(
+          "unknown-id",
+          key,
+          `Rider "${id}" has a payload for "${key}", which it does not watch. Watched: ${sources.map((each) => `"${each}"`).join(", ")}.`
+        );
+      }
+    }
+    // A capped rider, or one with a payload per source, is folded into its sources' draws (a
+    // per-source first hit always is). A rider that rolls its own attack needs its own step:
+    // grants, step statistics and the crit check live there, and a fold skips all three. A
+    // plain every-hit rider keeps folding whatever it rolls, as it always has.
+    const folded =
+      rider.on === "first-hit" || (rider.on === "every-hit" && rider.max !== undefined) || own.size > 0;
+    if (folded) {
+      const payloads: [string, RiderDamage | undefined][] = [
+        ["its damage", rider.damage],
+        ["its critDamage", rider.critDamage],
+        ...[...own].flatMap(([sourceId, payload]): [string, RiderDamage | undefined][] => [
+          [`its payload for "${sourceId}"`, payload.damage],
+          [`its critDamage for "${sourceId}"`, payload.critDamage],
+        ]),
+      ];
+      for (const [name, damage] of payloads) {
+        if (damage === undefined) continue;
+        const parts = Array.isArray(damage) ? damage : [damage as Damage];
+        if (attackPartCount(parts, eps, id) > 0) {
+          const kind = rider.on === "first-hit" ? "a payload per source" : "a cap or a payload per source";
+          fail(
+            "unsupported-trigger",
+            id,
+            `Rider "${id}" has ${kind} and ${name} rolls an attack. Such a rider is folded into its attacks' draws, which skips granted modifiers, step statistics and the critDamage check. Declare the attack as a plain onFirstHit rider instead.`
+          );
+        }
+      }
+    }
+    let shared: { hit: PMF; crit: PMF } | undefined;
+    let counter = -1;
+    // The cap: an every-hit rider's `max`, or 1 for a first-hit rider (a `max: 1` every-hit rider
+    // was lowered to one, so a folded first-hit rider is the per-source spelling of it).
+    const cap = rider.on === "every-hit" ? rider.max : 1;
+    // A cap at or above the number of watched steps never binds: the count before any watched
+    // step is below that number, so every step draws with the rider. It is folded like an
+    // uncapped rider, which is what makes `max: n` over n attacks `onEveryHit` bit for bit.
+    const watched = new Set(sources);
+    const watchCount = sequence.filter((entry) => watched.has(entry.id)).length;
+    if (cap !== undefined && cap < watchCount) {
+      // A cap counts landings in turn order. An `any-miss` reroll resolves after every declared
+      // attack, so it would be counted at the end of the turn instead of where it happens.
+      const late = sources.find((sourceId) => {
+        const riderIndex = riderIndexById.get(sourceId);
+        return riderIndex !== undefined && riders[riderIndex].on === "any-miss";
+      });
+      if (late !== undefined) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" ${rider.on === "every-hit" ? "is capped" : "has a payload per source"} and watches "${late}", an any-miss reroll. An any-miss rider resolves after every declared attack, so the cap would count its landing at the end of the turn instead of right after the miss. Use onFirstMiss (on: "first-miss"), which resolves directly after the attack that missed.`
+        );
+      }
+      // Riders share a counter only when they land on the same rows: over a save row, on the same
+      // classes of it, so the landing kind is part of the key there.
+      const kind = rider.landing !== undefined && sources.some(isSaveRow) ? rider.landing : undefined;
+      const key = JSON.stringify([[...sources].sort(), cap, kind ?? null]);
+      let known = counterIdByKey.get(key);
+      if (known === undefined) {
+        known = counterMax.push(cap) - 1;
+        counterLanding.push(kind);
+        counterIdByKey.set(key, known);
+      }
+      counter = known;
+    }
+    const applyIndex = everyHitIds.indexOf(id);
+    const slot = rider.on === "first-hit" ? (fireSlots.get(id) as number) : -1;
+    for (const sourceId of sources) {
+      const each = own.get(sourceId);
+      const payload = each ? payloadOf(each, id) : (shared ??= payloadOf(rider, id));
+      let bit = 0;
+      if (counter !== -1) {
+        const counters = countersBySource.get(sourceId) ?? [];
+        let local = counters.indexOf(counter);
+        if (local === -1) {
+          local = counters.length;
+          counters.push(counter);
+          countersBySource.set(sourceId, counters);
+        }
+        bit = 1 << local;
+      }
+      const entry = { rider: applyIndex, slot, bit, landing: rider.landing, ...payload };
       const existing = perHitBySource.get(sourceId);
-      if (existing) existing.push(payload);
-      else perHitBySource.set(sourceId, [payload]);
+      if (existing) existing.push(entry);
+      else perHitBySource.set(sourceId, [entry]);
     }
   }
-  const fold = (sourceId: string, outcome: "hit" | "crit", slice: PMF): PMF => {
+  for (const [sourceId, counters] of countersBySource) {
+    if (counters.length > MAX_CAPPED_COUNTERS) {
+      fail(
+        "too-many-counters",
+        sourceId,
+        `"${sourceId}" is watched by ${counters.length} capped every-hit riders with different caps or sources; a turn may have at most ${MAX_CAPPED_COUNTERS} per attack. Each doubles the draws that attack carries.`
+      );
+    }
+  }
+  /** `slice` with the every-hit riders of variant `mask` folded in: every uncapped one, and each capped one whose bit is set. */
+  const fold = (sourceId: string, outcome: "hit" | "crit", slice: PMF, mask: number): PMF => {
     let folded = slice;
     for (const payload of perHitBySource.get(sourceId) ?? []) {
+      if (payload.bit !== 0 && (mask & payload.bit) === 0) continue;
       folded = folded.convolve(payload[outcome], eps, true);
     }
     return folded;
+  };
+  /** What a hit or crit drawn from variant `mask` of `sourceId` applies, counts and marks as fired. */
+  const landingOf = (
+    sourceId: string,
+    mask: number
+  ): { applies: number[]; bumps: number[]; fires: number[] } => {
+    const active = (perHitBySource.get(sourceId) ?? []).filter(
+      (payload) => payload.bit === 0 || (mask & payload.bit) !== 0
+    );
+    return {
+      applies: active.flatMap((payload) => (payload.rider === -1 ? [] : [payload.rider])),
+      bumps: (countersBySource.get(sourceId) ?? []).filter((_, local) => (mask & (1 << local)) !== 0),
+      fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
+    };
   };
 
   // --- draws -----------------------------------------------------------------
@@ -1530,9 +1783,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   /**
    * The draws for `sourceId`: hit and crit, each split by exact match probability
    * when a `dice-match` trigger reads it, and into spend/hold parts under a
-   * substitute's `policy`; then the separate channels; then the `every-hit` fold;
-   * then miss. Every split happens on the base payload, so neither the match odds
-   * nor the transform ever see a separate channel's or the fold's dice.
+   * substitute's `policy`; then the separate channels; then the `every-hit` fold
+   * (the capped riders selected by `mask`, see {@link fold}); then miss. Every split
+   * happens on the base payload, so neither the match odds nor the transform ever
+   * see a separate channel's or the fold's dice.
    *
    * `fixed` draws belong to every variant. Each of `choices` is an above-threshold
    * landing that is held or spent depending on the walk state, so a variant takes
@@ -1541,8 +1795,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const drawsFor = (
     sourceId: string,
     slices: SourceSlices,
-    policy: SubstitutePolicy | null
+    policy: SubstitutePolicy | null,
+    mask: number
   ): { fixed: Draw[]; choices: HoldChoice[] } => {
+    const { applies, bumps, fires } = landingOf(sourceId, mask);
     const match = matchNeeded.has(sourceId) ? matchInfoOf(sourceId) : null;
     // With neither split, the slices already carry the channels — draw them as they are.
     const payload = policy || match ? basePayload(sourceId) : null;
@@ -1559,18 +1815,18 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           : slice;
       const info = match?.[outcome] ?? null;
       const finish = (part: PMF): PMF =>
-        fold(sourceId, outcome, separate ? part.convolve(separate, eps, true) : part);
+        fold(sourceId, outcome, separate ? part.convolve(separate, eps, true) : part, mask);
       /** `part`'s draws: split by match odds on its value, unless its dice's match status is `known`. */
       const drawsOf = (part: PMF, spends: boolean, known?: boolean): Draw[] => {
         if (!info || known !== undefined) {
-          return [{ outcome, matched: known ?? false, spends, slice: finish(part) }];
+          return [{ outcome, matched: known ?? false, spends, applies, bumps, fires, slice: finish(part) }];
         }
         const [matched, unmatched] = part.splitByFactor(
           (damage) => info.matchProbabilityByDamage.get(damage) ?? 0
         );
         return [
-          { outcome, matched: true, spends, slice: finish(matched) },
-          { outcome, matched: false, spends, slice: finish(unmatched) },
+          { outcome, matched: true, spends, applies, bumps, fires, slice: finish(matched) },
+          { outcome, matched: false, spends, applies, bumps, fires, slice: finish(unmatched) },
         ];
       };
 
@@ -1610,7 +1866,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         });
       }
     }
-    fixed.push({ outcome: "miss", matched: false, spends: false, slice: slices.miss });
+    fixed.push({ outcome: "miss", matched: false, spends: false, applies: [], bumps: [], fires: [], slice: slices.miss });
     return { fixed, choices };
   };
 
@@ -1627,22 +1883,54 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     }
   });
 
+  const steps: Step[] = [];
+  /**
+   * `fired` after `sourceId` lands: a first-hit rider with a payload per source is folded into its
+   * sources' draws, so it is not a step and marks its fire slot only there. The look-ahead reads
+   * the plain variant, which does not carry it, so it applies the slots itself: one that is still
+   * empty is the first landing among that rider's sources.
+   */
+  const withFolded = (fired: readonly FireMode[], sourceId: string, draw?: Draw): readonly FireMode[] => {
+    // A draw that is no landing marks nothing. A save row's draws are all "hit" and say whether they
+    // land per landing kind, so each rider reads its own kind there.
+    if (draw !== undefined && draw.byKind === undefined && draw.outcome !== "hit" && draw.outcome !== "crit") {
+      return fired;
+    }
+    let marked: FireMode[] | null = null;
+    for (const payload of perHitBySource.get(sourceId) ?? []) {
+      if (payload.slot === -1 || (marked ?? fired)[payload.slot] !== null) continue;
+      if (draw?.byKind !== undefined && draw.byKind[payload.landing ?? "fail"] !== "hit") continue;
+      marked ??= [...fired];
+      marked[payload.slot] = "hit";
+    }
+    return marked ?? fired;
+  };
   /**
    * A watched save row's draws, one per class (see {@link SaveClasses}): every class carries what
    * it is to a rider reading the row under each kind, and the `every-hit` riders that land on it
    * under their own kind are folded in. Every class keeps the `outcome` a row nobody watches has,
    * a hit, so the row's own statistics do not depend on which riders read it.
    */
-  const saveRowDraws = (sourceId: string): Draw[] =>
+  const saveRowDraws = (sourceId: string, mask: number): Draw[] =>
     classesOf(sourceId).map((slice, index) => {
+      // The riders that apply on this class: every uncapped one, and each capped one whose bit is
+      // set in `mask`, and only where the class lands under the rider's own kind.
+      const active = (perHitBySource.get(sourceId) ?? []).filter(
+        (payload) =>
+          (payload.bit === 0 || (mask & payload.bit) !== 0) && CLASS_LANDS[index][payload.landing ?? "fail"]
+      );
       let folded = slice;
-      for (const payload of perHitBySource.get(sourceId) ?? []) {
-        if (CLASS_LANDS[index][payload.landing ?? "fail"]) folded = folded.convolve(payload.hit, eps, true);
-      }
+      for (const payload of active) folded = folded.convolve(payload.hit, eps, true);
       return {
         outcome: "hit",
         matched: false,
         spends: false,
+        applies: active.flatMap((payload) => (payload.rider === -1 ? [] : [payload.rider])),
+        // A counter counts the landings of its riders: the classes that land under its kind.
+        bumps: (countersBySource.get(sourceId) ?? []).filter(
+          (counter, local) => (mask & (1 << local)) !== 0 && CLASS_LANDS[index][counterLanding[counter] ?? "fail"]
+        ),
+        fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
         slice: folded,
         byKind: CLASS_OUTCOMES[index],
       };
@@ -1655,7 +1943,6 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
    * state. It reads the same group codes and fire slots the walk keys on, so a
    * threshold never holds for a watched step that can no longer fire.
    */
-  const steps: Step[] = [];
   const laterLandings = substitutes.map((_, substitute) => {
     const watched = new Set(sourceIdsByNode[riderCount + substitute]);
     let lastWatched = -1;
@@ -1688,7 +1975,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
                         advanced(codes, step.updates, step.updateKinds, draw.outcome, draw.matched, draw.byKind),
                         step.releases
                       ),
-                      next
+                      withFolded(next, step.id, draw)
                     ))
               );
       }
@@ -1699,6 +1986,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   });
 
   const plainSelect = (): number => 0;
+  /** Per counter, the sequence positions of the steps that watch it. */
+  const watchPositions: number[][] = counterMax.map(() => []);
+  sequence.forEach((entry, position) => {
+    for (const counter of countersBySource.get(entry.id) ?? []) watchPositions[counter].push(position);
+  });
   sequence.forEach((entry, stepIndex) => {
     const rider = entry.rider === -1 ? null : riders[entry.rider];
     const slices =
@@ -1758,20 +2050,25 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const spendSlot =
       substitute === undefined ? -1 : (fireSlots.get(substituteIds[substitute]) as number);
 
+    /** The distinct capped counters watching this step's source: bit i of a cap mask is `capped[i]`'s with-rider flag. */
+    const capped = countersBySource.get(entry.id) ?? [];
+
     /**
      * The plain draws and, under a substitute, one variant per hold mask (variant 1 +
      * mask: bit i set ⇔ choice i is held; only a threshold policy has choices), for
-     * one roll context's slices.
+     * one roll context's slices, with the capped riders of `cap` folded in.
      */
-    const table = (
-      contextSlices: SourceSlices
-    ): { variants: StepVariant[]; select: (codes: readonly number[], fired: readonly FireMode[]) => number } => {
-      const plain = drawsFor(entry.id, contextSlices, null).fixed;
+    const tableAt = (
+      contextSlices: SourceSlices,
+      cap: number
+    ): { variants: StepVariant[]; select: Step["select"] } => {
+      const plain = drawsFor(entry.id, contextSlices, null, cap).fixed;
       if (substitute === undefined) return { variants: [plain], select: plainSelect };
       const { fixed, choices } = drawsFor(
         entry.id,
         contextSlices,
-        substitutes[substitute].policy ?? { kind: "always" }
+        substitutes[substitute].policy ?? { kind: "always" },
+        cap
       );
       const own: StepVariant[] = [plain];
       for (let mask = 0; mask < 1 << choices.length; mask++) {
@@ -1787,16 +2084,18 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         variants: own,
         // Hold an above-threshold landing only while a later watched step can still
         // land in the state holding leaves: this step's outcome recorded, the
-        // substitute unspent. Otherwise holding is worth nothing, so it spends.
+        // substitute unspent, and the fire slot of any per-source first hit this
+        // landing marks. Otherwise holding is worth nothing, so it spends.
         select: (codes, fired) => {
           if (fired[spendSlot] !== null) return 0;
+          const landed = withFolded(fired, entry.id);
           let mask = 0;
           choices.forEach((choice, bit) => {
             const after = released(
               advanced(codes, updates, updateKinds, choice.outcome, choice.matched),
               releasesAt[stepIndex]
             );
-            if (canLand(stepIndex + 1, after, fired)) {
+            if (canLand(stepIndex + 1, after, landed)) {
               mask |= 1 << bit;
             }
           });
@@ -1805,8 +2104,38 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       };
     };
 
+    /**
+     * One roll context's variants for every cap mask, block by block: variant `cap * size + i`
+     * is `tableAt`'s variant `i` with the riders of `cap` folded in. A block is chosen by which
+     * capped counters are still below their cap, so variant 0 (cap 0) applies no capped rider.
+     * An uncapped step is one block, `tableAt` itself.
+     */
+    const blocked = (
+      make: (cap: number) => { variants: StepVariant[]; select: Step["select"] }
+    ): { variants: StepVariant[]; select: Step["select"] } => {
+      const blocks = Array.from({ length: 1 << capped.length }, (_, cap) => make(cap));
+      if (blocks.length === 1) return blocks[0];
+      // Every block has the same hold choices (they read the base payload, not the fold), so
+      // block 0's variant count and choice rule serve for all.
+      const size = blocks[0].variants.length;
+      const local = blocks[0].select;
+      return {
+        variants: blocks.flatMap((block) => block.variants),
+        select: (codes, fired, flags, counts) => {
+          let cap = 0;
+          capped.forEach((counter, bit) => {
+            if (counts[counter] < counterMax[counter]) cap |= 1 << bit;
+          });
+          return cap * size + local(codes, fired, flags, counts);
+        },
+      };
+    };
+    const table = (contextSlices: SourceSlices): { variants: StepVariant[]; select: Step["select"] } =>
+      blocked((cap) => tableAt(contextSlices, cap));
+
     if (watchedKinds !== undefined) {
-      variants = [saveRowDraws(entry.id)];
+      // A watched save row has one set of class draws per cap mask, and no roll context or hold choice.
+      ({ variants, select } = blocked((cap) => ({ variants: [saveRowDraws(entry.id, cap)], select: plainSelect })));
     } else if (slices && readMask === 0) {
       ({ variants, select } = table(slices));
     } else if (slices) {
@@ -1871,14 +2200,14 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         offsets.push(variants.length);
         variants.push(...each.variants);
       }
-      select = (codes, fired, flags) => {
+      select = (codes, fired, flags, counts) => {
         const read = flags & readMask;
         let key = 0;
         for (let bit = 0; read >> bit !== 0; bit++) {
           if (read & (1 << bit)) key |= modifiersOfBit[bit];
         }
         const index = tableOfKey[key];
-        return offsets[index] + tables[index].select(codes, fired);
+        return offsets[index] + tables[index].select(codes, fired, flags, counts);
       };
     } else if (readMask !== 0) {
       fail(
@@ -1899,6 +2228,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         outcome: "none",
         matched: false,
         spends: false,
+        applies: [],
+        bumps: [],
+        fires: [],
         slice: PMF.missNone(eps).scaleMass(1 - chance),
       };
       variants = variants.map((variant) =>
@@ -1921,6 +2253,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       updates,
       updateKinds,
       releases: releasesAt[stepIndex],
+      settled: counterMax.map(
+        (max, counter) => max - watchPositions[counter].filter((position) => position > stepIndex).length
+      ),
       reads: rider ? slotOf(readsByRider.get(entry.rider) ?? -1) : -1,
       slot: rider ? (fireSlots.get(entry.id) as number) : -1,
       negates: negated,
@@ -1951,6 +2286,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     probes: new Map(
       probeIds.map((id, index): [string, number] => [id, slotOf(probeGroups[index])])
     ),
+    everyHitIds,
+    counterMax,
     groupLastReadStep: slotLastStep,
     conditionIds,
     flagLastReadStep: liveFlags.map((flag) => flag.lastRead),

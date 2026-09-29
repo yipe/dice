@@ -32,6 +32,15 @@ export type AttackTriggerOn =
  *   granted modifier — sees it where it happened. The exact model of "when you miss, you
  *   may reroll" (Unerring Accuracy, Lucky).
  * - `every-hit` — once per landing source, in that hit's mode (Hunter's Mark, Hex, Rage).
+ *   `max` caps it: the rider applies to at most `max` landings among `of`, in turn order
+ *   (Superiority dice, "the first three hits"). A positive integer; omit it for no cap.
+ *   `max: 1` IS `first-hit`: the plan lowers it, so `otherwise`, `not-fired`, transforms and
+ *   the numbers are exactly `onFirstHit`'s. `perSource` gives a payload that depends on the
+ *   landing source, on `first-hit` and `every-hit`. A capped or per-source rider that watches
+ *   an `any-miss` reroll is refused (`unsupported-trigger`): that reroll resolves after every
+ *   declared attack, so a cap would count its landing in the wrong order; use `first-miss`.
+ *   `fireProbability` of an every-hit rider is P(at least one landing);
+ *   `Turn.expectedApplications` reports the expected count for any rider.
  * - `dice-match` — at least one named source's own damage dice showed a duplicate
  *   value on hit or crit (Chromatic Orb's bounce). `of` is REQUIRED — unlike the
  *   other attack triggers, "every declared attack" has no coherent single meaning
@@ -59,9 +68,19 @@ export type AttackTriggerOn =
  * negating a set of riders has no unambiguous meaning, so the type does not offer it.
  */
 export type Trigger =
-  | { on: AttackTriggerOn; of?: readonly string[] }
+  | { on: Exclude<AttackTriggerOn, "first-hit" | "every-hit">; of?: readonly string[] }
+  | { on: "first-hit"; of?: readonly string[]; perSource?: PerSource }
+  | { on: "every-hit"; of?: readonly string[]; max?: number; perSource?: PerSource }
   | { on: "not-fired"; of: string }
   | { on: "dice-match"; of: readonly string[] };
+
+/**
+ * A payload that depends on which source landed: source id → the payload dealt when that
+ * source lands (its damage type, the target's scale for it). A source not listed deals the
+ * rider's own `damage`. Keys are attack or attack-shaped rider ids the rider watches; a tag
+ * is not accepted. Only `first-hit` and `every-hit` riders take one.
+ */
+export type PerSource = Readonly<Record<string, RiderPayload>>;
 
 /** Anything that can produce a PMF: `RollBuilder`, `AttackBuilder`, `SaveBuilder`, or a `PMF`. */
 export interface ToPMF {
@@ -108,6 +127,16 @@ export type RiderDamage = Damage | readonly Damage[];
  * `any-crit` never fires over one. Riders may read one save row under different kinds.
  */
 export type SaveLanding = "fail" | "damage";
+
+/**
+ * The payload a rider deals when one particular source lands: its own damage and, if the
+ * doubled-dice default is wrong for it, its own crit damage. Self-contained: a listed
+ * source never falls back to the rider's `critDamage`.
+ */
+export interface RiderPayload {
+  damage: RiderDamage;
+  critDamage?: RiderDamage;
+}
 
 /** Everything about a rider except what it does and when — see `Turn.onFirstHit`. */
 export interface RiderOptions {
@@ -296,6 +325,7 @@ export type TurnSpecErrorCode =
   | "not-an-attack"
   | "unused-crit-damage"
   | "too-many-groups"
+  | "too-many-counters"
   | "no-dice-descriptor"
   | "duplicate-substitute"
   | "attack-after-rider"
@@ -344,3 +374,14 @@ export class TurnSpecError extends Error {
  * goliath rogue/monk/paladin uses one).
  */
 export const MAX_TRIGGER_GROUPS = 9;
+
+/**
+ * How many capped `every-hit` riders may watch one attack, counting riders that share their
+ * sources and their `max` once (they apply on the same landings, so they share a counter).
+ *
+ * Every attack a capped rider watches carries a with-rider and a without-rider draw set per
+ * such rider, so the draws double with each one: a cost ceiling, not a modelling limit. Six
+ * counters means 64 draw sets on an attack; real builds use one or two (a maneuver die pool,
+ * a hex).
+ */
+export const MAX_CAPPED_COUNTERS = 6;
