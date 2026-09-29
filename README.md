@@ -180,8 +180,10 @@ RollBuilder (d20, d6, roll(), etc.)
 ```
 
 **A save's success.** `onSaveFailure(x)` alone deals nothing on a success, `.saveHalf()` deals `x` halved and
-rounded down, and `.onSaveSuccess(y)` deals `y`, a `RollBuilder` or a number, read the way `x` is. The last of
-`saveHalf()` and `onSaveSuccess()` wins. A success that deals damage is labelled `saveHalf` whatever it rolls,
+rounded down, and `.onSaveSuccess(y)` deals `y`. `onSaveSuccess` takes `onSaveFailure`'s arguments (a number, a
+string, a `RollBuilder`, `(count, die)`, `(count, sides)`, either with a modifier). `saveHalf()` and
+`onSaveSuccess()` are one or the other, like `halfOnMiss()` and `onMiss()`: the second throws. A success that
+deals damage is labelled `saveHalf` whatever it rolls,
 0 included, so `onSaveSuccess(0)` is not the plain save's `missNone`. `toExpression()` spells the success as
 `save (y)`, which `parse()` reads back to the same distribution:
 

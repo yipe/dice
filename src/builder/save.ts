@@ -33,7 +33,7 @@ export class SaveBuilder implements CheckBuilder {
    * @param check the DC check
    * @param failureEffect what a failed save deals; none means a failure deals 0
    * @param saveOutcome what a success deals: nothing (`"normal"`), the failure payload halved and floored
-   *   (`"half"`), or a payload of its own (a {@link RollBuilder}, see {@link onSaveSuccess})
+   *   (`"half"`), or a payload of its own (a {@link RollBuilder}, see {@link onSaveSuccess}); never both
    */
   constructor(
     readonly check: DCBuilder,
@@ -41,14 +41,25 @@ export class SaveBuilder implements CheckBuilder {
     private readonly saveOutcome: SaveOutcome | RollBuilder = "normal"
   ) {}
 
-  /** A success deals the failure payload halved, rounded down. Replaces any {@link onSaveSuccess} payload. */
+  /**
+   * A success deals the failure payload halved, rounded down. Mutually exclusive with {@link onSaveSuccess}, as
+   * `halfOnMiss()` is with `onMiss()`: the success can be one or the other, so this throws after `onSaveSuccess()`.
+   */
   saveHalf(): SaveBuilder {
+    if (this.saveOutcome instanceof RollBuilder) {
+      throw new Error(
+        "saveHalf() cannot be combined with onSaveSuccess(): the success branch can only be one or the other."
+      );
+    }
     return new SaveBuilder(this.check, this.failureEffect, "half");
   }
 
   /**
-   * A success deals `payload`, read the way the failure payload is (`onSaveFailure`). It replaces `saveHalf()`
-   * and an earlier `onSaveSuccess`, so the last call wins; without either, a success deals nothing.
+   * A success deals a payload of its own, where `saveHalf()` fixes it at half the failure. The arguments are
+   * `onSaveFailure`'s: a number, a string, a `RollBuilder`, `(count, die)`, `(count, sides)` or either with a
+   * modifier, read the way the failure payload is. A second `onSaveSuccess` replaces the first, as a second
+   * `onMiss` does; without either it and `saveHalf()`, a success deals nothing. It throws after `saveHalf()`
+   * (the success can be one or the other).
    *
    * The success is labelled `saveHalf`, as under `saveHalf()`: the label marks a success that still deals
    * damage, and `OutcomeType` has no other. A payload that rolls 0 keeps it, as a half of 1 does. A number is
@@ -56,8 +67,20 @@ export class SaveBuilder implements CheckBuilder {
    *
    * {@link toExpression} spells it `save (payload)`, the grammar's clause for a success payload.
    */
-  onSaveSuccess(payload: RollBuilder | number): SaveBuilder {
-    return new SaveBuilder(this.check, this.failureEffect, RollBuilder.fromArgs(payload));
+  onSaveSuccess(val: number): SaveBuilder;
+  onSaveSuccess(val: string): SaveBuilder;
+  onSaveSuccess(val: RollBuilder): SaveBuilder;
+  onSaveSuccess(count: number, die: RollBuilder): SaveBuilder;
+  onSaveSuccess(count: number, sides: number): SaveBuilder;
+  onSaveSuccess(count: number, die: RollBuilder, modifier: number): SaveBuilder;
+  onSaveSuccess(count: number, sides: number, modifier: number): SaveBuilder;
+  onSaveSuccess(...args: any[]): SaveBuilder {
+    if (this.saveOutcome === "half") {
+      throw new Error(
+        "onSaveSuccess() cannot be combined with saveHalf(): the success branch can only be one or the other."
+      );
+    }
+    return new SaveBuilder(this.check, this.failureEffect, RollBuilder.fromArgs(...args));
   }
 
   /**

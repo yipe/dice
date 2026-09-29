@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { d, d20, d4, d6, roll, SaveBuilder, turn } from "../src/builder";
 import { clearDCCache } from "../src/builder/dc";
-import { clearRollCache } from "../src/builder/roll";
+import type { DCBuilder } from "../src/builder/dc";
+import { clearRollCache, type RollBuilder } from "../src/builder/roll";
 import { clearSaveCache } from "../src/builder/save";
 import { parse } from "../src/parser/parser";
 import type { PMF } from "../src/pmf/pmf";
@@ -82,13 +83,6 @@ describe("a success that deals its own payload", () => {
       [...d4.toPMF()].map(([value, bin]) => [value, bin.p])
     );
   });
-
-  it("refuses a payload that is not a roll or a finite number", () => {
-    const base = check().onSaveFailure(failure());
-    expect(() => base.onSaveSuccess(Number.NaN)).toThrow();
-    expect(() => base.onSaveSuccess(Number.POSITIVE_INFINITY)).toThrow();
-    expect(() => base.onSaveSuccess(undefined as unknown as number)).toThrow();
-  });
 });
 
 describe("a check that cannot land on one side", () => {
@@ -122,15 +116,58 @@ describe("chaining", () => {
     expect(plain.toPMF().outcomeProbability("saveHalf")).toBe(0);
   });
 
-  it("the last call wins between onSaveSuccess and saveHalf, in either order", () => {
+  it("saveHalf() after onSaveSuccess() throws, and so does onSaveSuccess() after saveHalf(): one or the other", () => {
     const half = check().onSaveFailure(failure()).saveHalf();
     const payload = check().onSaveFailure(failure()).onSaveSuccess(d4);
-    expect(bins(payload.saveHalf().toPMF())).toEqual(bins(half.toPMF()));
-    expect(bins(half.onSaveSuccess(d4).toPMF())).toEqual(bins(payload.toPMF()));
+    expect(() => payload.saveHalf()).toThrow(
+      "saveHalf() cannot be combined with onSaveSuccess(): the success branch can only be one or the other."
+    );
+    expect(() => half.onSaveSuccess(d4)).toThrow(
+      "onSaveSuccess() cannot be combined with saveHalf(): the success branch can only be one or the other."
+    );
+    expect(() => half.onSaveSuccess(3)).toThrow("the success branch can only be one or the other");
+    expect(() => half.onSaveSuccess("1d4")).toThrow("the success branch can only be one or the other");
+    // The throw leaves the receiver as it was.
+    expect(bins(half.toPMF())).toEqual(bins(check().onSaveFailure(failure()).saveHalf().toPMF()));
+  });
+
+  it("repeats are fine: saveHalf() twice is one half, a second onSaveSuccess() replaces the first", () => {
+    const half = check().onSaveFailure(failure()).saveHalf();
+    expect(bins(half.saveHalf().toPMF())).toEqual(bins(half.toPMF()));
+    const payload = check().onSaveFailure(failure()).onSaveSuccess(d4);
     expect(bins(payload.onSaveSuccess(d6).toPMF())).toEqual(
       bins(check().onSaveFailure(failure()).onSaveSuccess(d6).toPMF())
     );
-    expect(payload.saveHalf().toExpression()).toBe(half.toExpression());
+  });
+});
+
+describe("onSaveSuccess takes onSaveFailure's arguments", () => {
+  const reference = (build: (dc: DCBuilder) => SaveBuilder) => bins(build(check()).toPMF());
+
+  it("a number, a string, a RollBuilder, (count, die), (count, sides), and either with a modifier", () => {
+    const cases: Array<[string, SaveBuilder, SaveBuilder]> = [
+      ["number", check().onSaveFailure(failure()).onSaveSuccess(3), check().onSaveFailure(failure()).onSaveSuccess(roll.flat(3))],
+      ["string", check().onSaveFailure(failure()).onSaveSuccess("1d4"), check().onSaveFailure(failure()).onSaveSuccess(d("1d4"))],
+      ["RollBuilder", check().onSaveFailure(failure()).onSaveSuccess(d4), check().onSaveFailure(failure()).onSaveSuccess(roll(1, d4))],
+      ["(count, die)", check().onSaveFailure(failure()).onSaveSuccess(2, d6), check().onSaveFailure(failure()).onSaveSuccess(roll(2, d6))],
+      ["(count, sides)", check().onSaveFailure(failure()).onSaveSuccess(2, 6), check().onSaveFailure(failure()).onSaveSuccess(roll(2, d6))],
+      ["(count, die, modifier)", check().onSaveFailure(failure()).onSaveSuccess(2, d6, 1), check().onSaveFailure(failure()).onSaveSuccess(roll(2, d6).plus(1))],
+      ["(count, sides, modifier)", check().onSaveFailure(failure()).onSaveSuccess(2, 6, 1), check().onSaveFailure(failure()).onSaveSuccess(roll(2, d6).plus(1))],
+    ];
+    for (const [name, actual, expected] of cases) {
+      expect(bins(actual.toPMF()), name).toEqual(bins(expected.toPMF()));
+    }
+    // The same arguments as onSaveFailure reads: (2, 6, 1) is 2d6 + 1, mean 8.
+    expect(check().onSaveFailure(failure()).onSaveSuccess(2, 6, 1).resolve().saveSuccess.mean()).toBeCloseTo(8, 12);
+    expect(reference((dc) => dc.onSaveFailure(2, 6, 1))).toEqual(reference((dc) => dc.onSaveFailure(roll(2, d6).plus(1))));
+  });
+
+  it("refuses the arguments onSaveFailure refuses", () => {
+    const base = check().onSaveFailure(failure());
+    expect(() => base.onSaveSuccess(Number.NaN)).toThrow();
+    expect(() => base.onSaveSuccess(Number.POSITIVE_INFINITY)).toThrow();
+    expect(() => (base.onSaveSuccess as (...args: unknown[]) => SaveBuilder)("x", 6)).toThrow();
+    expect(() => (base.onSaveSuccess as (...args: unknown[]) => SaveBuilder)(1, 2, 3, 4)).toThrow();
   });
 });
 
@@ -209,8 +246,10 @@ describe("resolved-save cache", () => {
     clearRollCache();
   });
 
-  const withSuccess = (payload: Parameters<SaveBuilder["onSaveSuccess"]>[0]) =>
-    check().onSaveFailure(failure()).onSaveSuccess(payload);
+  const withSuccess = (payload: RollBuilder | number) =>
+    typeof payload === "number"
+      ? check().onSaveFailure(failure()).onSaveSuccess(payload)
+      : check().onSaveFailure(failure()).onSaveSuccess(payload);
 
   it("returns the SAME cached PMF for a freshly rebuilt identical save", () => {
     expect(withSuccess(d4).toPMF()).toBe(withSuccess(d4).toPMF());

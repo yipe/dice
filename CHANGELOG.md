@@ -22,13 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Mixture` is exported from `@yipe/dice/builder`** (the root already exported it), the same class
   as the root's.
-- **`SaveBuilder.onSaveSuccess(payload: RollBuilder | number)`** (chain it after `onSaveFailure`): a
-  success deals a payload of its own, where `saveHalf()` fixes it at `floor(failure / 2)`. The payload
-  is read the way the failure payload is, and a number is a flat payload. The success keeps the label
-  `saveHalf`, whatever the payload rolls (a flat `0` included: `onSaveSuccess(0)` is not the plain
-  save's `missNone`); `OutcomeType` has no other label for a success that deals damage. The last of
-  `saveHalf()` and `onSaveSuccess()` wins. `resolve().saveSuccess` is the payload's PMF, and
-  `onSaveSuccess(failure.half())` resolves bit for bit to `saveHalf()`. The `SaveBuilder`
+- **`SaveBuilder.onSaveSuccess(...)`** (chain it after `onSaveFailure`): a success deals a payload of its
+  own, where `saveHalf()` fixes it at `floor(failure / 2)`. It takes `DCBuilder.onSaveFailure`'s overloads
+  (a number, a string, a `RollBuilder`, `(count, die)`, `(count, sides)`, either with a modifier), read the
+  way the failure payload is. The success keeps the label `saveHalf`, whatever the payload rolls (a flat
+  `0` included: `onSaveSuccess(0)` is not the plain save's `missNone`); `OutcomeType` has no other label
+  for a success that deals damage. `saveHalf()` and `onSaveSuccess()` are one or the other, as
+  `halfOnMiss()` and `onMiss()` are: the second throws (`saveHalf()` twice, or `onSaveSuccess()` twice,
+  is fine, the second `onSaveSuccess` replacing the first). `resolve().saveSuccess` is the payload's PMF,
+  and `onSaveSuccess(failure.half())` resolves bit for bit to `saveHalf()`. The `SaveBuilder`
   constructor's third argument now also accepts the success payload (a `RollBuilder`) beside
   `"normal"` and `"half"`.
 - **`toExpression()` prints a success payload** as `save (payload)`, a clause the parser already reads:
