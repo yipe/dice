@@ -5,12 +5,13 @@ import type { ConditionOptions, Grant, Transform } from "./effects";
 import { grantSpec, isGrant, isTransform, substituteFields } from "./effects";
 import type { FireMode, TurnPlan } from "./plan";
 import { buildPlan, fireMode, grantApplies, released } from "./plan";
-import { advance, FIRST_NONE, START_CODE } from "./state";
+import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
 import type {
   Attack,
   AttackOptions,
   ConditionSpec,
   Damage,
+  ProbeSpec,
   Rider,
   RiderDamage,
   RiderOptions,
@@ -27,6 +28,7 @@ interface TurnState {
   riders: readonly Rider[];
   substitutes: readonly SubstituteSpec[];
   conditions: readonly ConditionSpec[];
+  observe: readonly ProbeSpec[];
   /**
    * A chaining call defaulted some rider's, substitute's or condition's `of`.
    * Appending an attack now would leave it out of that set silently, so it throws
@@ -69,6 +71,63 @@ export function inspectTurn(t: Turn): { groupCount: number; stateCounts: readonl
 }
 
 /**
+ * What a walk state carries for the damage dealt so far. The full walk carries a PMF; a walk
+ * that reads probabilities alone carries only the mass of the paths a state stands for, so no
+ * damage arithmetic runs at all.
+ */
+interface Ledger<D> {
+  start: D;
+  mass(damage: D): number;
+  add(a: D, b: D): D;
+  scale(damage: D, factor: number): D;
+  /** `damage` with a draw's sub-mass `slice` (or a pure-damage payload) folded in. */
+  convolve(damage: D, slice: PMF): D;
+}
+
+function pmfLedger(eps: number): Ledger<PMF> {
+  return {
+    start: PMF.delta(0, eps),
+    mass: (damage) => damage.mass(),
+    add: (a, b) => a.add(b),
+    scale: (damage, factor) => damage.scaleMass(factor),
+    convolve: (damage, slice) => damage.convolve(slice, eps, true),
+  };
+}
+
+const massLedger: Ledger<number> = {
+  start: 1,
+  mass: (damage) => damage,
+  add: (a, b) => a + b,
+  scale: (damage, factor) => damage * factor,
+  convolve: (damage, slice) => damage * slice.mass(),
+};
+
+/**
+ * The walk's state: the group codes, the damage so far, which riders fired, the flag word and
+ * the per-condition applied mass.
+ */
+interface WalkState<D> {
+  codes: number[];
+  damage: D;
+  fired: FireMode[];
+  flags: number;
+  /**
+   * Per condition, the part of `damage`'s mass in which it was applied at least once
+   * while a later step read it. Carried as mass rather than as a key bit: whether
+   * it was applied changes no later transition, so it must not split states.
+   */
+  applied: number[];
+}
+
+/**
+ * Whether a walk's terminal masses (which are unconditional probabilities, summing to 1)
+ * drift from 1 by more than `eps` and so need dividing through. With `eps` 0, any drift does.
+ */
+function needsNormalizing(totalMass: number, eps: number): boolean {
+  return Math.abs(totalMass - 1) > eps && totalMass > 0;
+}
+
+/**
  * A turn of attacks plus conditional damage riders, resolved to one **exact**
  * joint distribution.
  *
@@ -92,6 +151,10 @@ export class Turn {
     fireMass: ReadonlyMap<string, number>;
     stepStats: ReadonlyMap<string, StepStats>;
   };
+  /** Firing masses from a walk that carried no damage; see {@link Turn.fireProbability}. */
+  private massed?: ReadonlyMap<string, number>;
+  /** The plan without probes, built on first use when there are probes (see {@link Turn.resolve}). */
+  private plainPlan?: TurnPlan;
 
   private constructor(state: TurnState, eps: number) {
     // Copied, because a caller can hand in an array they still hold and keep
@@ -104,6 +167,7 @@ export class Turn {
       riders: [...state.riders],
       substitutes: [...state.substitutes],
       conditions: [...state.conditions],
+      observe: [...state.observe],
     };
     this.eps = eps;
     // Built here, not on first use, so every way of constructing a Turn
@@ -125,13 +189,14 @@ export class Turn {
     const riders = spec.riders ?? [];
     const substitutes = spec.substitutes ?? [];
     const conditions = spec.conditions ?? [];
+    const observe = spec.observe ?? [];
     const last: TurnState["last"] = riders.length
       ? { kind: "rider", index: riders.length - 1 }
       : substitutes.length
         ? { kind: "substitute", index: substitutes.length - 1 }
         : null;
     return new Turn(
-      { attacks: spec.attacks, riders, substitutes, conditions, defaulted: false, last },
+      { attacks: spec.attacks, riders, substitutes, conditions, observe, defaulted: false, last },
       eps
     );
   }
@@ -258,6 +323,13 @@ export class Turn {
         "A grant deals no damage, so critDamage has nothing to apply to."
       );
     }
+    if (damage.length === 0 && riderOptions.landing !== undefined) {
+      throw new TurnSpecError(
+        "unsupported-trigger",
+        riderOptions.id ?? "",
+        "A grant is a condition, which reads attack rolls and cannot watch a save row; landing says how a damage rider reads one."
+      );
+    }
 
     const of = riderOptions.of ?? this.defaultOf();
     // A save's P(fail): the DC check's PMF puts it at 1. `vsAC` leaves it alone —
@@ -311,6 +383,13 @@ export class Turn {
         "unused-crit-damage",
         options.id ?? "",
         "A transform rewrites the attack's own payload, so critDamage has nothing to apply to."
+      );
+    }
+    if (options.landing !== undefined) {
+      throw new TurnSpecError(
+        "unsupported-trigger",
+        options.id ?? "",
+        "A transform rewrites the attack's own payload, so a landing kind (how a rider reads a save row) has nothing to apply to."
       );
     }
     const substitute: SubstituteSpec = {
@@ -455,6 +534,35 @@ export class Turn {
   }
 
   /**
+   * Adds a probe: a probability the walk reports without adding any damage, read with
+   * {@link Turn.fireProbability} under `probe.id` (see {@link ProbeSpec}). An omitted `of` is
+   * filled in here like a rider's: the attacks declared so far, plus any attack-shaped
+   * `any-miss` / `first-miss` rider declared so far.
+   *
+   * A probe keeps its source set live to the end of the walk, so it counts against
+   * {@link MAX_TRIGGER_GROUPS} for the whole turn.
+   */
+  observe(probe: ProbeSpec): Turn {
+    return this.with({
+      observe: [
+        ...this.state.observe,
+        probe.of === undefined ? { ...probe, of: this.defaultOf() } : probe,
+      ],
+      defaulted: this.state.defaulted || probe.of === undefined,
+    });
+  }
+
+  /**
+   * P(at least one of `of` crit), reported as `fireProbability(id)`: `turn(rows).observeAnyCrit("crit")`.
+   * It comes from the walk itself, so a `critOnHit` grant, a reroll, a substitute and an attack's
+   * `chance` are all accounted for, and it adds no damage. Reading only probes never builds a damage
+   * distribution.
+   */
+  observeAnyCrit(id: string, options: { of?: readonly string[] } = {}): Turn {
+    return this.observe({ ...options, id, on: "any-crit" });
+  }
+
+  /**
    * The same turn against a target with armor class `ac`: every attack with an
    * AC — declared, or carried by a rider (a reroll, a bonus attack) — is rebuilt
    * through `withCheck`. Saves, attacks with no AC to rebind, and bare PMFs pass
@@ -567,27 +675,45 @@ export class Turn {
   }
 
   /**
+   * Probe ids in declaration order, including the `probe 1`, … defaults.
+   * {@link Turn.fireProbability} accepts these too.
+   */
+  get probeIds(): readonly string[] {
+    return this.plan.probeIds;
+  }
+
+  /**
    * P(this rider fired). For an `every-hit` rider it is P(at least one source
    * hit), since that rider can fire more than once in a turn. For a substitute it
    * is P(it was spent). For a condition it is P(its grants were applied at least
    * once where a later attack roll reads them) — on the fail branch of its save,
    * not the `onSave` one. Two attacks with "a hit gives the next attack
    * advantage" give P(attack 1 landed), since nothing reads attack 2's grant.
+   * For a probe it is the probability the probe reports: `any-crit` is P(at
+   * least one source crit).
    *
-   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider, substitute or
-   * condition — attack ids included, since attacks always happen and have no
-   * firing probability.
+   * A probe is read from a walk that carries no damage distribution, only masses,
+   * so it costs no damage arithmetic; every other id is read from the full walk,
+   * bit for bit as before. The two agree to rounding, and exactly as a probe's
+   * value does not depend on which was resolved first, neither does anyone else's.
+   * With a pruning `eps` above 0 the probe's masses ignore the pruned damage bins.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider, substitute,
+   * condition or probe (attack ids included, since attacks always happen and
+   * have no firing probability).
    */
   fireProbability(id: string): number {
-    const mass = this.resolve().fireMass.get(id);
+    const masses = this.plan.probes.has(id) ? this.resolveMasses() : this.resolve().fireMass;
+    const mass = masses.get(id);
     if (mass === undefined) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not a rider, substitute or condition in this turn. Riders: ${[
+        `"${id}" is not a rider, substitute, condition or probe in this turn. Riders: ${[
           ...this.plan.riderIds,
           ...this.plan.substituteIds,
           ...this.plan.conditionIds,
+          ...this.plan.probeIds,
         ]
           .map((each) => `"${each}"`)
           .join(", ")}.`
@@ -625,6 +751,12 @@ export class Turn {
     return { ...stats, live: { ...stats.live } };
   }
 
+  private get walkPlan(): TurnPlan {
+    if (this.state.observe.length === 0) return this.plan;
+    this.plainPlan ??= buildPlan({ ...this.state, observe: [] }, this.eps);
+    return this.plainPlan;
+  }
+
   private resolve(): {
     pmf: PMF;
     fireMass: ReadonlyMap<string, number>;
@@ -632,7 +764,150 @@ export class Turn {
   } {
     if (this.resolved) return this.resolved;
 
-    const plan = this.plan;
+    // The damage walks a plan without the probes, so a probe's group never splits its states:
+    // what `pmf`, every other id and `stepStats` report is what the turn without probes reports.
+    const plan = this.walkPlan;
+    const eps = this.eps;
+    const ledger = pmfLedger(eps);
+    const { states, stateCounts, rolled, hitMass, critMass, liveAdvantage, liveDisadvantage, liveCritOnHit } =
+      this.walk(ledger, plan);
+    inspections.set(this, { plan: this.plan, stateCounts });
+
+    // Collapse: sum every terminal state, and tally per-rider firing mass.
+    const fireMass = this.tally(states, ledger, plan);
+    let total: PMF | undefined;
+    for (const state of states.values()) {
+      total = total ? total.add(state.damage) : state.damage;
+    }
+
+    const pmf = total ?? PMF.delta(0, eps);
+    const totalMass = pmf.mass();
+    const normalizing = needsNormalizing(totalMass, eps);
+
+    // Firing masses are accumulated in the same unnormalized units as the
+    // terminal states, so they have to follow the distribution through
+    // normalization or `fireProbability` stops agreeing with `pmf`. Reachable
+    // whenever a caller supplies a source PMF whose own mass is not 1.
+    if (normalizing) {
+      for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
+    }
+
+    // Per-step stats live in the same mass units, so they follow the same
+    // normalization. Only attack-shaped steps (a declared attack, or a rider that
+    // rolls its own attack — anything with variants) are reportable. A rider that
+    // fires at several positions in the rail (a `first-miss` reroll watching many
+    // attacks) has one step per position under one id; those steps are mutually
+    // exclusive, so their masses sum.
+    const scale = (mass: number): number => (normalizing ? mass / totalMass : mass);
+    const stepStats = new Map<string, StepStats>();
+    plan.steps.forEach((step, stepIndex) => {
+      if (step.variants.length === 0) return;
+      const next: StepStats = {
+        rolled: scale(rolled[stepIndex]),
+        hit: scale(hitMass[stepIndex]),
+        crit: scale(critMass[stepIndex]),
+        live: {
+          advantage: scale(liveAdvantage[stepIndex]),
+          disadvantage: scale(liveDisadvantage[stepIndex]),
+          critOnHit: scale(liveCritOnHit[stepIndex]),
+        },
+      };
+      const existing = stepStats.get(step.id);
+      if (existing === undefined) {
+        stepStats.set(step.id, next);
+      } else {
+        stepStats.set(step.id, {
+          rolled: existing.rolled + next.rolled,
+          hit: existing.hit + next.hit,
+          crit: existing.crit + next.crit,
+          live: {
+            advantage: existing.live.advantage + next.live.advantage,
+            disadvantage: existing.live.disadvantage + next.live.disadvantage,
+            critOnHit: existing.live.critOnHit + next.live.critOnHit,
+          },
+        });
+      }
+    });
+
+    this.resolved = {
+      pmf: normalizing ? pmf.normalize() : pmf,
+      fireMass,
+      stepStats,
+    };
+    return this.resolved;
+  }
+
+  /**
+   * The firing masses, from a walk that carries only mass in place of a damage PMF: the same
+   * states and transitions as {@link Turn.resolve}, none of its convolutions. What
+   * {@link Turn.fireProbability} reads for a probe.
+   */
+  private resolveMasses(): ReadonlyMap<string, number> {
+    if (this.massed) return this.massed;
+    const { states } = this.walk(massLedger, this.plan);
+    const fireMass = this.tally(states, massLedger, this.plan);
+    let totalMass = 0;
+    for (const state of states.values()) totalMass += state.damage;
+    if (needsNormalizing(totalMass, this.eps)) {
+      for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
+    }
+    this.massed = fireMass;
+    return fireMass;
+  }
+
+  /** Every rider, substitute, condition and probe's unnormalized firing mass over the terminal `states`. */
+  private tally<D>(
+    states: ReadonlyMap<string, WalkState<D>>,
+    ledger: Ledger<D>,
+    plan: TurnPlan
+  ): Map<string, number> {
+    const fireMass = new Map<string, number>();
+    for (const id of plan.fireSlots.keys()) fireMass.set(id, 0);
+    for (const id of plan.perHitGroups.keys()) fireMass.set(id, 0);
+    for (const id of plan.probes.keys()) fireMass.set(id, 0);
+    for (const id of plan.conditionIds) fireMass.set(id, 0);
+
+    for (const state of states.values()) {
+      const mass = ledger.mass(state.damage);
+      for (const [id, slot] of plan.fireSlots) {
+        if (state.fired[slot] !== null) {
+          fireMass.set(id, (fireMass.get(id) as number) + mass);
+        }
+      }
+      // `every-hit` riders have no step: they fired iff something landed.
+      for (const [id, group] of plan.perHitGroups) {
+        if (((state.codes[group] >> 2) & 0b11) !== FIRST_NONE) {
+          fireMass.set(id, (fireMass.get(id) as number) + mass);
+        }
+      }
+      // A probe's group is live to the end of the walk, so its code is still the group's own.
+      for (const [id, group] of plan.probes) {
+        // A probe over sources that cannot crit has no group and reports 0.
+        if (group !== -1 && (state.codes[group] & CRIT_BIT) !== 0) {
+          fireMass.set(id, (fireMass.get(id) as number) + mass);
+        }
+      }
+      plan.conditionIds.forEach((id, c) => {
+        fireMass.set(id, (fireMass.get(id) as number) + state.applied[c]);
+      });
+    }
+    return fireMass;
+  }
+
+  /**
+   * Walks the plan's steps, carrying `ledger`'s damage in each state, and returns the terminal
+   * states with the per-step statistics, in the same unnormalized mass units as the states.
+   */
+  private walk<D>(ledger: Ledger<D>, plan: TurnPlan): {
+    states: Map<string, WalkState<D>>;
+    stateCounts: number[];
+    rolled: number[];
+    hitMass: number[];
+    critMass: number[];
+    liveAdvantage: number[];
+    liveDisadvantage: number[];
+    liveCritOnHit: number[];
+  } {
     const eps = this.eps;
     const width = plan.groupCount;
     const conditionCount = plan.conditionIds.length;
@@ -648,24 +923,11 @@ export class Turn {
     const liveDisadvantage = new Array<number>(plan.steps.length).fill(0);
     const liveCritOnHit = new Array<number>(plan.steps.length).fill(0);
 
-    // state key -> { codes, accumulated sub-mass damage, per-slot firing, flag word,
-    // per-condition applied mass }
-    type State = {
-      codes: number[];
-      pmf: PMF;
-      fired: FireMode[];
-      flags: number;
-      /**
-       * Per condition, the part of `pmf`'s mass in which it was applied at least once
-       * while a later step read it. Carried as mass rather than as a key bit: whether
-       * it was applied changes no later transition, so it must not split states.
-       */
-      applied: number[];
-    };
+    type State = WalkState<D>;
 
     const start: State = {
       codes: new Array<number>(width).fill(START_CODE),
-      pmf: PMF.delta(0, eps),
+      damage: ledger.start,
       fired: new Array<FireMode>(plan.slotCount).fill(null),
       flags: 0,
       applied: new Array<number>(conditionCount).fill(0),
@@ -712,7 +974,7 @@ export class Turn {
           String.fromCharCode(flags);
         const existing = next.get(key);
         if (existing) {
-          existing.pmf = existing.pmf.add(state.pmf);
+          existing.damage = ledger.add(existing.damage, state.damage);
           if (conditionCount) {
             existing.applied = existing.applied.map((mass, c) => mass + state.applied[c]);
           }
@@ -729,7 +991,7 @@ export class Turn {
           continue;
         }
 
-        const stateMass = state.pmf.mass();
+        const stateMass = ledger.mass(state.damage);
         rolled[stepIndex] += stateMass;
         if (step.readAdvantage !== 0 && (state.flags & step.readAdvantage) !== 0) {
           liveAdvantage[stepIndex] += stateMass;
@@ -751,11 +1013,7 @@ export class Turn {
           const payload = step.damage as { hit: PMF; crit: PMF };
           merge({
             ...state,
-            pmf: state.pmf.convolve(
-              mode === "crit" ? payload.crit : payload.hit,
-              eps,
-              true
-            ),
+            damage: ledger.convolve(state.damage, mode === "crit" ? payload.crit : payload.hit),
             fired,
           });
           continue;
@@ -766,7 +1024,7 @@ export class Turn {
         // apply this outcome's grants.
         const draws = step.variants[step.select(state.codes, fired, state.flags)];
         const flags = state.flags & ~step.consumes;
-        for (const { outcome, matched, spends, slice } of draws) {
+        for (const { outcome, matched, spends, slice, byKind } of draws) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
 
@@ -779,19 +1037,24 @@ export class Turn {
           }
 
           const codes = [...state.codes];
-          for (const group of step.updates) {
-            codes[group] = advance(codes[group], outcome, matched);
-          }
+          step.updates.forEach((group, index) => {
+            const kind = step.updateKinds[index];
+            codes[group] = advance(
+              codes[group],
+              kind === null || byKind === undefined ? outcome : byKind[kind],
+              matched
+            );
+          });
           let drawFired = fired;
           if (spends) {
             drawFired = [...fired];
             drawFired[step.spendSlot] = outcome === "crit" ? "crit" : "hit";
           }
-          const pmf = state.pmf.convolve(slice, eps, true);
+          const damage = ledger.convolve(state.damage, slice);
           if (step.grants.length === 0) {
             merge({
               codes,
-              pmf,
+              damage,
               fired: drawFired,
               flags,
               applied: conditionCount ? state.applied.map((mass) => mass * sliceMass) : state.applied,
@@ -819,7 +1082,7 @@ export class Turn {
             const scale = sliceMass * part.share;
             merge({
               codes,
-              pmf: part.share === 1 ? pmf : pmf.scaleMass(part.share),
+              damage: part.share === 1 ? damage : ledger.scale(damage, part.share),
               fired: drawFired,
               flags: part.flags,
               applied: state.applied.map((mass, c) =>
@@ -833,89 +1096,8 @@ export class Turn {
       states = next;
       stateCounts.push(next.size);
     });
-    inspections.set(this, { plan, stateCounts });
 
-    // Collapse: sum every terminal state, and tally per-rider firing mass.
-    const fireMass = new Map<string, number>();
-    for (const id of plan.fireSlots.keys()) fireMass.set(id, 0);
-    for (const id of plan.perHitGroups.keys()) fireMass.set(id, 0);
-    for (const id of plan.conditionIds) fireMass.set(id, 0);
-
-    let total: PMF | undefined;
-    for (const state of states.values()) {
-      total = total ? total.add(state.pmf) : state.pmf;
-      const mass = state.pmf.mass();
-      for (const [id, slot] of plan.fireSlots) {
-        if (state.fired[slot] !== null) {
-          fireMass.set(id, (fireMass.get(id) as number) + mass);
-        }
-      }
-      // `every-hit` riders have no step: they fired iff something landed.
-      for (const [id, group] of plan.perHitGroups) {
-        if (((state.codes[group] >> 2) & 0b11) !== FIRST_NONE) {
-          fireMass.set(id, (fireMass.get(id) as number) + mass);
-        }
-      }
-      plan.conditionIds.forEach((id, c) => {
-        fireMass.set(id, (fireMass.get(id) as number) + state.applied[c]);
-      });
-    }
-
-    const pmf = total ?? PMF.delta(0, eps);
-    const totalMass = pmf.mass();
-    const needsNormalizing = Math.abs(totalMass - 1) > eps && totalMass > 0;
-
-    // Firing masses are accumulated in the same unnormalized units as the
-    // terminal states, so they have to follow the distribution through
-    // normalization or `fireProbability` stops agreeing with `pmf`. Reachable
-    // whenever a caller supplies a source PMF whose own mass is not 1.
-    if (needsNormalizing) {
-      for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
-    }
-
-    // Per-step stats live in the same mass units, so they follow the same
-    // normalization. Only attack-shaped steps (a declared attack, or a rider that
-    // rolls its own attack — anything with variants) are reportable. A rider that
-    // fires at several positions in the rail (a `first-miss` reroll watching many
-    // attacks) has one step per position under one id; those steps are mutually
-    // exclusive, so their masses sum.
-    const scale = (mass: number): number => (needsNormalizing ? mass / totalMass : mass);
-    const stepStats = new Map<string, StepStats>();
-    plan.steps.forEach((step, stepIndex) => {
-      if (step.variants.length === 0) return;
-      const next: StepStats = {
-        rolled: scale(rolled[stepIndex]),
-        hit: scale(hitMass[stepIndex]),
-        crit: scale(critMass[stepIndex]),
-        live: {
-          advantage: scale(liveAdvantage[stepIndex]),
-          disadvantage: scale(liveDisadvantage[stepIndex]),
-          critOnHit: scale(liveCritOnHit[stepIndex]),
-        },
-      };
-      const existing = stepStats.get(step.id);
-      if (existing === undefined) {
-        stepStats.set(step.id, next);
-      } else {
-        stepStats.set(step.id, {
-          rolled: existing.rolled + next.rolled,
-          hit: existing.hit + next.hit,
-          crit: existing.crit + next.crit,
-          live: {
-            advantage: existing.live.advantage + next.live.advantage,
-            disadvantage: existing.live.disadvantage + next.live.disadvantage,
-            critOnHit: existing.live.critOnHit + next.live.critOnHit,
-          },
-        });
-      }
-    });
-
-    this.resolved = {
-      pmf: needsNormalizing ? pmf.normalize() : pmf,
-      fireMass,
-      stepStats,
-    };
-    return this.resolved;
+    return { states, stateCounts, rolled, hitMass, critMass, liveAdvantage, liveDisadvantage, liveCritOnHit };
   }
 }
 

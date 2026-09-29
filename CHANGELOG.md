@@ -95,6 +95,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diceMatchInfo()` returns no descriptor for such an attack.
 - Existing behaviour is unchanged bit for bit: a digest of attack, pool, keep, reroll and turn PMFs taken on
   origin/main (after #20) still matches.
+- **Probes: `Turn.observeAnyCrit(id, { of })`, `Turn.observe(probe)` and `TurnSpec.observe`** report
+  P(at least one of `of` crit) through `fireProbability(id)` and add no damage. A row that cannot crit
+  (a save, a flat payload) is skipped, so the default `of` works on a mixed turn, and a probe with no
+  source that can crit reports 0. The probe is
+  JSON-safe (`{ id?, on: "any-crit", of? }`, `id` defaulting to `probe 1`, `probe 2`, ...; `of` defaults
+  like a condition's: every attack plus every attack-shaped `any-miss` / `first-miss` rider), and
+  `Turn.probeIds` lists them. The value comes from the walk, so a `critOnHit` grant, a reroll, a
+  substitute and an attack's `chance` are counted, and it equals the `fireProbability` of a
+  zero-damage `onAnyCrit` rider over the same sources to 1e-12 (the only route before, at the cost of a
+  rider slot). A probe keeps its source group live to the end of the walk, so it counts against
+  `MAX_TRIGGER_GROUPS` for the whole turn and shares the group a rider over the same sources has. It
+  shares the id space with attacks, riders, substitutes and conditions (`duplicate-id`), and no `of` can
+  name it (`not-an-attack`). Any other `on` is `unsupported-trigger`. `vsAC` keeps a turn's probes.
+  Adding a probe leaves `pmf`, every other id's `fireProbability` and `stepStats` exactly as they were:
+  the damage walks the turn without its probes.
+- **`fireProbability(probeId)` reads a walk that carries no damage distribution.** The states hold only
+  the mass of the paths they stand for, so no PMF is convolved, added or scaled: a 7-attack turn with
+  Sneak Attack, Hunter's Mark, a smite, a next-attack grant and a reroll reads a probe in about 0.3ms
+  against 108ms for `mean()`. Any other id, `pmf`, `mean()`, `toQuery()` and `stepStats` still read the
+  full walk, bit for bit as before, and a probe's value does not depend on whether the damage was
+  resolved first. With a pruning `eps` above 0 a probe's masses ignore the pruned damage bins.
+- **`landing: "fail" | "damage"` on a rider (`RiderOptions.landing`, `Rider.landing`)** lets a rider watch
+  a save row. A save has no hit or crit, so a rider naming one was `not-an-attack`; with `landing` the
+  rider reads the save's outcome: `"fail"` counts a failed save as a hit (its label alone, whatever
+  it dealt), `"damage"` counts a failed save or a `saveHalf` pass that dealt damage above 0 (the "when
+  you deal damage" reading), and everything else is a miss (so `first-miss` and `any-miss` fire on
+  it). A save never crits. It applies to the save rows among the rider's `of` and is ignored for
+  attack sources, which land on a hit or a crit as before. It works for every rider trigger except
+  `not-fired` (which watches a rider, not attacks). Riders may read one save row under different kinds:
+  the row's step draws four classes (failed with damage, failed for nothing, passed with damage,
+  everything else) and each group of riders advances by the class its own kind lands, so a `"fail"` and
+  a `"damage"` feature over one save are both exact. A save that cannot fail, or cannot pass, reads
+  correctly. A save row's own `stepStats` do not depend on the riders that watch it. A
+  grant, a transform or an unknown kind carrying `landing` throws `unsupported-trigger`. Without
+  `landing` a save row is `not-an-attack` as before, and the message now says how to watch it. Only a
+  declared save row can be watched, not a save that a rider carries as its damage.
+- New types `ProbeSpec` and `SaveLanding`.
 
 ### Changed
 
