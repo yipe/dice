@@ -374,7 +374,7 @@ PMF
 │       └── attr: {...}        (damage attribution)
 ├── epsilon: number            (probability threshold)
 ├── normalized: boolean        (whether PMF sums to 1.0)
-└── identifier: string         (cache key / debug name)
+└── identifier: string         (debug name, `pmf#…` from the content unless given; never a cache key)
 ```
 
 The two entries (`@yipe/dice` and `@yipe/dice/builder`) share one `PMF` class, one `Mixture` class and one
