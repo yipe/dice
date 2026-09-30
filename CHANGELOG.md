@@ -5,6 +5,48 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A dice-match descriptor over groups of dice with the same faces.** `diceMatchInfo()` (and so a
+  `dice-match` rider and `bounce()`) needed a payload with exactly one die group; `roll(1, d6).plus(roll(1, d6))`
+  had no descriptor while `roll(2, d6)` did. Groups whose dice show the same faces with the same odds
+  are now one pool (`roll(2, d8).plus(roll(1, d8))` is 3d8, on the hit and on the auto-doubled crit),
+  and a group with no dice adds none. The descriptor is the one the single group would have given, bit
+  for bit. Groups of different kinds (a different die, or the same die with another `minimum` or
+  `reroll`) are still refused: which kind must match is not defined (`2d8 + 1d6`).
+- **A dice-match descriptor over `rerollUpTo` pools.** An attack with `rerollDamageUpTo(k, { rolls })`, and a
+  payload made by `rollBuilder.rerollUpTo(k, { rolls })`, now have a descriptor. The dice that match are
+  the dice that land: those kept and the new rolls. Exact, checked against a brute force that lists every
+  roll, tries every subset of dice to reroll and lists every fresh die (a chain of beams too). On a crit the
+  dice double and the budget does not, so the crit branch is the doubled pool with the same budget. A pool
+  too big to enumerate (more than about 4e7 steps: a 9th-level Chromatic Orb crit, 22d8 rerolling 5, takes
+  about 30ms) has no descriptor and says so. A budget of 0 reads the plain pool.
+- **The policy is the damage policy.** The caster rerolls for the most damage, exactly as the damage PMF
+  models it: the dice with the largest positive expected gain, and with `{ rolls: 2 }` the roll worth more
+  after its own rerolls. The descriptor never models a caster who rerolls to make the dice match, which
+  is a different play with a different damage PMF too. The two differ: `2d8` rerolling 1 matches on
+  5/32 of its rolls when the caster plays for damage (a match of low dice is rerolled away, and a roll
+  with no match and a die below the mean rerolls too), and on 15/64 when the caster plays for a match, the
+  figure `calculateBounceOdds(2, 8, { rerollDamageDice: 1 })` gives.
+- **`AttackBuilder.diceMatchRefusals()`** returns `{ hit, crit }`: why a branch has no descriptor, in a
+  phrase ("the damage rolls dice of different kinds (d8 and d6), and which of them must match is not
+  defined"), `null` for a branch that has one. A `dice-match` rider that names a source with no descriptor
+  now carries the cause in its `no-dice-descriptor` error, where it used to list three shapes that might
+  apply. `HasDiceMatchInfo` gains the same method as an optional member; a source without it keeps the
+  generic message. `diceMatchInfo()` itself returns what it did.
+
+### Changed
+
+- **A pool of dice with a minimum above the die's faces has no descriptor.** `roll(3, d4.minimum(6))` shows
+  6 on every die and so always matches, while the descriptor placed the collapsed faces on the die's own top
+  face, keyed its damages wrong (12, not 18) and so read "never matches". It is refused now, with the cause.
+  A lone die still has its empty descriptor. No other pool that had a descriptor changes: a differential over
+  4000 random dice-match turns (bounce chains, riders, follow-on attacks, minimums, rerolls, channels,
+  explicit and no crits) against 0.15.0 is identical bit for bit, and so are 1500 random `rerollUpTo`
+  pools (`rerollUpTo`'s own PMF is untouched). A test pins 400 of those turns to the digests 0.15.0 gave.
+
 ## [0.15.0] - 2026-09-29
 
 ### Fixed

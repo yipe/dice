@@ -133,6 +133,25 @@ function orderedFaces(kinds: readonly Kind[]): Face[] {
 }
 
 /**
+ * The weight of keeping a roll of score `s` when the best of `trials` rolls is kept, from the mass
+ * each score (on the {@link GRID}) has in one roll. Roll i of `trials` is kept when every earlier
+ * roll scores strictly less and every later one at most as much, so a score carries weight
+ * sum_i below^(i-1) * atOrBelow^(trials-i).
+ */
+function bestOfRollsWeights(scoreMass: ReadonlyMap<number, number>, trials: number): (score: number) => number {
+  const weights = new Map<number, number>();
+  let below = 0;
+  for (const grid of [...scoreMass.keys()].sort((a, b) => a - b)) {
+    const atOrBelow = below + (scoreMass.get(grid) as number);
+    let weight = 0;
+    for (let i = 0; i < trials; i++) weight += Math.pow(below, i) * Math.pow(atOrBelow, trials - 1 - i);
+    weights.set(grid, weight);
+    below = atOrBelow;
+  }
+  return (score) => weights.get(Math.round(score * GRID)) as number;
+}
+
+/**
  * Distribution of the pool's total (flats excluded). `budget` is the most dice that may be
  * rerolled, `rolls` how many whole rolls the best is chosen from (1 for none).
  *
@@ -248,8 +267,6 @@ export function rerollUpToPMF(
     kinds.reduce((total, kind, t) => total + kind.mean * rerolledOf(rerolledIndex, t), 0);
 
   // Which roll is kept: each roll's score is its kept sum plus the means of the dice it rerolls.
-  // Roll i of `trials` is kept when every earlier roll scores strictly less and every later one at
-  // most as much, so a score s carries weight sum_i below^(i-1) * atOrBelow^(trials-i).
   let weightOf: ((score: number) => number) | undefined;
   if (trials > 1) {
     const scoreMass = new Map<number, number>();
@@ -260,16 +277,7 @@ export function rerollUpToPMF(
         scoreMass.set(grid, (scoreMass.get(grid) ?? 0) + pr);
       }
     }
-    const weights = new Map<number, number>();
-    let below = 0;
-    for (const grid of [...scoreMass.keys()].sort((a, b) => a - b)) {
-      const atOrBelow = below + (scoreMass.get(grid) as number);
-      let weight = 0;
-      for (let i = 0; i < trials; i++) weight += Math.pow(below, i) * Math.pow(atOrBelow, trials - 1 - i);
-      weights.set(grid, weight);
-      below = atOrBelow;
-    }
-    weightOf = (score) => weights.get(Math.round(score * GRID)) as number;
+    weightOf = bestOfRollsWeights(scoreMass, trials);
   }
 
   const out: Dist = new Map();
@@ -282,4 +290,163 @@ export function rerollUpToPMF(
     }
   }
   return PMF.fromMap(out, eps);
+}
+
+/** The joint law of a single-kind pool's total and of whether the dice that land match. */
+export interface PoolMatch {
+  /** P(total = s), flats excluded. */
+  readonly total: ReadonlyMap<number, number>;
+  /** P(total = s and two or more of the dice that land show the same face). */
+  readonly match: ReadonlyMap<number, number>;
+}
+
+/**
+ * Most map updates {@link rerollUpToMatch} makes before it gives up. The pools a caster rolls (a
+ * 9th-level Chromatic Orb crit, 22d8, rerolling 5) take a few million.
+ */
+const MATCH_WORK_LIMIT = 4e7;
+
+/** Pools already walked, oldest first out: a pure function of the pool, so it never goes stale. */
+const MATCH_CACHE_SIZE = 64;
+const matchCache = new Map<string, PoolMatch | null>();
+
+/**
+ * The exact joint law of the total and of a match for a pool of `pool.count` identical dice that
+ * may reroll up to `budget` of them, keeping the new rolls, and is rolled `rolls` times with the
+ * best roll kept: the pool of {@link rerollUpToPMF}, on the same policy. The dice that land are the
+ * dice kept plus the fresh rolls, and two or more of them showing one face is a match.
+ *
+ * The policy is the pool's own (most damage), never one that rerolls to make dice match: which dice
+ * reroll and how many follow the gain of each face alone, and only then do the kept and the fresh
+ * dice meet. A roll of the pool is never scored by its match. The total this returns is the
+ * distribution `rerollUpToPMF` gives for one kind of die, and the match masses are parts of it.
+ *
+ * One DP over the faces, highest gain first, as in `rerollUpToPMF`. Its state is how many dice are
+ * still unplaced, how many were rerolled, how many faces already hold a fresh die, and whether
+ * some face already holds two dice. The fresh dice are placed in the same pass: a face takes any
+ * number of them, each carrying its face's probability (divided by the count's factorial), and
+ * `j!` restores the multinomial once the pass knows `j`, the number of dice rerolled. Every mass
+ * is a sum of positive terms, so a sum with no way to match has no match mass.
+ *
+ * `pool.values` are positive integers. Returns `null` when the pool is too large to enumerate.
+ */
+export function rerollUpToMatch(pool: PoolDieKind, budget: number, rolls: number): PoolMatch | null {
+  const kinds = mergeKinds([pool]);
+  if (kinds.length === 0) return { total: new Map([[0, 1]]), match: new Map() };
+  const kind = kinds[0];
+  const capacity = Math.min(Math.max(0, Math.floor(budget)), kind.count);
+  const trials = Math.max(1, Math.floor(rolls));
+
+  // A chain of beams asks for the same pool once per link, and a pool that is too big to walk
+  // costs its whole work limit to find out.
+  const key = `${kind.key}|${kind.count}|${capacity}|${trials}`;
+  if (matchCache.has(key)) return matchCache.get(key) as PoolMatch | null;
+  const result = walkMatch(kinds, capacity, trials);
+  if (matchCache.size >= MATCH_CACHE_SIZE) matchCache.delete(matchCache.keys().next().value as string);
+  matchCache.set(key, result);
+  return result;
+}
+
+function walkMatch(kinds: readonly Kind[], capacity: number, trials: number): PoolMatch | null {
+  const kind = kinds[0];
+  const dice = kind.count;
+  const faces = orderedFaces(kinds);
+
+  const digits = capacity + 1;
+  const stateKey = (unplaced: number, rerolled: number, fresh: number, matched: number): number =>
+    ((unplaced * digits + rerolled) * digits + fresh) * 2 + matched;
+  // A fresh die's face is added after the kept dice's. Keeping the two apart (only for the best of
+  // several rolls, which scores a roll by its kept dice alone) puts kept * span + fresh in the key.
+  const span = trials > 1 ? capacity * Math.max(...kind.values) + 1 : 1;
+
+  let work = 0;
+  let state = new Map<number, Dist>([[stateKey(dice, 0, 0, 0), new Map([[0, 1]])]]);
+  for (let index = 0; index < faces.length; index++) {
+    const face = faces[index];
+    const canReroll = face.gain > 0;
+    // Once the faces that can reroll are placed, the number of rerolled dice is settled.
+    const moreRerolls = index + 1 < faces.length && faces[index + 1].gain > 0;
+    const pCond = Math.min(1, face.p / face.remaining);
+    const qCond = face.after / face.remaining;
+    const freshWeight = [1];
+    for (let count = 1; count <= capacity; count++) freshWeight.push((freshWeight[count - 1] * face.p) / count);
+    const shownBy: (number[] | undefined)[] = [];
+    const next = new Map<number, Dist>();
+
+    for (const [key, sums] of state) {
+      const matched = key % 2;
+      let rest = (key - matched) / 2;
+      const fresh = rest % digits;
+      rest = (rest - fresh) / digits;
+      const rerolled = rest % digits;
+      const unplaced = (rest - rerolled) / digits;
+      const shown = (shownBy[unplaced] ??= binomialWeights(unplaced, pCond, qCond));
+
+      for (let x = 0; x <= unplaced; x++) {
+        const px = shown[x];
+        if (px <= 0) continue;
+        const rerolledHere = canReroll ? Math.min(x, capacity - rerolled) : 0;
+        const kept = x - rerolledHere;
+        const settled = moreRerolls ? Math.min(capacity, rerolled + rerolledHere + unplaced - x) : rerolled + rerolledHere;
+        for (let placed = 0; placed <= capacity - fresh && fresh + placed <= settled; placed++) {
+          const weight = px * freshWeight[placed];
+          const destKey = stateKey(
+            unplaced - x,
+            rerolled + rerolledHere,
+            fresh + placed,
+            matched || kept + placed >= 2 ? 1 : 0
+          );
+          const shift = kept * face.value * span + placed * face.value;
+          const dest = next.get(destKey) ?? new Map<number, number>();
+          for (const [sum, pr] of sums) dest.set(sum + shift, (dest.get(sum + shift) ?? 0) + pr * weight);
+          next.set(destKey, dest);
+          work += sums.size;
+        }
+      }
+      if (work > MATCH_WORK_LIMIT) return null;
+    }
+    state = next;
+  }
+
+  // Every die is placed and every reroll has its fresh die: `j!` turns the fresh dice's masses into
+  // probabilities. The others (a fresh die too many for the dice rerolled, or too few) are not outcomes.
+  const factorial = [1];
+  for (let count = 1; count <= capacity; count++) factorial.push(factorial[count - 1] * count);
+  const finals: { rerolled: number; matched: number; sums: Dist }[] = [];
+  for (const [key, sums] of state) {
+    const matched = key % 2;
+    let rest = (key - matched) / 2;
+    const fresh = rest % digits;
+    rest = (rest - fresh) / digits;
+    const rerolled = rest % digits;
+    if ((rest - rerolled) / digits === 0 && fresh === rerolled) finals.push({ rerolled, matched, sums });
+  }
+  const keptOf = (sum: number): number => (sum - (sum % span)) / span;
+
+  let weightOf: ((score: number) => number) | undefined;
+  if (trials > 1) {
+    const scoreMass = new Map<number, number>();
+    for (const { rerolled, sums } of finals) {
+      const offset = kind.mean * rerolled;
+      for (const [sum, pr] of sums) {
+        const grid = Math.round((keptOf(sum) + offset) * GRID);
+        scoreMass.set(grid, (scoreMass.get(grid) ?? 0) + pr * factorial[rerolled]);
+      }
+    }
+    weightOf = bestOfRollsWeights(scoreMass, trials);
+  }
+
+  const total: Dist = new Map();
+  const match: Dist = new Map();
+  for (const { rerolled, matched, sums } of finals) {
+    const offset = kind.mean * rerolled;
+    for (const [sum, pr] of sums) {
+      let mass = pr * factorial[rerolled];
+      if (weightOf) mass *= weightOf(keptOf(sum) + offset);
+      const damage = keptOf(sum) + (sum % span);
+      total.set(damage, (total.get(damage) ?? 0) + mass);
+      if (matched) match.set(damage, (match.get(damage) ?? 0) + mass);
+    }
+  }
+  return { total, match };
 }

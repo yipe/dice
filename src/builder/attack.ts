@@ -10,11 +10,13 @@ import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
 import { requireFinite, rerollUpToArguments } from "./arguments";
+import { rerollUpToMatch } from "./reroll-pool";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
   naturalRollIndex,
   ParsedRollBuilder,
+  RerollUpToRollBuilder,
   RollBuilder,
   type RerollUpToOptions,
 } from "./roll";
@@ -257,7 +259,8 @@ export class AttackBuilder implements CheckBuilder {
    * dice it acts on already carry their `reroll` and `minimum`. Refuses a payload that is not plain
    * dice (a parsed string, a keep, a roll type, a half/scale/max/pooled/composite payload).
    * Repeating the same call is a no-op; a different budget or roll count throws. No string spelling
-   * exists, so `toExpression()` throws, and a `dice-match` trigger has no descriptor for the attack.
+   * exists, so `toExpression()` throws. A `dice-match` trigger reads the dice that land after the
+   * rerolls, the caster rerolling for the most damage; see {@link diceMatchInfo}.
    */
   rerollDamageUpTo(budget: number, options?: RerollUpToOptions): AttackBuilder {
     const spec = rerollUpToArguments(budget, options, "rerollDamageUpTo()");
@@ -766,13 +769,34 @@ export class AttackBuilder implements CheckBuilder {
   /**
    * For `dice-match` trigger slicing (`turn/types.ts`'s `HasDiceMatchInfo`): the exact
    * per-damage-value match probability for the hit and crit branches, or `null` per branch when no
-   * descriptor is available — a string-parsed effect, a wrapped transform whose PMF isn't fully
-   * captured by its `RollConfig`s (half/scale/maxOf/pooled — `cacheKey()` returns `null` for
-   * exactly these), a `keep`/`bestOf` pool (ambiguous "the dice" under crit doubling), an
-   * exploding pool (per-die `explode` or a pool-wide budget: extra dice join the total), a pool
-   * rolled with advantage/disadvantage (one kept die, not a pool), a subtracted pool (its faces
-   * lower the damage), a multi-die-type pool, or (crit) `noCrit()`. A single die is supported and
-   * can never match (an empty map).
+   * descriptor is available. {@link diceMatchRefusals} says why.
+   *
+   * "The dice" of a branch are the dice of its base payload that land: one plain pool of dice of one
+   * kind, a match being two or more showing the same face. Groups of dice with the same faces are
+   * one pool whatever the calls that built them (`roll(2, d8).plus(roll(1, d8))` is 3d8, as is
+   * `roll(3, d8)`), and a group with no dice adds none. A single die is a supported source that can
+   * never match (an empty map). A branch has no descriptor for:
+   *
+   * - a string-parsed effect, or a wrapped transform whose PMF isn't fully captured by its
+   *   `RollConfig`s (half/scale/maxOf/pooled/summed: `cacheKey()` returns `null` for exactly these);
+   * - a `keep`/`bestOf` pool (ambiguous "the dice" under crit doubling), an exploding pool (per-die
+   *   `explode` or a pool-wide budget: extra dice join the total), a pool rolled with
+   *   advantage/disadvantage (one kept die, not a pool) or a subtracted pool (its faces lower the
+   *   damage);
+   * - dice of different kinds (a different die, or the same die with another `minimum` or `reroll`),
+   *   because which kind must match is not defined (`2d8 + 1d6` has no match, as Chaos Bolt's "the
+   *   same number on both d8s" would need the d8s named);
+   * - a reroll pool too big to enumerate;
+   * - (crit) `noCrit()`.
+   *
+   * A `rerollDamageUpTo()` attack, or a payload made by {@link RollBuilder.rerollUpTo}, matches the
+   * dice that land after the rerolls: those kept and the new rolls. The caster rerolls for the most
+   * damage, exactly as the damage PMF does (the dice with the largest positive expected gain, and
+   * with `{ rolls: 2 }` the roll worth more after its own rerolls is used). It never rerolls to make
+   * the dice match: a caster who does plays a different game, with a different damage PMF too, and
+   * the odds `calculateBounceOdds` gives for `rerollDamageDice` are that game's. On a crit the dice
+   * double and the budget does not, so the crit branch's match odds are those of the doubled pool
+   * with the same budget.
    *
    * The crit branch is built from the SAME crit-effect selection `resolve()` uses (an explicit
    * `onCrit` roll, or the hit dice auto-doubled via `copy().doubleDice()`), so its descriptor
@@ -782,64 +806,153 @@ export class AttackBuilder implements CheckBuilder {
    * separate channel, so their dice never count toward a match.
    */
   diceMatchInfo(_eps: number = EPS): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null } {
-    // A reroll budget makes the dice that land not the dice that were rolled: no descriptor.
-    if (this.rerollPool) return { hit: null, crit: null };
-    const hit = this.matchInfoForEffect(this.hitEffect);
+    const { hit, crit } = this.matchDescriptors();
+    return {
+      hit: typeof hit === "string" ? null : hit,
+      crit: typeof crit === "string" ? null : crit,
+    };
+  }
 
-    let critEffect: RollBuilder | undefined;
+  /**
+   * Why {@link diceMatchInfo} has no descriptor for a branch, in words a `Turn` puts in its error:
+   * `null` for a branch that has one.
+   */
+  diceMatchRefusals(): { hit: string | null; crit: string | null } {
+    const { hit, crit } = this.matchDescriptors();
+    return {
+      hit: typeof hit === "string" ? hit : null,
+      crit: typeof crit === "string" ? crit : null,
+    };
+  }
+
+  /** Each branch's descriptor, or the reason it has none. */
+  private matchDescriptors(): { hit: DiceMatchInfo | string; crit: DiceMatchInfo | string } {
+    const hit = this.matchInfoForEffect(this.hitEffect, this.rerollPool);
+
+    let crit: DiceMatchInfo | string;
     if (this.critEffect === null) {
-      critEffect = undefined; // noCrit(): no separate crit branch
-    } else if (this.critEffect) {
-      critEffect = this.critEffect;
-    } else if (this.hitEffect instanceof ParsedRollBuilder) {
-      critEffect = undefined; // string-parsed hit: no dice descriptor on either branch
+      crit = "it cannot crit (noCrit())";
+    } else if (this.critEffect || this.hitEffect instanceof ParsedRollBuilder) {
+      crit = this.matchInfoForEffect(this.critEffect ?? this.hitEffect, this.rerollPool);
     } else {
+      let doubled: RollBuilder | undefined;
+      let ambiguous = false;
       try {
-        critEffect = this.hitEffect?.copy().doubleDice();
+        doubled = this.hitEffect?.copy().doubleDice();
       } catch (error) {
         // An ambiguous keep or advantage payload has no doubled crit, so no crit descriptor either.
         if (!(error instanceof AmbiguousCritDoublingError)) throw error;
+        ambiguous = true;
       }
+      crit = ambiguous
+        ? "the damage has no single doubled form (a keep, bestOf or advantage pool)"
+        : this.matchInfoForEffect(doubled, this.rerollPool);
     }
-    const crit = this.matchInfoForEffect(critEffect);
 
     return { hit, crit };
   }
 
-  private matchInfoForEffect(effect: RollBuilder | undefined): DiceMatchInfo | null {
-    if (!effect || effect instanceof ParsedRollBuilder) return null;
-    // `cacheKey() === null` is exactly the signal this class already uses for "PMF not fully
-    // captured by subRollConfigs" (half/scale/maxOf/pooled/composite) — the same condition that
-    // would make treating getSubRollConfigs() as the branch's real dice pool WRONG here.
-    if (effect.cacheKey() === null) return null;
+  private matchInfoForEffect(
+    effect: RollBuilder | undefined,
+    attackPool: RerollPoolSpec | undefined
+  ): DiceMatchInfo | string {
+    if (!effect) return "the damage rolls no dice";
+    if (effect instanceof ParsedRollBuilder) {
+      return "the damage is a string expression, which has no dice to read (build it with roll())";
+    }
+    // A payload that is itself a `rerollUpTo` pool carries its budget; an attack's own budget is
+    // applied to a plain payload (the two never meet: `rerollDamageUpTo` refuses a pooled payload).
+    let pool = attackPool;
+    if (effect instanceof RerollUpToRollBuilder) {
+      const node = effect.toAST();
+      if (node.type === "rerollUpTo") pool = { budget: node.budget, rolls: node.rolls };
+    } else if (effect.cacheKey() === null) {
+      // `cacheKey() === null` is exactly the signal this class already uses for "PMF not fully
+      // captured by subRollConfigs" (half/scale/maxOf/pooled/composite) — the same condition that
+      // would make treating getSubRollConfigs() as the branch's real dice pool WRONG here.
+      return "the damage is a half(), scaleResult(), maxOf(), pooled or summed roll, whose dice are not one plain pool";
+    }
 
-    const diceConfigs = effect.getSubRollConfigs().filter((c) => c.sides > 0);
-    if (diceConfigs.length !== 1) return null;
-    const config = diceConfigs[0];
-    if (config.keep || config.bestOf > 0) return null;
-    if (config.explode > 0 || config.explodePoolBudget > 0) return null;
-    if (config.rollType !== "flat") return null;
-    if (config.isSubtraction || config.count < 0) return null;
+    const configs = effect.getSubRollConfigs();
+    const diceConfigs = configs.filter((c) => c.sides > 0);
+    if (diceConfigs.length === 0) return "the damage rolls no dice";
+    for (const config of diceConfigs) {
+      if (config.keep || config.bestOf > 0) {
+        return "the damage keeps some of its dice (keepHighest, keepLowest or bestOf), so which dice match is ambiguous";
+      }
+      if (config.explode > 0 || config.explodePoolBudget > 0) {
+        return "the damage explodes, so extra dice join its total and its pool has no fixed size";
+      }
+      if (config.rollType !== "flat") {
+        return "the damage rolls a die with advantage or disadvantage: one kept die, not a pool";
+      }
+      if (config.isSubtraction || config.count < 0) {
+        return "the damage subtracts dice, whose faces lower it instead of adding to it";
+      }
+    }
+
+    // Groups whose dice show the same faces with the same odds are one pool; a group with no dice
+    // rolls nothing. Two kinds left is a pool whose match is undefined.
+    const kinds = new Map<string, { weights: number[]; label: string; count: number; aboveFaces?: string }>();
+    for (const config of diceConfigs) {
+      if (config.count <= 0) continue;
+      const weights = faceWeights(config.sides, config.minimum, config.reroll);
+      const key = weights.join(",");
+      const kind = kinds.get(key) ?? {
+        weights,
+        label: `d${config.sides}${config.minimum > 1 ? ` minimum ${config.minimum}` : ""}${
+          config.reroll > 0 ? ` reroll ${config.reroll}` : ""
+        }`,
+        count: 0,
+      };
+      kind.count += config.count;
+      // `faceWeights` puts a minimum above the die's faces on its top face; the die really shows the minimum.
+      if (config.minimum > config.sides) kind.aboveFaces = `a minimum of ${config.minimum} on a d${config.sides}`;
+      kinds.set(key, kind);
+    }
+    if (kinds.size > 1) {
+      const labels = [...kinds.values()].map((kind) => kind.label).join(" and ");
+      return `the damage rolls dice of different kinds (${labels}), and which of them must match is not defined`;
+    }
+    const kind = kinds.values().next().value;
 
     // A single die is a SUPPORTED source that can simply never match — `null` is reserved for
     // "no descriptor available at all" (parsed/pooled/keep/bestOf/exploding). Conflating the two
     // previously made a valid 1-die hit pool with an auto-doubled 2-die crit pool (which CAN
     // match) throw `no-dice-descriptor` on the hit branch alone. An empty map still answers every
     // `matchProbabilityByDamage.get(d) ?? 0` lookup with the correct zero.
-    if (config.count <= 1) return { matchProbabilityByDamage: new Map() };
+    if (!kind || kind.count <= 1) return { matchProbabilityByDamage: new Map() };
+    if (kind.aboveFaces) return `the damage has ${kind.aboveFaces}, above the die's own faces`;
 
-    const weights = faceWeights(config.sides, config.minimum, config.reroll);
-    const totalDist = diceSumDistribution(config.count, weights);
-    const joint = jointSumAndMatch(config.count, weights);
-    const modifier = effect.modifier;
-
+    const modifier = configs.reduce((sum, config) => sum + config.modifier, 0);
     const matchProbabilityByDamage = new Map<number, number>();
-    for (const [sum, totalMass] of totalDist) {
-      if (totalMass <= 0) continue;
-      const matchMass = joint.get(sum) ?? 0;
-      matchProbabilityByDamage.set(sum + modifier, matchMass / totalMass);
+
+    // A pool that rerolls no die lands the dice it rolled: with `{ rolls: n }` too, since the roll
+    // kept is chosen by its total alone, which leaves the dice of a given total as they were.
+    if (!pool || Math.min(Math.floor(pool.budget), kind.count) <= 0) {
+      const totalDist = diceSumDistribution(kind.count, kind.weights);
+      const joint = jointSumAndMatch(kind.count, kind.weights);
+      for (const [sum, totalMass] of totalDist) {
+        if (totalMass <= 0) continue;
+        const matchMass = joint.get(sum) ?? 0;
+        matchProbabilityByDamage.set(sum + modifier, matchMass / totalMass);
+      }
+      return { matchProbabilityByDamage };
     }
 
+    const rerolled = rerollUpToMatch(
+      { values: kind.weights.map((_, index) => index + 1), probs: kind.weights, count: kind.count },
+      pool.budget,
+      pool.rolls
+    );
+    if (rerolled === null) {
+      return `the damage is a rerollUpTo pool of ${kind.count} dice, too many to enumerate its match odds exactly`;
+    }
+    for (const [sum, totalMass] of rerolled.total) {
+      if (totalMass <= 0) continue;
+      const matchMass = rerolled.match.get(sum) ?? 0;
+      matchProbabilityByDamage.set(sum + modifier, Math.min(1, matchMass / totalMass));
+    }
     return { matchProbabilityByDamage };
   }
 
