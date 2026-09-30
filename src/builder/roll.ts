@@ -784,6 +784,9 @@ export class RollBuilder {
    * 9.479 against 8.993; 2d6: 9.302 against 9.197); that order is not modelled. On an attack,
    * `rolls` rolls the whole base payload again, and the budget never reaches `plusSeparateDamage`
    * channels.
+   *
+   * As an attack's hit or crit payload, a `dice-match` trigger reads the dice that land after the
+   * rerolls, the caster rerolling for the most damage as above (`AttackBuilder.diceMatchInfo`).
    */
   rerollUpTo(budget: number, options?: RerollUpToOptions): RerollUpToRollBuilder {
     const { budget: dice, rolls } = rerollUpToArguments(budget, options, "rerollUpTo()");

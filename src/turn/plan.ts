@@ -529,6 +529,21 @@ function diceMatchInfoOf(
   return { hit: null, crit: null };
 }
 
+/** Duck-typed lookup of why a `Damage` source has no `dice-match` descriptor on the branches in
+ * `missing`, one phrase per cause ("hit and crit: ..."); none for a source that cannot say. */
+function diceMatchRefusalsOf(source: Damage, missing: readonly ("hit" | "crit")[]): string[] {
+  const capable = source as Partial<HasDiceMatchInfo>;
+  if (typeof capable.diceMatchRefusals !== "function") return [];
+  const refusals = capable.diceMatchRefusals();
+  if (missing.length === 2 && refusals.hit !== null && refusals.hit === refusals.crit) {
+    return [`hit and crit: ${refusals.hit}`];
+  }
+  return missing.flatMap((branch) => {
+    const reason = refusals[branch];
+    return reason === null ? [] : [`${branch}: ${reason}`];
+  });
+}
+
 /**
  * How many parts of a list payload roll their own attack: their PMF carries hit or crit
  * outcomes. A parsed string whose dice can double is damage despite its 'hit' label.
@@ -1233,10 +1248,16 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         const missingHit = slices.hit.mass() > 0 && info.hit === null;
         const missingCrit = slices.crit.mass() > 0 && info.crit === null;
         if (missingHit || missingCrit) {
+          const missing: ("hit" | "crit")[] = [];
+          if (missingHit) missing.push("hit");
+          if (missingCrit) missing.push("crit");
+          const reasons = diceMatchRefusalsOf(damageOf(sourceId) as Damage, missing);
           fail(
             "no-dice-descriptor",
             sourceId,
-            `Rider "${ownerId}" reads "${sourceId}" for "dice-match", but "${sourceId}" has no dice descriptor to match against — a bare PMF, a string-parsed expression, or a keep()/bestOf() pool (ambiguous "the dice" under crit doubling) cannot be matched.`
+            reasons.length > 0
+              ? `Rider "${ownerId}" reads "${sourceId}" for "dice-match", but "${sourceId}" has no dice descriptor to match against (${reasons.join("; ")}).`
+              : `Rider "${ownerId}" reads "${sourceId}" for "dice-match", but "${sourceId}" has no dice descriptor to match against — a bare PMF, a string-parsed expression, or a keep()/bestOf() pool (ambiguous "the dice" under crit doubling) cannot be matched.`
           );
         }
       }

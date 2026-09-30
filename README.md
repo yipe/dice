@@ -325,7 +325,8 @@ On an attack, `rerollDamageUpTo(k, { rolls })` does the same for the base payloa
 explicit `onCrit`; a crit's auto-doubled dice reroll up to the same k), leaving
 `plusSeparateDamage` channels alone, in any call order with `rerollDamage`, `minimumDamageDie` and
 `onCrit`; `rolls` rolls the whole base payload again and the budget never reaches those channels.
-`toExpression()` throws and `diceMatchInfo()` has no descriptor for it.
+`toExpression()` throws. A `dice-match` trigger reads the dice that land after the rerolls, with the caster
+rerolling for the most damage as the PMF does (see `diceMatchInfo()`).
 
 **Strings from builders.** `toExpression()` prints a string that `parse()` reads back to the
 builder's own distribution: a term after the first is parenthesised when it is an expression of its
