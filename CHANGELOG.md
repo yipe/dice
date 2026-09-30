@@ -132,6 +132,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `landing` a save row is `not-an-attack` as before, and the message now says how to watch it. Only a
   declared save row can be watched, not a save that a rider carries as its damage.
 - New types `ProbeSpec` and `SaveLanding`.
+- **One rider model: `onFirstHit` applies once, `onEveryHit(damage, { max })` at most `max` times,
+  `onEveryHit` every time.** `max` is also `{ on: "every-hit", of, max }` in a spec. The rider
+  applies to at most `max` landings among `of`, in turn order, each in its own landing's mode (a
+  crit doubles that application's dice): Superiority dice, "the first two hits". Exact, not a mean
+  adjustment. Each attack a capped rider watches carries a with-rider and a without-rider draw set,
+  and the walk picks between them while the rider's count of applications is below `max`; a hit or
+  crit drawn from the with-rider set advances the count. Riders over the same sources with the same
+  `max` share one count, and a count is dropped from the walk state as soon as the attacks still to
+  come cannot reach the cap, so a cap at or above the number of attacks watched is folded exactly
+  like an uncapped rider: `onEveryHit` bit for bit, with the same states.
+  **`max: 1` is `onFirstHit`**: the plan lowers `{ on: "every-hit", max: 1 }` to a first-hit rider,
+  so `otherwise`, `not-fired`, being named in another rider's `of` and the numbers are
+  `onFirstHit`'s, bit for bit. A cap is a positive integer (`RangeError` otherwise), is refused on
+  any other trigger (`unsupported-trigger`) and beside a grant (a grant is never capped). A capped
+  rider that watches an `onAnyMiss` reroll is refused (`unsupported-trigger`, use `onFirstMiss`):
+  that reroll resolves after every declared attack, so the cap would count its landing at the end
+  of the turn. At most `MAX_CAPPED_COUNTERS` (6) riders with different caps of 2 or more or
+  different sources may watch one attack (`too-many-counters`, a cost ceiling: the draws double
+  with each).
+- **`Turn.expectedApplications(id)` for any rider**: the expected number of times an `every-hit`
+  rider applies (`E[min(landings, max)]` for a cap); for every other rider, which applies at most
+  once, its `fireProbability`. `fireProbability(id)` of an every-hit rider is P(applied at least
+  once), which is P(some watched attack landed). A substitute, a condition or an attack id is
+  `unknown-id`.
+- **A payload per landing source: `perSource`** on `onFirstHit` and `onEveryHit` (and the spec's
+  `perSource` on `first-hit` and `every-hit` riders): source id to `{ damage, critDamage? }`, the
+  payload dealt when that source lands, for a payload that depends on the landing row (its damage
+  type, the target's scale for it). A source not listed deals the rider's own `damage`; each entry
+  doubles its own dice on a crit unless it names its `critDamage`. A per-source first hit is one
+  rider like any other (`fireProbability`, `otherwise`, `not-fired`), applied inside its sources'
+  draws, so another rider cannot name it in `of`. A key the rider does not watch is `unknown-id`;
+  the option is refused on any other trigger, beside a grant and beside a transform. A per-source
+  first hit, or a capped or per-source every-hit rider, whose damage, `critDamage` or payload
+  rolls its own attack is refused too (`unsupported-trigger`): those riders are folded into their attacks'
+  draws, which skips grants, step statistics and the `critDamage` check. Declare that attack as a
+  plain `onFirstHit` rider instead; a plain `onEveryHit` keeps folding whatever it rolls. It is typed
+  on the two triggers that take it, so it does not compile elsewhere. A first-hit payload per source that watches an `onAnyMiss` reroll is
+  refused like a cap.
+- **Over a save row, a capped or per-source rider reads it under its `landing` kind**: a cap counts a
+  save as a landing only where the kind says (`"fail"`: any failed save; `"damage"`: a failure or a
+  `saveHalf` pass that dealt damage above 0), and a per-source first hit marks its fire slot the same
+  way. Riders that differ only in their kind keep separate counts. A probe beside a capped rider
+  reads the same walk and changes nothing else.
+- New exports: `EveryHitOptions`, `FirstHitOptions`, `PerSource`, `RiderPayload`,
+  `MAX_CAPPED_COUNTERS`; the error code `too-many-counters`.
+
+Nothing that existed changes: turns without `max` or `perSource` walk the same states and return the
+same numbers bit for bit (checked against 0.14.2 over every-hit turns beside first-hit, any-miss,
+first-miss, dice-match, substitutes, granted modifiers and `chance` attacks).
 
 ### Changed
 

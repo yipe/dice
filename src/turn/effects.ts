@@ -1,5 +1,5 @@
 import type { DCBuilder } from "../builder/dc";
-import type { GrantSpec, RiderOptions, SubstitutePolicy, SubstituteSpec } from "./types";
+import type { GrantSpec, PerSource, RiderOptions, SubstitutePolicy, SubstituteSpec } from "./types";
 import { TurnSpecError } from "./types";
 
 /**
@@ -201,4 +201,31 @@ export interface ConditionOptions extends RiderOptions {
   chance?: number;
   /** Grants applied on the other branch: the save succeeded (or `1 - chance`). */
   onSave?: Grant | readonly Grant[];
+}
+
+/**
+ * What {@link Turn.onFirstHit} accepts: a condition's options, plus a payload per landing
+ * source. A call that carries grants or a transform refuses it: neither has a payload, so
+ * put the damage in its own call.
+ */
+export interface FirstHitOptions extends ConditionOptions {
+  /**
+   * The damage dealt when a particular source lands first, for a payload that depends on the
+   * landing attack (its damage type, the target's scale for it). A source not listed deals the
+   * call's damage. Keys are ids the rider watches; a tag is not accepted.
+   */
+  perSource?: PerSource;
+}
+
+/**
+ * What {@link Turn.onEveryHit} accepts: the first-hit options, plus a cap. A call that carries
+ * grants refuses both: a grant is never capped and has no payload.
+ */
+export interface EveryHitOptions extends FirstHitOptions {
+  /**
+   * Applies the damage to at most this many landings among `of`, in turn order: a positive
+   * integer. Superiority dice are `max: n` over the turn's attacks; `max: 1` is `onFirstHit`.
+   * Omit it for every landing.
+   */
+  max?: number;
 }

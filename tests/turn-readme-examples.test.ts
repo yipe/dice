@@ -66,6 +66,31 @@ describe("README: extra attack", () => {
   });
 });
 
+describe("README: at most N times", () => {
+  const maneuvers = turn().attacks(4, sword).onEveryHit(d8, { max: 2, id: "maneuvers" });
+
+  it("quotes the right mean, fire probability and expected applications", () => {
+    expect(maneuvers.mean()).toBeCloseTo(33.7003, 4);
+    expect(maneuvers.fireProbability("maneuvers")).toBeCloseTo(0.9919, 4);
+    expect(maneuvers.expectedApplications("maneuvers")).toBeCloseTo(1.9082, 4);
+  });
+
+  it("quotes the rider-free and every-hit bounds", () => {
+    expect(turn().attacks(4, sword).mean()).toBeCloseTo(24.5, 6);
+    const everyHit = turn().attacks(4, sword).onEveryHit(d8, { id: "all" });
+    expect(everyHit.mean()).toBeCloseTo(38, 6);
+    expect(everyHit.expectedApplications("all")).toBeCloseTo(2.8, 6);
+  });
+
+  it("quotes the right mean for a payload per landing source", () => {
+    const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
+    const mean = turn([sword, dagger])
+      .onFirstHit(d6, { perSource: { "attack 2": { damage: d10 } } })
+      .mean();
+    expect(mean).toBeCloseTo(14.255, 4);
+  });
+});
+
 describe("README: a rider can be anything that makes damage", () => {
   it("accepts a whole attack, a saving throw, a flat bonus and a list", () => {
     expect(
