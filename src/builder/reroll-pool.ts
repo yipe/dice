@@ -1,3 +1,4 @@
+import { LRUCache } from "../common/lru-cache";
 import { PMF } from "../pmf/pmf";
 
 /**
@@ -301,14 +302,20 @@ export interface PoolMatch {
 }
 
 /**
- * Most map updates {@link rerollUpToMatch} makes before it gives up. The pools a caster rolls (a
- * 9th-level Chromatic Orb crit, 22d8, rerolling 5) take a few million.
+ * Most map updates {@link rerollUpToMatch} makes before it gives up. The pools a caster rolls take
+ * far fewer: a 9th-level Chromatic Orb crit (22d8 rerolling 5) makes about 0.6 million, 44d8 about 5
+ * million, 16d20 about 3 million. A pool over the limit costs about a quarter of a second to refuse.
  */
-const MATCH_WORK_LIMIT = 4e7;
+const MATCH_WORK_LIMIT = 1e7;
 
-/** Pools already walked, oldest first out: a pure function of the pool, so it never goes stale. */
+/** Pools already walked: a pure function of the pool, so it never goes stale. Follows `setCachingEnabled`. */
 const MATCH_CACHE_SIZE = 64;
-const matchCache = new Map<string, PoolMatch | null>();
+const matchCache = new LRUCache<string, PoolMatch | null>(MATCH_CACHE_SIZE, { followsCachingToggle: true });
+
+/** Clears the reroll-pool match cache (reached through `clearAttackCache`). */
+export function clearMatchCache(): void {
+  matchCache.clear();
+}
 
 /**
  * The exact joint law of the total and of a match for a pool of `pool.count` identical dice that
@@ -340,9 +347,9 @@ export function rerollUpToMatch(pool: PoolDieKind, budget: number, rolls: number
   // A chain of beams asks for the same pool once per link, and a pool that is too big to walk
   // costs its whole work limit to find out.
   const key = `${kind.key}|${kind.count}|${capacity}|${trials}`;
-  if (matchCache.has(key)) return matchCache.get(key) as PoolMatch | null;
+  const cached = matchCache.get(key);
+  if (cached !== undefined) return cached;
   const result = walkMatch(kinds, capacity, trials);
-  if (matchCache.size >= MATCH_CACHE_SIZE) matchCache.delete(matchCache.keys().next().value as string);
   matchCache.set(key, result);
   return result;
 }

@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dice that land: those kept and the new rolls. Exact, checked against a brute force that lists every
   roll, tries every subset of dice to reroll and lists every fresh die (a chain of beams too). On a crit the
   dice double and the budget does not, so the crit branch is the doubled pool with the same budget. A pool
-  too big to enumerate (more than about 4e7 steps: a 9th-level Chromatic Orb crit, 22d8 rerolling 5, takes
-  about 30ms) has no descriptor and says so. A budget of 0 reads the plain pool.
+  too big to enumerate (more than 1e7 steps: a 9th-level Chromatic Orb crit, 22d8 rerolling 5, takes
+  about 0.6 million and 40ms, and 44d8 rerolling 5 about 5 million) has no descriptor and says so. A budget of 0 reads the plain pool.
 - **The policy is the damage policy.** The caster rerolls for the most damage, exactly as the damage PMF
   models it: the dice with the largest positive expected gain, and with `{ rolls: 2 }` the roll worth more
   after its own rerolls. The descriptor never models a caster who rerolls to make the dice match, which

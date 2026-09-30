@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttackBuilder, RollBuilder } from "../src/builder";
 import { bounce, d20, d4, d6, d8, d10, flat, roll, turn, TurnSpecError } from "../src/builder";
+import { rerollUpToMatch } from "../src/builder/reroll-pool";
 import { calculateBounceOdds } from "../src/common/bounce";
+import { setCachingEnabled } from "../src/common/lru-cache";
 import type { DiceMatchInfo } from "../src/common/types";
 import type { PMF } from "../src/pmf/pmf";
 import { poolMatchOracle, type MatchOracle } from "./enumerate-match";
@@ -12,6 +14,9 @@ import { poolMatchOracle, type MatchOracle } from "./enumerate-match";
  * of several rolls. `enumerate-match.ts` is the oracle: it lists every roll, tries every subset of
  * dice to reroll and lists every fresh die, sharing no code with the library.
  */
+
+// The oracle lists every roll of a pool, and a pool too big to walk is refused only after its work limit.
+vi.setConfig({ testTimeout: 60_000 });
 
 const dieOf = { 4: d4, 6: d6, 8: d8, 10: d10 } as const;
 
@@ -340,5 +345,28 @@ describe("a pool that cannot be made exact is refused, and says why", () => {
     const bare = codeOf(() => turn(attackWith(roll(3, d8)).toPMF()).onDiceMatch(["attack 1"], roll(1, d6)).mean());
     expect(bare?.code).toBe("no-dice-descriptor");
     expect(bare?.message).toMatch(/a bare PMF, a string-parsed expression/);
+  });
+});
+
+describe("the reroll-pool match cache follows setCachingEnabled", () => {
+  afterEach(() => setCachingEnabled(true));
+
+  const pool = { values: [1, 2, 3, 4, 5, 6], probs: new Array<number>(6).fill(1 / 6), count: 4 };
+
+  it("reuses a walked pool while caching is on", () => {
+    expect(rerollUpToMatch(pool, 2, 1)).toBe(rerollUpToMatch(pool, 2, 1));
+  });
+
+  it("reuses nothing while caching is off, and drops what it held", () => {
+    const held = rerollUpToMatch(pool, 2, 1);
+    setCachingEnabled(false);
+    const first = rerollUpToMatch(pool, 2, 1);
+    expect(first).not.toBe(rerollUpToMatch(pool, 2, 1));
+    expect(first).not.toBe(held);
+    expect([...(first?.total ?? [])]).toEqual([...(held?.total ?? [])]);
+    setCachingEnabled(true);
+    const fresh = rerollUpToMatch(pool, 2, 1);
+    expect(fresh).not.toBe(held);
+    expect(rerollUpToMatch(pool, 2, 1)).toBe(fresh);
   });
 });

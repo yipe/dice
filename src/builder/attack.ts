@@ -10,7 +10,7 @@ import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
 import { requireFinite, rerollUpToArguments } from "./arguments";
-import { rerollUpToMatch } from "./reroll-pool";
+import { clearMatchCache, rerollUpToMatch } from "./reroll-pool";
 import {
   AlwaysCritBuilder,
   AlwaysHitBuilder,
@@ -59,6 +59,7 @@ const attackPMFCache = PMF.createCache(4000);
 /** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
 export function clearAttackCache(): void {
   attackPMFCache.clear();
+  clearMatchCache();
 }
 
 export class AttackBuilder implements CheckBuilder {
