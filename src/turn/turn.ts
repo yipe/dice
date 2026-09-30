@@ -1,7 +1,7 @@
 import type { Check } from "../builder/types";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
-import type { ConditionOptions, Grant, Transform } from "./effects";
+import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Grant, Transform } from "./effects";
 import { grantSpec, isGrant, isTransform, substituteFields } from "./effects";
 import type { FireMode, TurnPlan } from "./plan";
 import { buildPlan, fireMode, grantApplies, released } from "./plan";
@@ -117,6 +117,12 @@ interface WalkState<D> {
    * it was applied changes no later transition, so it must not split states.
    */
   applied: number[];
+  /**
+   * Per counter, how many landings its capped riders have applied to so far. It is what selects
+   * a with-rider or a without-rider draw, so it splits states, but only while the cap can still
+   * bind (see `Step.settled`).
+   */
+  counts: number[];
 }
 
 /**
@@ -149,6 +155,7 @@ export class Turn {
   private resolved?: {
     pmf: PMF;
     fireMass: ReadonlyMap<string, number>;
+    applications: ReadonlyMap<string, number>;
     stepStats: ReadonlyMap<string, StepStats>;
   };
   /** Firing masses from a walk that carried no damage; see {@link Turn.fireProbability}. */
@@ -293,7 +300,7 @@ export class Turn {
    * to the grants only; the damage lands whatever the save does. With both, `id`
    * names the rider and the condition takes the default `condition N`.
    */
-  private addEffect(on: ConditionSpec["on"], effect: Effect, options: ConditionOptions): Turn {
+  private addEffect(on: ConditionSpec["on"], effect: Effect, options: EveryHitOptions): Turn {
     const { save, chance, onSave, ...riderOptions } = options;
     const gated = save !== undefined || chance !== undefined || onSave !== undefined;
     const parts: readonly unknown[] = Array.isArray(effect) ? effect : [effect];
@@ -305,6 +312,11 @@ export class Turn {
         );
       }
       return this.rider({ ...riderOptions, damage: effect as RiderDamage, on });
+    }
+    if (riderOptions.max !== undefined || riderOptions.perSource !== undefined) {
+      throw new Error(
+        "max and perSource shape a damage rider, and this call has grants: a grant is never capped and has no payload. Add the damage in its own call."
+      );
     }
     if (save !== undefined && chance !== undefined) {
       throw new Error("Pass either save or chance, not both: each is the chance the grants take.");
@@ -372,11 +384,24 @@ export class Turn {
    * ```ts
    * turn([fist, fist, fist]).onFirstHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.4 });
    * ```
+   *
+   * `perSource` gives a payload that depends on which attack landed first: the row's damage
+   * type or the target's scale for it. A watched attack not listed deals `effect`.
+   *
+   * ```ts
+   * turn([fire, cold]).onFirstHit(d6, { perSource: { "attack 2": { damage: d8 } } });
+   * ```
+   *
+   * A per-source rider is one rider like any other: `fireProbability`, `otherwise` and
+   * `not-fired` read it as they read a plain first hit.
    */
-  onFirstHit(effect: Effect | Transform, options: ConditionOptions = {}): Turn {
+  onFirstHit(effect: Effect | Transform, options: FirstHitOptions = {}): Turn {
     if (!isTransform(effect)) return this.addEffect("first-hit", effect, options);
     if (options.save !== undefined || options.chance !== undefined || options.onSave !== undefined) {
       throw new Error("save, chance and onSave gate grants only; a transform is not gated by them.");
+    }
+    if (options.perSource !== undefined) {
+      throw new Error("A transform rewrites the attack's own payload, so it has no payload per source.");
     }
     if (options.critDamage !== undefined) {
       throw new TurnSpecError(
@@ -443,15 +468,38 @@ export class Turn {
    * Fires once per source that lands, in that hit's mode — so it can fire several
    * times in a turn. Hunter's Mark, Hex, Rage.
    *
+   * `max` caps it: the damage applies to at most `max` landings among `of`, in turn
+   * order, each in its own hit's mode (a crit doubles that application's dice). Superiority
+   * dice, "the first two hits". Each watched attack carries a with-rider and a
+   * without-rider draw, chosen by how many landings the rider has already applied to,
+   * so the result is exact, and `max: 1` is {@link Turn.onFirstHit} spelled as a cap.
+   * `fireProbability(id)` is P(applied at least once), which is P(some watched source
+   * landed); {@link Turn.expectedApplications} is the expected number of applications.
+   *
+   * ```ts
+   * turn().attacks(3, sword).onEveryHit(d6, { max: 2, id: "dice" }); // two of the three hits
+   * ```
+   *
+   * `perSource` gives a payload that depends on which attack landed: the row's damage type
+   * or the target's scale for it. A watched attack not listed deals `effect`. With `max: 1`
+   * it is a first-hit payload per landing source.
+   *
+   * ```ts
+   * turn([fire, cold]).onEveryHit(d6, { max: 1, perSource: { "attack 2": { damage: d8 } } });
+   * ```
+   *
    * Given a {@link Grant}, every landing applies it, and a `save` or `chance` is
-   * rolled again on each landing until it takes:
+   * rolled again on each landing until it takes; `max` and `perSource` are refused, since
+   * a grant is never capped:
    *
    * ```ts
    * turn([sword, sword, sword]).onEveryHit(advantage().untilNextAttack());
    * turn([axe, axe]).onEveryHit(advantage().untilEndOfTurn(), { save: d20.plus(2).dc(15) });
    * ```
+   *
+   * @throws {RangeError} if `max` is not a positive integer.
    */
-  onEveryHit(effect: Effect, options: ConditionOptions = {}): Turn {
+  onEveryHit(effect: Effect, options: EveryHitOptions = {}): Turn {
     return this.addEffect("every-hit", effect, options);
   }
 
@@ -497,11 +545,11 @@ export class Turn {
     } else {
       const previous = riders[last.index];
       target = previous.id ?? `rider ${last.index + 1}`;
-      if (previous.on === "every-hit") {
+      if (previous.on === "every-hit" && previous.max !== 1) {
         throw new TurnSpecError(
           "not-an-attack",
           target,
-          "otherwise() cannot negate an every-hit rider: it can fire more than once."
+          "otherwise() cannot negate an every-hit rider: it can fire more than once. `max: 1` is a first hit and can be negated."
         );
       }
       riders[last.index] = { ...previous, id: target };
@@ -683,8 +731,10 @@ export class Turn {
   }
 
   /**
-   * P(this rider fired). For an `every-hit` rider it is P(at least one source
-   * hit), since that rider can fire more than once in a turn. For a substitute it
+   * P(this rider fired). For an `every-hit` rider, capped or not, it is P(at least one
+   * source hit): the first landing always applies it, since a cap is at least 1. It can
+   * fire more than once in a turn; {@link Turn.expectedApplications} counts how often.
+   * For a substitute it
    * is P(it was spent). For a condition it is P(its grants were applied at least
    * once where a later attack roll reads them) — on the fail branch of its save,
    * not the `onSave` one. Two attacks with "a hit gives the next attack
@@ -715,6 +765,30 @@ export class Turn {
           ...this.plan.conditionIds,
           ...this.plan.probeIds,
         ]
+          .map((each) => `"${each}"`)
+          .join(", ")}.`
+      );
+    }
+    return mass;
+  }
+
+  /**
+   * The expected number of times a damage rider applies in a turn: for an uncapped
+   * `every-hit` rider, the expected number of landings among its sources; for `max: n`, the
+   * expected number of the first `n`. Every other rider applies at most once, so its
+   * answer is its `fireProbability`: `max: 1` and `onFirstHit` are one rider, and give one
+   * number. Substitutes and conditions are not damage riders.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a rider.
+   */
+  expectedApplications(id: string): number {
+    const resolved = this.resolve();
+    const mass = resolved.applications.get(id) ?? (this.plan.riderIds.includes(id) ? resolved.fireMass.get(id) : undefined);
+    if (mass === undefined) {
+      throw new TurnSpecError(
+        "unknown-id",
+        id,
+        `"${id}" is not a rider in this turn. Riders: ${this.plan.riderIds
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
@@ -760,6 +834,7 @@ export class Turn {
   private resolve(): {
     pmf: PMF;
     fireMass: ReadonlyMap<string, number>;
+    applications: ReadonlyMap<string, number>;
     stepStats: ReadonlyMap<string, StepStats>;
   } {
     if (this.resolved) return this.resolved;
@@ -769,12 +844,24 @@ export class Turn {
     const plan = this.walkPlan;
     const eps = this.eps;
     const ledger = pmfLedger(eps);
-    const { states, stateCounts, rolled, hitMass, critMass, liveAdvantage, liveDisadvantage, liveCritOnHit } =
-      this.walk(ledger, plan);
+    const {
+      states,
+      stateCounts,
+      rolled,
+      hitMass,
+      critMass,
+      liveAdvantage,
+      liveDisadvantage,
+      liveCritOnHit,
+      applicationMass,
+    } = this.walk(ledger, plan);
     inspections.set(this, { plan: this.plan, stateCounts });
 
     // Collapse: sum every terminal state, and tally per-rider firing mass.
     const fireMass = this.tally(states, ledger, plan);
+    const applications = new Map<string, number>(
+      plan.everyHitIds.map((id, rider) => [id, applicationMass[rider]])
+    );
     let total: PMF | undefined;
     for (const state of states.values()) {
       total = total ? total.add(state.damage) : state.damage;
@@ -790,6 +877,7 @@ export class Turn {
     // whenever a caller supplies a source PMF whose own mass is not 1.
     if (normalizing) {
       for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
+      for (const [id, mass] of applications) applications.set(id, mass / totalMass);
     }
 
     // Per-step stats live in the same mass units, so they follow the same
@@ -832,6 +920,7 @@ export class Turn {
     this.resolved = {
       pmf: normalizing ? pmf.normalize() : pmf,
       fireMass,
+      applications,
       stepStats,
     };
     return this.resolved;
@@ -907,10 +996,12 @@ export class Turn {
     liveAdvantage: number[];
     liveDisadvantage: number[];
     liveCritOnHit: number[];
+    applicationMass: number[];
   } {
     const eps = this.eps;
     const width = plan.groupCount;
     const conditionCount = plan.conditionIds.length;
+    const counterCount = plan.counterMax.length;
 
     // Per-step stat accumulators, in the same unnormalized mass units as the walk's
     // states. `rolled` counts the mass in which a step drew at all; `hit`/`crit` the
@@ -922,6 +1013,9 @@ export class Turn {
     const liveAdvantage = new Array<number>(plan.steps.length).fill(0);
     const liveDisadvantage = new Array<number>(plan.steps.length).fill(0);
     const liveCritOnHit = new Array<number>(plan.steps.length).fill(0);
+    // Per every-hit rider, the mass of the draws it applied to, in the same units:
+    // its expected number of applications.
+    const applicationMass = new Array<number>(plan.everyHitIds.length).fill(0);
 
     type State = WalkState<D>;
 
@@ -931,6 +1025,7 @@ export class Turn {
       fired: new Array<FireMode>(plan.slotCount).fill(null),
       flags: 0,
       applied: new Array<number>(conditionCount).fill(0),
+      counts: new Array<number>(counterCount).fill(0),
     };
     let states = new Map<string, State>([[String.fromCharCode(), start]]);
     const stateCounts: number[] = [];
@@ -966,12 +1061,19 @@ export class Turn {
         let codesKey = "";
         for (const g of liveGroups) codesKey += String.fromCharCode(codes[g]);
         const flags = state.flags & liveFlags;
+        // A count the cap can no longer reach is the same as none: both take every later
+        // with-rider draw. Zeroing it lets those states merge, so a cap at or above the
+        // number of watched attacks walks exactly the states of an uncapped rider.
+        const counts = counterCount
+          ? state.counts.map((count, counter) => (count <= step.settled[counter] ? 0 : count))
+          : state.counts;
         const key =
           codesKey +
           "\u0001" +
           state.fired.map((mode) => (mode === null ? "-" : "+")).join("") +
           "\u0002" +
-          String.fromCharCode(flags);
+          String.fromCharCode(flags) +
+          (counterCount ? "\u0003" + String.fromCharCode(...counts) : "");
         const existing = next.get(key);
         if (existing) {
           existing.damage = ledger.add(existing.damage, state.damage);
@@ -979,7 +1081,7 @@ export class Turn {
             existing.applied = existing.applied.map((mass, c) => mass + state.applied[c]);
           }
         } else {
-          next.set(key, { ...state, codes, flags });
+          next.set(key, { ...state, codes, flags, counts });
         }
       };
 
@@ -1022,9 +1124,9 @@ export class Turn {
         // Order at a step: read the flags to select the variant, clear the
         // `next-attack` flags this roll consumes, draw, advance the groups, then
         // apply this outcome's grants.
-        const draws = step.variants[step.select(state.codes, fired, state.flags)];
+        const draws = step.variants[step.select(state.codes, fired, state.flags, state.counts)];
         const flags = state.flags & ~step.consumes;
-        for (const { outcome, matched, spends, slice, byKind } of draws) {
+        for (const { outcome, matched, spends, applies, bumps, fires, slice, byKind } of draws) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
 
@@ -1034,6 +1136,12 @@ export class Turn {
             hitMass[stepIndex] += contribution;
           } else if (outcome === "hit") {
             hitMass[stepIndex] += contribution;
+          }
+          for (const rider of applies) applicationMass[rider] += contribution;
+          let counts = state.counts;
+          if (bumps.length !== 0) {
+            counts = [...counts];
+            for (const counter of bumps) counts[counter]++;
           }
 
           const codes = [...state.codes];
@@ -1050,6 +1158,10 @@ export class Turn {
             drawFired = [...fired];
             drawFired[step.spendSlot] = outcome === "crit" ? "crit" : "hit";
           }
+          if (fires.length !== 0) {
+            if (drawFired === fired) drawFired = [...fired];
+            for (const slot of fires) drawFired[slot] = outcome === "crit" ? "crit" : "hit";
+          }
           const damage = ledger.convolve(state.damage, slice);
           if (step.grants.length === 0) {
             merge({
@@ -1058,6 +1170,7 @@ export class Turn {
               fired: drawFired,
               flags,
               applied: conditionCount ? state.applied.map((mass) => mass * sliceMass) : state.applied,
+              counts,
             });
             continue;
           }
@@ -1085,6 +1198,7 @@ export class Turn {
               damage: part.share === 1 ? damage : ledger.scale(damage, part.share),
               fired: drawFired,
               flags: part.flags,
+              counts,
               applied: state.applied.map((mass, c) =>
                 part.applied.includes(c) ? stateMass * scale : mass * scale
               ),
@@ -1097,7 +1211,17 @@ export class Turn {
       stateCounts.push(next.size);
     });
 
-    return { states, stateCounts, rolled, hitMass, critMass, liveAdvantage, liveDisadvantage, liveCritOnHit };
+    return {
+      states,
+      stateCounts,
+      rolled,
+      hitMass,
+      critMass,
+      liveAdvantage,
+      liveDisadvantage,
+      liveCritOnHit,
+      applicationMass,
+    };
   }
 }
 

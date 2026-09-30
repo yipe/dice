@@ -605,7 +605,7 @@ chance of 0.015 instead of 0.1225.
 | `onAnyCrit` | once, if any attack crit | Divine Smite |
 | `onAnyMiss` | once, if any attack missed; runs after every attack | a reroll no grant reaches |
 | `onFirstMiss` | once, on the first attack that missed; runs right after it | Unerring Accuracy, Lucky |
-| `onEveryHit` | once per attack that lands | Hunter's Mark, Hex, Rage |
+| `onEveryHit` | once per attack that lands; `{ max: n }` stops after the first `n` | Hunter's Mark, Hex, Rage; Superiority dice |
 | `otherwise` | when the rider before it did *not* | flurry of blows if you didn't smite |
 
 #### Extra Attack
@@ -619,6 +619,55 @@ const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
 turn().attacks(4, sword).onEveryHit(d6).mean(); // 35.0  — hunter's mark on each hit
 turn().attacks(8, sword).onEveryHit(d6).mean(); // 70.0  — action surge
 ```
+
+#### At most N times
+
+`onEveryHit(damage, { max })` applies the rider to at most `max` landings, in turn order, each in its
+own hit's mode: Superiority dice on the fighter's first two hits. The cap is exact, not a mean
+adjustment: every attack carries a draw with the rider and one without, and the walk picks between
+them by how many landings the rider has already used.
+
+```ts
+const maneuvers = turn().attacks(4, sword).onEveryHit(d8, { max: 2, id: "maneuvers" });
+
+maneuvers.mean();                            // 33.7003  (24.5 with no rider, 38.0 on every hit)
+maneuvers.fireProbability("maneuvers");      // 0.9919   P(the rider applied at least once)
+maneuvers.expectedApplications("maneuvers"); // 1.9082   E[min(hits, 2)]
+```
+
+One rider model covers all three: `onFirstHit` applies once, `onEveryHit(damage, { max: n })` at most
+`n` times, and `onEveryHit` with no `max` every time. `{ max: 1 }` **is** `onFirstHit`: the plan
+lowers it, so `otherwise`, `not-fired`, being named in another rider's `of` and the numbers are
+`onFirstHit`'s, bit for bit. A cap at or above the number of attacks it watches is `onEveryHit`, bit
+for bit too. In a spec, the cap is the rider's `max`: `{ on: "every-hit", of, max: 2, damage }`. A cap
+must be a positive integer; it is refused on any other trigger and beside a grant, which is never
+capped. A capped rider cannot watch an `onAnyMiss` reroll (that reroll resolves after every declared
+attack, so a cap would count its landing in the wrong order): use `onFirstMiss`.
+
+`expectedApplications(id)` answers for any rider: the expected count for an every-hit rider (2.8
+above, uncapped), the same number as `fireProbability(id)` for a rider that applies at most once.
+
+`perSource` gives a payload that depends on which attack landed (its damage type, the target's scale
+for it), on `onFirstHit` and `onEveryHit`. A source it does not list deals the call's damage; each
+entry brings its own `critDamage`, or has its dice doubled:
+
+```ts
+turn([sword, dagger]).onFirstHit(d6, {
+  perSource: { "attack 2": { damage: d10 } },   // the dagger row's rider is d10
+}).mean();                                       // 14.255
+```
+
+A per-source first hit is still one rider (`fireProbability`, `otherwise` and `not-fired` read it),
+but it is applied inside its attacks' draws, so no other rider can name it in `of`. Its damage, `critDamage` and
+payloads are damage, not attacks, and the same holds for a capped or per-source `onEveryHit`: a bonus attack is
+a plain `onFirstHit` rider. (An uncapped `onEveryHit` still takes an attack as its damage.)
+
+Over a save row (a rider reads it through its `landing` option) a cap counts the save as a landing only where its
+kind says, so riders that differ only in their `landing` keep separate counters.
+
+Riders over the same attacks with the same `max` share one counter. Each different cap of 2 or more
+(or source set) doubles the draws every attack it watches carries, so a turn is limited to
+`MAX_CAPPED_COUNTERS` (6) per attack (`too-many-counters`).
 
 #### A rider can be anything that makes damage
 
