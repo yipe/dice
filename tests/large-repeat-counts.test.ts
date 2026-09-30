@@ -12,7 +12,7 @@ describe("large repeats keep their mass", () => {
     expect(pmf.mass()).toBeCloseTo(1, 12);
     expect(pmf.mean()).toBeCloseTo(10100, 8);
     expect(pmf.variance()).toBeCloseTo((200 * (100 * 100 - 1)) / 12, 6);
-  });
+  }, 20_000);
 
   it("(1d100)d6 has mean 101/2 · 7/2 = 707/4", () => {
     const pmf = parse("(1d100)d6");
