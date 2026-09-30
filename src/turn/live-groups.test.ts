@@ -251,7 +251,7 @@ describe("a threshold substitute's look-ahead reads released slots as empty", ()
 });
 
 describe("turns that fit the old cap are bit for bit what the walk gave before groups shared slots", () => {
-  // Recorded from origin/main be251b6 (0.14.2 plus content-addressed PMF identifiers): the same turns, before groups shared slots.
+  // Recorded from 6a6233f (#20: 0.14.2 plus content-addressed PMF identifiers): the same turns, before groups shared slots.
   const pin = (t: { pmf: PMF }, expected: { mean: number; variance: number; p0: number }): void => {
     expect(t.pmf.mean()).toBe(expected.mean);
     expect(t.pmf.variance()).toBe(expected.variance);
