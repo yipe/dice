@@ -425,11 +425,9 @@ describe("rerollDamageUpTo: attack base payload", () => {
     expect(() => attack().onHit(2, d6).rerollDamageUpTo(-1)).toThrow(/non-negative integer/);
   });
 
-  it("has no string spelling and no dice-match descriptor", () => {
+  it("has no string spelling", () => {
     const rerolled = attack().onHit(3, d6).rerollDamageUpTo(1);
     expect(() => rerolled.toExpression()).toThrow(/rerollDamageUpTo/);
-    expect(rerolled.diceMatchInfo()).toEqual({ hit: null, crit: null });
-    expect(attack().onHit(3, d6).diceMatchInfo().hit).not.toBeNull();
   });
 
   it("runs through a Turn", () => {

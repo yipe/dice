@@ -45,6 +45,12 @@ export interface DiceMatchInfo {
  */
 export interface HasDiceMatchInfo {
   diceMatchInfo(eps?: number): { hit: DiceMatchInfo | null; crit: DiceMatchInfo | null };
+  /**
+   * Why a branch has no descriptor, as a phrase a trigger's error can carry ("the damage rolls
+   * dice of different kinds ..."); `null` for a branch that has one. Optional: a source that
+   * cannot say leaves the error generic.
+   */
+  diceMatchRefusals?(): { hit: string | null; crit: string | null };
 }
 
 export interface CritConfig {
