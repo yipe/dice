@@ -1123,12 +1123,14 @@ export class Turn {
 
         // Order at a step: read the flags to select the variant, clear the
         // `next-attack` flags this roll consumes, draw, advance the groups, then
-        // apply this outcome's grants.
+        // apply this outcome's grants. An attack that did not happen ("none") rolls
+        // nothing, so it consumes nothing.
         const draws = step.variants[step.select(state.codes, fired, state.flags, state.counts)];
-        const flags = state.flags & ~step.consumes;
+        const consumed = state.flags & ~step.consumes;
         for (const { outcome, matched, spends, applies, bumps, fires, slice, byKind } of draws) {
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
+          const flags = outcome === "none" ? state.flags : consumed;
 
           const contribution = stateMass * sliceMass;
           if (outcome === "crit") {

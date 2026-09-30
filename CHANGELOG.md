@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A skipped attack no longer uses up a pending `next-attack` grant** (an attack with `chance < 1` spent
+  the grant in the rounds where it did not happen, so `advantage().untilNextAttack()` was lost before the
+  next attack that does happen; the README and the `chance` doc say a skipped attack is no landing and no
+  miss and never spends one). The walk cleared every `next-attack` flag a step reads across all of its
+  draws, including the "did not happen" draw, which rolls nothing. That draw now leaves the flags as they
+  were. With `chance: 0` the turn now equals the turn without the attack, and a pending grant reaches the
+  next attack in the `1 - chance` share of rounds. A turn with no `chance` below 1 is unchanged.
+
 ## [0.16.0] - 2026-09-30
 
 ### Added
