@@ -178,6 +178,11 @@ export class SaveBuilder implements CheckBuilder {
     return this.toPMF();
   }
 
+  /** Expected damage of the save effect, from the exact PMF. */
+  mean(): number {
+    return this.pmf.mean();
+  }
+
   // By default, create query on PMF with no pruning
   toQuery(eps: number = 0): DiceQuery {
     return this.toPMF(eps).query();

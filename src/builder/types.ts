@@ -86,4 +86,5 @@ export interface CheckBuilder {
   resolve(eps?: number): Resolution;
   toExpression(): string;
   readonly pmf: PMF;
+  mean(): number;
 }
