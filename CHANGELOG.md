@@ -7,15 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`AttackBuilder.mean()` and `SaveBuilder.mean()`**: the expected damage, read from the exact PMF, so
+  `d20.plus(8).ac(16).onHit(d8.plus(4)).mean()` is 5.75 without going through `toQuery()`. This matches
+  `Turn.mean()`. `CheckBuilder` requires it. `RollBuilder` has no `mean()`, because `ACBuilder` and
+  `DCBuilder` would inherit it and return the raw to-hit total and the chance the save fails. Use
+  `.pmf.mean()` on a plain roll.
+
+### Documentation
+
+- **The README is now a feature tour**: what the library does, with runnable examples (attacks, saves,
+  roll types, damage-dice options, GWM by AC, turns, grants, charts) and a dice-expression cheat sheet.
+  The full grammar, rules reference, `Turn` reference and architecture overview moved to
+  [`docs/guide.md`](docs/guide.md). The README's code examples were corrected: builder imports come from
+  `@yipe/dice/builder`, an attack's DPR is `.mean()`, and a parsed `PMF` uses `.query()`.
+
 ### Fixed
 
-- **A skipped attack no longer uses up a pending `next-attack` grant** (an attack with `chance < 1` spent
-  the grant in the rounds where it did not happen, so `advantage().untilNextAttack()` was lost before the
-  next attack that does happen; the README and the `chance` doc say a skipped attack is no landing and no
-  miss and never spends one). The walk cleared every `next-attack` flag a step reads across all of its
-  draws, including the "did not happen" draw, which rolls nothing. That draw now leaves the flags as they
-  were. With `chance: 0` the turn now equals the turn without the attack, and a pending grant reaches the
-  next attack in the `1 - chance` share of rounds. A turn with no `chance` below 1 is unchanged.
+- **A skipped attack no longer uses up a pending `next-attack` grant** (since 0.14.0, an attack with
+  `chance < 1` spent a grant such as `advantage().untilNextAttack()` in the rounds where it did not happen,
+  so the next attack that did happen lost it). With `chance: 0` the turn now equals the turn without the
+  attack, and a pending grant reaches the next attack in the `1 - chance` share of rounds, as the 0.14.0
+  entry and the `chance` doc promise. The walk cleared the `next-attack` flags a step reads on every draw,
+  including the "did not happen" draw, which rolls nothing; that draw now leaves them alone. A turn with no
+  `chance` below 1 is unchanged.
 
 ## [0.16.0] - 2026-09-30
 
