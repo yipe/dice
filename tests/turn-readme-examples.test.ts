@@ -8,8 +8,8 @@ import { DiceQuery } from "../src/pmf/query";
 import { Turn, turn } from "../src/turn";
 
 /**
- * Every figure quoted in the README's "Damage Riders" section. Docs that quote
- * numbers drift silently; these fail loudly instead.
+ * Every figure quoted for turns in the README and in docs/guide.md's "Turns"
+ * section. Docs that quote numbers drift silently; these fail loudly instead.
  */
 const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
