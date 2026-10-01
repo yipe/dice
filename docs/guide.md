@@ -466,9 +466,13 @@ trigger reading the same attack.
 The same verbs take a **grant** — a modifier with a lifetime — for the attack rolls after it:
 
 ```ts
-import { advantage, disadvantage, turn } from "@yipe/dice/builder";
+import { advantage, d12, d20, d6, d8, disadvantage, roll, turn } from "@yipe/dice/builder";
 
 const sword = d20.plus(5).ac(12).onHit(roll(1, d8).plus(3));
+const axe = d20.plus(7).ac(15).onHit(d12.plus(4));
+const bow = d20.plus(6).ac(15).onHit(d8.plus(3));
+const fist = d20.plus(8).ac(16).onHit(d6.plus(5));
+const dc = d20.plus(2).dc(15); // the target's saving throw
 
 // A hit gives the next attack advantage. The next attack uses it up even on a miss, and passes it
 // on if it lands.
@@ -476,13 +480,13 @@ turn([sword, sword]).onEveryHit(advantage().untilNextAttack()).mean();        //
 turn([sword, sword, sword]).onEveryHit(advantage().untilNextAttack()).mean(); // 19.192196
 
 // A hit gives advantage for the rest of the turn if the target fails a save; each landing tries again.
-turn([axe, axe]).onEveryHit(advantage().untilEndOfTurn(), { save: d20.plus(2).dc(15) });
+turn([axe, axe]).onEveryHit(advantage().untilEndOfTurn(), { save: dc });
 
 // Once per turn, on the first hit, 40% of the time: advantage, and every later hit is a crit.
 turn([fist, fist, fist]).onFirstHit(advantage().critOnHit().untilEndOfTurn(), { chance: 0.4 });
 
-// One save, two grants: advantage for the melee attacks, disadvantage for the ranged ones.
-turn().attack(axe, { tag: "melee" }).attack(bow, { tag: "ranged" })
+// One save, two grants: advantage for the later melee attacks, disadvantage for the ranged ones.
+turn().attacks(2, axe, { tag: "melee" }).attack(bow, { tag: "ranged" })
   .onEveryHit([advantage().untilEndOfTurn().to("melee"),
                disadvantage().untilEndOfTurn().to("ranged")], { of: ["melee"], save: dc });
 ```

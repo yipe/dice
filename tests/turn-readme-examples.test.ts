@@ -5,11 +5,12 @@ import { d10, d20, d4, d6, d8, flat, roll } from "../src/builder/factory";
 import { onAnyHit, onCritOnly } from "../src/common/types";
 import { PMF } from "../src/pmf/pmf";
 import { DiceQuery } from "../src/pmf/query";
-import { Turn, turn } from "../src/turn";
+import { advantage, Turn, turn } from "../src/turn";
 
 /**
  * Every figure quoted for turns in the README and in docs/guide.md's "Turns"
- * section. Docs that quote numbers drift silently; these fail loudly instead.
+ * section, except the effects cookbook's, which src/builder/example.test.ts pins.
+ * Docs that quote numbers drift silently; these fail loudly instead.
  */
 const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
@@ -151,5 +152,52 @@ describe("README: ids and plain data", () => {
       riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
     });
     expect(fromUI.mean()).toBeCloseTo(18.6225, 4);
+  });
+});
+
+describe("README: smite or flurry", () => {
+  it("quotes the right mean and smite chance", () => {
+    const paladin = turn([dagger, dagger]).onAnyCrit(roll(2, d8), { id: "smite" }).otherwise([unarmed, unarmed]);
+    expect(paladin.mean()).toBeCloseTo(19.57025, 10);
+    expect(paladin.fireProbability("smite")).toBeCloseTo(0.0975, 12);
+  });
+});
+
+describe("README: the figures beside the grants", () => {
+  // The README's `fist` is the same attack as its `shortsword`: +8 against AC 16 for d6 + 5.
+  const shortsword = d20.plus(8).ac(16).onHit(d6.plus(5));
+
+  it("quotes four plain shortswords and three plain fists", () => {
+    expect(turn().attacks(4, shortsword).mean()).toBeCloseTo(22.8, 10);
+    expect(turn([shortsword, shortsword, shortsword]).mean()).toBeCloseTo(17.1, 10);
+  });
+
+  it("quotes the Stunning Strike shape", () => {
+    const stunning = turn([shortsword, shortsword, shortsword]).onFirstHit(advantage().untilEndOfTurn(), {
+      save: d20.plus(2).dc(15),
+      onSave: advantage().untilNextAttack(),
+    });
+    expect(stunning.mean()).toBeCloseTo(19.76175, 10);
+  });
+});
+
+describe("README: sweeping AC", () => {
+  it("quotes the right mean at each AC", () => {
+    const base = turn([sword, sword]).onFirstHit(roll(3, d6));
+    const means = [12, 14, 16, 18, 20].map((ac) => base.vsAC(ac).mean());
+    [26.6225, 24.66, 22.4875, 20.105, 17.5125].forEach((expected, index) => {
+      expect(means[index]).toBeCloseTo(expected, 10);
+    });
+  });
+});
+
+describe("guide: riders over saving throws", () => {
+  it("quotes the right fire probability and means for a fail-landing rider", () => {
+    const fireball = d20.dc(15).onSaveFailure(roll(8, d6)).saveHalf();
+    const t = turn([dagger, fireball]).onFirstHit(roll(2, d6), { landing: "fail", id: "rider" });
+    // 1 - P(dagger misses) * P(target passes) = 1 - 0.35 * 0.30
+    expect(t.fireProbability("rider")).toBeCloseTo(0.895, 12);
+    expect(t.mean()).toBeCloseTo(34.69, 10);
+    expect(turn([dagger, fireball]).mean()).toBeCloseTo(28.075, 10);
   });
 });
