@@ -234,6 +234,13 @@ export interface RiderOptions {
    * watches a rider, not attacks.
    */
   landing?: SaveLanding;
+  /**
+   * For a first-hit rider named in `of` (a partner): its attacks where this landing counts (default:
+   * all of them). See {@link Rider.where}; a condition over the same `of` reads it too.
+   */
+  where?: Readonly<Record<string, readonly string[]>>;
+  /** Attack ids whose own damage roll this call's dice join: damage only. See {@link Rider.joins}. */
+  joins?: readonly string[];
 }
 
 /**

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { advantage, d20, d4, d8, saveDisadvantage, Turn, turn, TurnSpecError, vulnerability } from "../src/builder";
-import { restrained } from "../src/dnd5e";
+import { advantage, d20, d4, d6, d8, roll, saveDisadvantage, Turn, turn, TurnSpecError, vulnerability } from "../src/builder";
+import { prone, restrained, RULES } from "../src/dnd5e";
 import type { TriggerSave } from "../src/turn/effects";
+import type { ContextualSource, ToPMF } from "../src/turn/types";
 
 const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
 
@@ -13,6 +14,53 @@ const codeOf = (build: () => unknown): string | undefined => {
   }
   return undefined;
 };
+
+describe("a grants-only trigger call keeps or refuses its rider options", () => {
+  const base = turn([sword, sword, sword]).onFirstHit(roll(2, d6), { id: "sneak" });
+  const proneGrant = { condition: "prone", rule: RULES.prone, until: "end-of-turn" as const };
+
+  it("where limits the rows a rider's landing fires the condition on", () => {
+    const fluent = base.onEveryHit(prone().untilEndOfTurn(), { of: ["sneak"], where: { sneak: ["attack 3"] } });
+    const plain = Turn.from({
+      attacks: [sword, sword, sword],
+      riders: [{ id: "sneak", on: "first-hit", damage: roll(2, d6) }],
+      conditions: [{ on: "every-hit", of: ["sneak"], where: { sneak: ["attack 3"] }, grants: [proneGrant] }],
+    });
+    // Prone can only land on the third attack, after which nothing reads it: three swords
+    // (3 × 5.75) plus Sneak Attack on the first hit (7 × (1 − 0.35³) × 14/13).
+    expect(fluent.mean()).toBeCloseTo(24.46525, 10);
+    expect(fluent.mean()).toBe(plain.mean());
+    const unscoped = base.onEveryHit(prone().untilEndOfTurn(), { of: ["sneak"] });
+    expect(unscoped.mean()).toBeGreaterThan(fluent.mean() + 1);
+  });
+
+  it("joins is refused: a grant rolls no dice into a row", () => {
+    expect(() => base.onEveryHit(prone().untilEndOfTurn(), { of: ["sneak"], joins: ["attack 2"] })).toThrow(/joins/);
+  });
+});
+
+describe("joins names rows the rider can land on", () => {
+  // A source that pools joined riders' dice: one d6 per rider in `context.joined`.
+  const pooling: ContextualSource & ToPMF = {
+    rowCheck: sword.rowCheck,
+    under: (context, eps = 0) =>
+      (context.joined.length === 0 ? sword : d20.plus(8).ac(16).melee().onHit(d8.plus(4).add(roll(context.joined.length, d6)))).under(context, eps),
+    toPMF: (eps = 0) => sword.toPMF(eps),
+  };
+
+  it("a row the rider does not watch is unknown-id", () => {
+    const rider = { id: "a", on: "first-hit" as const, damage: d6, of: ["attack 1"] };
+    expect(codeOf(() => Turn.from({ attacks: [pooling, pooling], riders: [{ ...rider, joins: ["attack 1"] }] }).mean())).toBeUndefined();
+    expect(codeOf(() => Turn.from({ attacks: [pooling, pooling], riders: [{ ...rider, joins: ["attack 2"] }] }).mean())).toBe("unknown-id");
+  });
+
+  it("a not-fired rider has no row to join", () => {
+    const first = { id: "a", on: "first-hit" as const, damage: d6, of: ["attack 1"] };
+    expect(
+      codeOf(() => Turn.from({ attacks: [pooling, pooling], riders: [first, { on: "not-fired", of: "a", damage: d6, joins: ["attack 2"] }] }).mean())
+    ).toBe("unsupported-trigger");
+  });
+});
 
 describe("a DC check used as a trigger's save is rolled in the target's state", () => {
   const gated = (save: TriggerSave) =>

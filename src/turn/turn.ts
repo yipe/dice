@@ -555,12 +555,16 @@ export class Turn {
     if (damage.length === 0 && happens !== undefined) {
       throw new Error("happens is a damage rider's coin, and this call has no damage; use chance for effects.");
     }
+    if (damage.length === 0 && riderOptions.joins !== undefined) {
+      throw new Error("joins pools a damage rider's dice into a row, and this call has no damage.");
+    }
 
     const of = riderOptions.of ?? this.defaultOf();
     const condition: ConditionSpec = {
       ...(damage.length === 0 && riderOptions.id !== undefined ? { id: riderOptions.id } : {}),
       on,
       of,
+      ...(riderOptions.where === undefined ? {} : { where: riderOptions.where }),
       ...gateFields(options, this.eps),
       grants: grants.map(effectSpec),
     };

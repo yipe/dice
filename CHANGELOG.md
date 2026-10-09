@@ -91,6 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ability`: save disadvantage and penalty dice in force apply to it, and in a turn whose rules read saves
   by ability it is `save-without-ability` without one, as a save row is. With nothing in force its odds are
   its own P(fail), bit for bit as in 0.16. Only `chance` is a fixed gate.
+- **`where` and `joins` are rider options**: a trigger verb's `where` reaches the condition it adds (not
+  only the rider), `joins` on a call without damage is refused, and a rider's `joins` must name a row it
+  watches (`unknown-id`) on a trigger that watches attacks (`unsupported-trigger` for `not-fired`).
 
 ### Documentation
 

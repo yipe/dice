@@ -1928,9 +1928,15 @@ export function buildPlan(
     if (rider.landing === "any") {
       fail("unsupported-trigger", id, `Rider "${id}" joins rows but lands on anything: a miss has no roll to join.`);
     }
+    if (rider.on === "not-fired") {
+      fail("unsupported-trigger", id, `Rider "${id}" joins rows but watches a rider, not attacks: it has no row to roll in.`);
+    }
     for (const joined of rider.joins) {
       const attackIndex = attackIndexById.get(joined);
       if (attackIndex === undefined) fail("unknown-id", joined, `Rider "${id}" joins "${joined}", which is not an attack in this turn.`);
+      if (!sourceIdsByNode[index].includes(joined)) {
+        fail("unknown-id", joined, `Rider "${id}" joins "${joined}", which it does not watch: a rider's dice join a row only where it can land.`);
+      }
       const source = attackSources[attackIndex as number];
       if (!isContextual(source) || IGNORES_JOINED in source) {
         fail(
