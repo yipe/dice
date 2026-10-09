@@ -138,7 +138,8 @@ for (const [name, run] of Object.entries(scenarios)) {
     times.push(performance.now() - t0);
   }
   times.sort((a, b) => a - b);
-  const median = times[Math.floor(times.length / 2)];
+  const mid = Math.floor(times.length / 2);
+  const median = times.length % 2 ? times[mid] : (times[mid - 1] + times[mid]) / 2;
   total += median;
   rows.push([name, median, fp]);
 }

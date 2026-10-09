@@ -24,10 +24,12 @@ export const pmfCache = new LRUCache<string, PMF>(1000, sharedPMFCacheOptions);
 const QUANTILE_RELATIVE_SLACK = 1e-12;
 
 /**
- * Widest integer support a convolution accumulates in flat arrays (per damage value, one float
- * per label); a wider one takes the map walk. 2^20 values × a few labels stays small.
+ * Widest integer support a convolution accumulates in flat arrays, and the most cells (one per
+ * damage value per label, `p` included) those arrays may hold; past either, it takes the map
+ * walk. 2^22 cells is 32 MB of floats plus the order and touched arrays beside them.
  */
 const MAX_DENSE_WIDTH = 1 << 20;
+const MAX_DENSE_CELLS = 1 << 22;
 
 /** A PMF's bins as flat arrays, for {@link PMF.convolve}; see `PMF.binTable`. */
 interface BinTable {
@@ -1237,6 +1239,9 @@ export class PMF {
     const bAttrSlot = slotOf(attrLabels, b.attrLabels);
     const L = countLabels.length;
     const M = attrLabels.length;
+    // The flat arrays hold `width` cells per label (plus `p`): a wide support with many labels
+    // is the map walk's too.
+    if (width * (L + M + 1) > MAX_DENSE_CELLS) return PMF.convolveBinsSparse(A, B);
 
     const p = new Float64Array(width);
     const count = new Float64Array(width * L);
