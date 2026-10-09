@@ -17,6 +17,7 @@ import { advantage, savePenalty, vulnerability } from "../src/turn/effects";
 import { prone, stunned } from "../src/dnd5e";
 
 const REPEATS = Number(process.argv[2] ?? 7);
+if (!Number.isInteger(REPEATS) || REPEATS < 1) throw new Error(`repeats must be a positive integer, got ${process.argv[2]}`);
 
 const sword = d20.plus(8).ac(16).onHit(d8.plus(4));
 const melee = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
