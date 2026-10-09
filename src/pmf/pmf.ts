@@ -885,18 +885,39 @@ export class PMF {
    * Returns a new PMF with `branch` added to this one, scaled by `probability` before merging —
    * the primitive for conditional effects. Example: `pmf.addScaled(critBranch, 0.05)` → a PMF
    * including a 5% crit slice.
+   *
+   * One pass: each of this PMF's bins is copied with the branch's bin at the same damage added
+   * into it (its labels after this bin's, in the branch's order), then the branch's other bins
+   * are copied after them. The same sums as copying every bin first and merging the branch in.
    */
   addScaled(branch: PMF, probability: number): PMF {
     if (probability === 0) return this;
 
+    // `x * 1` is `x`: an unscaled branch merges its bins as they are.
+    const scaled = (bin: Bin): Bin => (probability === 1 ? bin : PMF.scaleBin(bin, probability));
     const resultMap = new Map<number, Bin>();
     for (const [dmg, bin] of this.map) {
-      resultMap.set(dmg, PMF.cloneBin(bin));
+      const added = branch.map.get(dmg);
+      if (added === undefined) {
+        resultMap.set(dmg, PMF.cloneBin(bin));
+        continue;
+      }
+      const addedBin = scaled(added);
+      const count: OutcomeLabelMap = { ...bin.count };
+      for (const labelKey in addedBin.count) {
+        count[labelKey] = (count[labelKey] || 0) + (addedBin.count[labelKey] as number);
+      }
+      let attr = bin.attr ? { ...bin.attr } : undefined;
+      if (addedBin.attr) {
+        attr ??= {};
+        for (const labelKey in addedBin.attr) {
+          attr[labelKey] = (attr[labelKey] || 0) + (addedBin.attr[labelKey] as number);
+        }
+      }
+      resultMap.set(dmg, { p: bin.p + addedBin.p, count, attr });
     }
-
-    for (const [damageValue, probabilityBin] of branch.map) {
-      // `x * 1` is `x`: an unscaled branch merges its bins as they are (`mergeInto` copies a new one).
-      PMF.mergeInto(resultMap, damageValue, probability === 1 ? probabilityBin : PMF.scaleBin(probabilityBin, probability));
+    for (const [dmg, bin] of branch.map) {
+      if (!this.map.has(dmg)) resultMap.set(dmg, PMF.cloneBin(scaled(bin)));
     }
 
     return new PMF(resultMap, this.epsilon, false);
@@ -1180,20 +1201,40 @@ export class PMF {
 
   /** `A ⊛ B` for operands already in content order, with the mass invariant enforced. */
   private static convolveOrdered(A: PMF, B: PMF, epsilon: number, raw: boolean): PMF {
-    let result = new PMF(PMF.convolveBins(A, B), epsilon, !raw);
-
-    // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
+    const map = PMF.convolveBins(A, B);
+    // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1). The map is this
+    // call's own, so it is rescaled in place: each value times the factor, as `scaleMass` would,
+    // and like `scaleMass`'s result the rescaled PMF is not `normalized` (so the non-raw path
+    // then divides it through, as it always has).
     const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
-    const mGot = result.mass();
+    const mGot = PMF.massOf(map);
     // Guard mGot !== 0: a zero-mass operand convolves to the zero measure
     // (mass 0). Without this guard the non-raw path would scaleMass(mExp/0) =
     // scaleMass(Infinity), poisoning every bin to 0*Infinity = NaN.
-    if (mExp !== 0 && mGot !== 0 && Math.abs(mGot - mExp) > epsilon) {
-      result = result.scaleMass(mExp / mGot);
-    }
+    const rescaled = mExp !== 0 && mGot !== 0 && Math.abs(mGot - mExp) > epsilon;
+    if (rescaled) PMF.scaleInPlace(map, mExp / mGot);
+    let result = new PMF(map, epsilon, !raw && !rescaled);
     if (!raw && mGot !== 0 && Math.abs(result.mass() - 1) > epsilon)
       result = result.normalize();
     return result;
+  }
+
+  /** The mass of `map`: its bins' `p` summed in map order, as {@link mass} sums them. */
+  private static massOf(map: ReadonlyMap<number, Bin>): number {
+    let total = 0;
+    for (const { p } of map.values()) total += p;
+    return total;
+  }
+
+  /** Every value of every bin of `map` times `factor`, in place: {@link scaleBin} without the copy. */
+  private static scaleInPlace(map: ReadonlyMap<number, Bin>, factor: number): void {
+    for (const bin of map.values()) {
+      bin.p *= factor;
+      const count = bin.count;
+      for (const k in count) count[k] = (count[k] as number) * factor;
+      const attr = bin.attr;
+      if (attr) for (const k in attr) attr[k] = (attr[k] as number) * factor;
+    }
   }
 
   /**
@@ -1210,6 +1251,7 @@ export class PMF {
     const aDamages = A.support();
     const bDamages = B.support();
     if (aDamages.length === 0 || bDamages.length === 0) return new Map();
+    if (aDamages.length === 1 || bDamages.length === 1) return PMF.convolveBinsShifted(A, B);
     const lo = aDamages[0] + bDamages[0];
     const width = aDamages[aDamages.length - 1] + bDamages[bDamages.length - 1] - lo + 1;
     // Flat arrays cost `width` cells per label; the map walk costs a pair per label. A support
@@ -1339,6 +1381,40 @@ export class PMF {
         bin.attr = labels;
       }
       combinedMap.set(lo + slot, bin);
+    }
+    return combinedMap;
+  }
+
+  /**
+   * {@link convolveBins} where one operand has a single bin (a slice that is one damage value: a
+   * miss, a flat payload): every pair reaches its own damage, so each result bin is one pair's
+   * terms, added to 0 as the walks above add them (`0 + x`, which is what keeps a `-0` out), in the
+   * same label order: A's labels then B's. No slot arrays: the bins are built directly, in the
+   * order the walk reaches them. Two pairs that round to one damage (a non-integer support) take
+   * the map walk instead.
+   */
+  private static convolveBinsShifted(A: PMF, B: PMF): Map<number, Bin> {
+    const combinedMap = new Map<number, Bin>();
+    for (const aVal of A.support()) {
+      const aBin = A.map.get(aVal) as Bin;
+      const ap = aBin.p;
+      for (const bVal of B.support()) {
+        const bBin = B.map.get(bVal) as Bin;
+        const bp = bBin.p;
+        const dmg = aVal + bVal;
+        if (combinedMap.has(dmg)) return PMF.convolveBinsSparse(A, B);
+        const count: OutcomeLabelMap = {};
+        for (const k in aBin.count) count[k] = 0 + (aBin.count[k] as number) * bp;
+        for (const k in bBin.count) count[k] = (count[k] || 0) + (bBin.count[k] as number) * ap;
+        const bin: Bin = { p: 0 + ap * bp, count };
+        if (aBin.attr || bBin.attr) {
+          const attr: OutcomeLabelMap = {};
+          if (aBin.attr) for (const k in aBin.attr) attr[k] = 0 + (aBin.attr[k] as number) * bp;
+          if (bBin.attr) for (const k in bBin.attr) attr[k] = (attr[k] || 0) + (bBin.attr[k] as number) * ap;
+          bin.attr = attr;
+        }
+        combinedMap.set(dmg, bin);
+      }
     }
     return combinedMap;
   }
