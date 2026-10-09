@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-10-09
+
+### Changed
+
+- **Convolution and merge kernels, same bits, less copying.** The mass-invariant rescale after a
+  convolution multiplies the fresh result in place instead of cloning it; a one-bin operand (a
+  miss slice, a flat payload) is convolved by building each bin directly, with no slot arrays; and
+  `addScaled` merges in one pass instead of copying every bin and then merging. Every sum and
+  product is the same, in the same order, so every result is bit for bit what it was
+  (`tests/pmf-kernel-reference.test.ts` pins `convolve`, `convolveRaw` and `addScaled` to a plain
+  reference walk on random labelled PMFs, at the default epsilon and at 0). The 12-attack joint
+  `pmf` sweep runs about 10% faster.
+
 ## [0.18.0] - 2026-10-09
 
 ### Fixed
