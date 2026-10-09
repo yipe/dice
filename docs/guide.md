@@ -6,6 +6,7 @@ expression grammar, the exact rules the engine follows, every `Turn` feature, an
 - [Dice expression language](#dice-expression-language)
 - [Rules reference](#rules-reference)
 - [Turns: attacks and conditional damage](#turns-attacks-and-conditional-damage)
+- [Conditions: what the target has, and what it gets](#conditions-what-the-target-has-and-what-it-gets)
 - [Statistics and charts](#statistics-and-charts)
 - [Architecture](#architecture)
 
@@ -713,7 +714,7 @@ paladin.riderIds;                 // ["smite"]
 Every construction path validates immediately and throws a `TurnSpecError` whose `code` —
 `unknown-id`, `cycle`, `not-an-attack`, `duplicate-id`, `self-reference`, `unused-crit-damage`,
 `too-many-groups`, `no-dice-descriptor`, `duplicate-substitute`, `attack-after-rider`,
-`no-rebindable-source`, `unsupported-trigger`, `unsupported-policy`, `too-many-flags`,
+`no-rebindable-source`, `unsupported-trigger`, `unsupported-policy`, `too-many-states`,
 `unknown-key`, `non-string-id` — maps straight onto a UI field state. A bad `of` fails at the
 call that introduced it, not later at `.mean()`. An attack wrapper carries only `source`, `id`,
 `tag` and `chance`: any other key is `unknown-key`, and an id or tag that is not a string is
@@ -743,6 +744,138 @@ const fromUI = Turn.from({
   riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
 });
 ```
+
+## Conditions: what the target has, and what it gets
+
+A **condition** is a rule plus a lifetime: what it does to the rows that read it (advantage on attacks, a crit on
+every melee hit, an automatic failure on STR saves) and when it ends. `@yipe/dice/dnd5e` names the six the rules
+use (`blinded`, `paralyzed`, `prone`, `restrained`, `stunned`, `unconscious`) and `condition(name, rule)` takes any
+other. Some rules depend on the row, so rows say what they are: `melee()` / `ranged()` on an attack (Prone gives
+melee advantage and ranged disadvantage), an ability on a save (Stunned fails STR and DEX saves): `ability("con")`
+on a DC check, or `saveDC(15, { con: 2 })` from `@yipe/dice/dnd5e` for a trigger's save. Beside
+conditions sit plain effects on the target: `vulnerability()` for the next hit, and `saveDisadvantage()` /
+`savePenalty(d4)` for its saves.
+
+The verbs are the same ones the effects above use. `atStart` is what the target already has; a trigger verb
+(`onFirstHit`, `onEveryHit`, `onAnyCrit`, `onFirstCrit`) is what it gets, behind an optional save or chance. Each
+example below is exported from `src/builder/example.ts` and pinned in its test to the brute-force oracle
+(`tests/oracle/bruteForce.ts`, which shares no code with the library) at 1e-12; `yarn example conditions` prints
+them. All attacks are +8 vs AC 16.
+
+```ts
+import { advantage, d20, d4, d6, d8, roll, savePenalty, turn, vulnerability } from "@yipe/dice/builder";
+import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "@yipe/dice/dnd5e";
+
+const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
+const bow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
+const fist = d20.plus(8).ac(16).onHit(d6.plus(4));
+
+// Vex: a hit gives the next attack advantage.
+turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean(); // 12.8959
+
+// Topple: each hit may knock the target Prone (CON save). The bow would then have disadvantage,
+// so the player tries it only when it helps.
+const toppling = sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
+turn([toppling, toppling, bow]).mean(); // 17.2500
+
+// 2024 Stunning Strike: once a turn, a failed save stuns; a pass still gives the next attack advantage.
+const monk = turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {
+  id: "stun", save: saveDC(15, { con: 2 }), onSave: advantage().untilNextAttack(),
+});
+monk.mean(); // 17.5234
+monk.fireProbability("stun"); // 0.5265: stunned where a later fist reads it
+monk.stepStats("attack 3").live.advantage; // 0.6175: the third fist rolls with advantage
+
+// 2024 Grappler: the target saves with STR or DEX, whichever it passes more often.
+const saves = saveDC(15, { str: 5, dex: 1 });
+turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { save: saves }).mean(); // 12.1281
+
+// 2014 grapple: an Athletics contest, +5 against +7; ties go to the defender.
+const grappled = contestLossChance({ attacker: 5, defender: 7 });
+turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { chance: grappled }).mean(); // 12.0339
+
+// Cunning Strike (Knock Out): on the hit that carries Sneak Attack, a CON save or Unconscious until damaged.
+turn([sword, sword, sword])
+  .onFirstHit(roll(3, d6), { id: "sneak" })
+  .onFirstHit(unconscious().untilDamaged(), { of: ["sneak"], save: saveDC(15, { con: 2 }) })
+  .mean(); // 32.0568
+
+// 2014 Path to the Grave: the cursed creature is vulnerable to the next hit's whole damage.
+turn([sword, sword]).atStart(vulnerability().untilNextHit()).mean(); // 19.2625
+
+// The target starts the turn Restrained; a second creature has its own state.
+turn().attacks(2, sword).attack(sword, { target: "second" }).atStart(restrained()).mean(); // 21.5450
+```
+
+Unconscious that ends on damage leaves the creature Prone for the rest of the turn (its rule's `onEnd`), so the
+hit that wakes it still reads it, and the swings after read Prone. An `optional` condition is decided by search:
+with up to three in a turn, every subset is tried and the best mean kept (the full set wins a tie); past three,
+each is tried where the later attacks on its creature lean melee.
+
+### Conditions that need a damage type
+
+`dealing: "cold"` lands only where the hit dealt cold damage. The turn asks the row for the odds it did through
+`dealt(type, context)` on a `ContextualSource`. `attack.typed("cold")` says the attack's whole damage is that type:
+its `dealt` is P(damage > 0) given a hit and given a crit, so a hit that rolls 0 deals nothing. An untyped attack has
+no `dealt`, and a `dealing` condition that reads it is `not-an-attack`. A row that deals several types needs a
+hand-written `ContextualSource` whose `dealt` knows the split. With `dealing`, `mean()` and `marginal(id)` are exact,
+and the joint `pmf` throws `dealing-joint-unsupported`: the turn knows the odds a landing dealt the type, not which
+damage it was.
+
+```ts
+// Cold Caster's Frostbite: once a turn, a cold hit takes 1d4 off the target's next save.
+const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold");
+const breath = d20.plus(5).dc(15).ability("dex").onSaveFailure(roll(4, d6)).saveHalf();
+const caster = turn().attack(ray, "ray").attack(breath, "breath")
+  .onFirstHit(savePenalty(d4).untilNextSave(), { of: ["ray"], dealing: "cold" });
+caster.marginal("breath").pmf.mean(); // 10.5563
+```
+
+### Factories, lifetimes, verbs and options
+
+| Effect                                                                           | Lifetimes                                     | Notes                                                    |
+| -------------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------- |
+| `advantage()`, `disadvantage()`, `critOnHit()` (chainable)                       | `untilNextAttack()`, `untilEndOfTurn()`       | `.to(ids or tags)` limits the readers                    |
+| `blinded()`, `paralyzed()`, `prone()`, `restrained()`, `stunned()`, `unconscious()` | `untilEndOfTurn()`, `untilDamaged()`       | from `@yipe/dice/dnd5e`; `condition(name, rule)` for any other |
+| `vulnerability()`                                                                | `untilNextHit()`                              | the hit's whole damage doubles, riders included          |
+| `saveDisadvantage()`, `savePenalty(d4)`                                          | `untilNextSave()`, `untilEndOfTurn()`         | `savePenalty` takes one plain die group; `.to(...)`      |
+
+| Verb                                                    | On                                       | Fires                                       |
+| ------------------------------------------------------- | ---------------------------------------- | ------------------------------------------- |
+| `turn.atStart(effect, { target })`                      | the turn                                 | before the first row; no lifetime means the turn |
+| `turn.onFirstHit(effect, options)`                      | the turn                                 | the first landing among `of`                |
+| `turn.onEveryHit(effect, options)` / `attack.onEveryHit` | the turn, or attached to an attack      | every landing (attached: that attack's)     |
+| `turn.onAnyCrit` / `turn.onFirstCrit` / `attack.onAnyCrit` / `attack.onFirstCrit` | either | a crit, every time / once                   |
+| `dc.onSaveFailure([damage, effect])`                    | a save                                   | that save failed                            |
+
+| Option              | Meaning                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `save`              | the target's save: a DC check with `ability(...)`, `saveDC(dc, { con: 2 })`, or a list it picks the likeliest pass from |
+| `chance`            | a fixed P(the effects take), instead of a save (`contestLossChance` for a contest)        |
+| `onSave`            | effects on the other branch: the save passed, or `1 - chance`                             |
+| `of`, `id`          | the rows or riders watched (a rider id: land with that rider), and a name to read it by   |
+| `dealing`           | the landing must deal this damage type; the row says its type with `typed("cold")` (see above) |
+| `target`            | the creature the effects go on; rows name theirs with `attack(source, { target })`       |
+| `optional: true`    | "you can": taken only where it raises the mean                                            |
+
+| Sugar                                  | Is                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `saveDC(15, { con: 2 })`               | `{ ability: "constitution", dc: 15, bonus: 2 }`; several abilities give the list the target picks from; `TypeError` on none, an unknown or repeated one, or a non-integer |
+| `attack.typed("cold")`                 | the attack's whole damage is cold: `dealt("cold", context)` is P(damage > 0 \| hit) and \| crit; any other type is 0 |
+
+Readers: `mean()`, `marginal(id).pmf` (one attack's or rider's own damage; the marginals' means add up to the
+mean), `fireProbability(id)` (P(a condition was applied where a later row reads it)), and `stepStats(id).live`
+(how often each modifier was in force when an attack rolled).
+
+### Errors
+
+| Code                        | Cause                                                              | Fix                                                        |
+| --------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| `unknown-range`             | a rule keyed by range (Prone, Unconscious) reads a row with none   | add `.melee()` or `.ranged()` to the attack                |
+| `unknown-ability`           | a save names an ability that is neither 5e's nor in any rule       | use `str`/`dex`/`con`/`int`/`wis`/`cha` or the full name   |
+| `save-without-ability`      | a rule keyed by ability (Stunned, Restrained) reads a save with none | add `.ability("dex")` to the DC check                    |
+| `too-many-states`           | more effects live at once than the walk holds, or past `stateLimit` | drop or scope effects (`.to`, `of`), or raise `stateLimit(n)` |
+| `dealing-joint-unsupported` | the joint `pmf` of a turn with `dealing`                           | read `mean()` or `marginal(id)` instead                    |
 
 ## Statistics and charts
 

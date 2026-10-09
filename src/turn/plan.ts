@@ -3,10 +3,29 @@ import type { AttachedCondition } from "../builder/attack";
 import { ParsedRollBuilder } from "../builder/roll";
 import type { AttackResolution, Check } from "../builder/types";
 import { EPS } from "../common/types";
+import type { RollType } from "../common/types";
 import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
-import { grantSpec, isGrant, isTransform } from "./effects";
+import {
+  byDie,
+  combineRollType,
+  contextKey,
+  contextOf,
+  isContextual,
+  MOD_ADVANTAGE,
+  MOD_AUTO_FAIL,
+  MOD_CRIT_ON_HIT,
+  MOD_DISADVANTAGE,
+  MOD_PENALTY_SHIFT,
+  MOD_SAVE_DISADVANTAGE,
+  MOD_VULNERABLE,
+  type PenaltyDice,
+  rowCheckOf,
+  saveFailChance,
+} from "./context";
+import type { Lasting } from "./effects";
+import { effectSpec, gateFields, isGrant, isTransform } from "./effects";
 import type { StepOutcome } from "./state";
 import {
   advance,
@@ -20,7 +39,11 @@ import {
 } from "./state";
 import type {
   Attack,
-  AttackTriggerOn,
+  AttackOptions,
+  ConditionRule,
+  ContextualPayload,
+  ContextualSource,
+  GrantSaveSpec,
   ConditionSpec,
   Damage,
   GrantSpec,
@@ -29,6 +52,8 @@ import type {
   Rider,
   RiderDamage,
   RiderPayload,
+  RowCheck,
+  RowContext,
   SaveLanding,
   SubstitutePolicy,
   SubstituteSpec,
@@ -40,11 +65,17 @@ import type {
 import { MAX_CAPPED_COUNTERS, MAX_TRIGGER_GROUPS, TurnSpecError } from "./types";
 
 /**
- * How many granted-modifier flags a turn may carry in its walk state at once. Each
- * doubles the state space in the worst case, so like {@link MAX_TRIGGER_GROUPS} it
- * is a cost ceiling, not a modelling limit. Flags nothing reads are not counted.
+ * How many flag bits a walk state may carry: JS bit operations are 32-bit signed and the sign
+ * bit stays clear. Flags whose lives do not overlap share a bit, so this bounds the flags live
+ * at once, not the flags a turn names; past it the turn is `too-many-states`.
  */
-const MAX_LIVE_FLAGS = 8;
+const MAX_FLAG_BITS = 30;
+
+/** The creature an attack, or a `start` condition, is on when it names none. */
+const DEFAULT_CREATURE = "target";
+
+/** The default `TurnSpec.stateLimit`: the engine's `MAX_CONDITION_STATES`. */
+export const MAX_TURN_STATES = 16_384;
 
 /** Which payload a rider used when it fired, or `null` while it has not fired. */
 export type FireMode = "hit" | "crit" | null;
@@ -54,7 +85,14 @@ export type FireMode = "hit" | "crit" | null;
  * groups it tracks. Building this is where every {@link TurnSpecError} is raised,
  * so the walk itself can assume a well-formed plan.
  */
+/** Where an effect in force comes from: the starting condition, or a condition by its id. */
+export type EffectSource = { kind: "starting" } | { kind: "grant"; grant: string };
+
 export interface TurnPlan {
+  /** Where effects come from, as {@link Step.flagReads} index them. */
+  effectSources: readonly EffectSource[];
+  /** The optional ("you can") conditions, declared and attached, by id in declaration order. */
+  optionalIds: readonly string[];
   steps: readonly Step[];
   /**
    * How many slots of group codes the walk carries per state: the PEAK number of groups live
@@ -96,6 +134,12 @@ export interface TurnPlan {
    * rather than becoming steps, so they have no step index.
    */
   perHitGroups: ReadonlyMap<string, number>;
+  /** The `perHitGroups` riders that land on crits only: they fired iff something crit. */
+  perHitCritOnly: ReadonlySet<string>;
+  /** The `perHitGroups` riders that land on anything: they fired iff a watched row happened. */
+  perHitAny: ReadonlySet<string>;
+  /** Per rider, the declared attacks it watches, in declaration order (where `landings` books it). */
+  riderRows: ReadonlyMap<string, readonly string[]>;
   /**
    * Probe id → the group slot whose "something crit" bit answers its probability. Read at
    * the final collapse like `perHitGroups`, so its group stays live the whole walk.
@@ -126,11 +170,22 @@ export interface TurnPlan {
   /** Every condition id, in declaration order. */
   conditionIds: readonly string[];
   /**
-   * The LAST step index that reads each flag bit, the twin of `groupLastReadStep`:
-   * past it the bit no longer changes any decision, so the walk drops it from the
-   * merge key. A turn with no conditions has no bits.
+   * Per step, the flag bits still needed once the step is done: the walk clears every other
+   * bit, so a dead flag never splits states and a bit is free for the next flag that shares it.
    */
-  flagLastReadStep: readonly number[];
+  flagLiveAfter: readonly number[];
+  /** The coins of riders that may not happen and can land several times: each splits the start state. */
+  coins: readonly { id: string; bit: number; happens: number }[];
+  /** The flag bits of the `start` conditions: in force before the first step. */
+  startFlags: number;
+  /** The `start` conditions some step reads (indexes into {@link TurnPlan.conditionIds}): applied for certain. */
+  startConditions: readonly number[];
+  /** The most distinct states the walk may carry after a step; more is `too-many-states`. */
+  stateLimit: number;
+  /** Whether a condition needs a damage type dealt: the joint is then not available (see {@link Draw.typed}). */
+  dealing: boolean;
+  /** Per condition: whether its later attack rolls lean melee (the optional fallback, see `Turn`). */
+  meleeLeaning: readonly boolean[];
 }
 
 /** Outcome-labelled sub-mass PMFs for one source, masses summing to 1. */
@@ -158,14 +213,96 @@ export interface Draw {
   fires: readonly number[];
   slice: PMF;
   /**
-   * Set on a save row's draws only: a group keyed by a landing kind advances by that kind's
-   * entry instead of `outcome`, which is what step statistics and grants read.
+   * Set on a save row's draws, and on an attack row's split by damage dealt: a group keyed by a
+   * landing kind advances by that kind's entry instead of `outcome`, and so does a condition
+   * that declares that `landing`.
    */
   byKind?: ByKind;
+  /**
+   * Set where riders are folded into `slice`: the row's own sub-mass part before the fold, and
+   * each folded rider's id with the (mass 1) payload it adds. What a per-id marginal reads.
+   */
+  own?: PMF;
+  riders?: ReadonlyArray<readonly [id: string, payload: PMF]>;
+  /**
+   * Set on the draws of a row that finds a condition damage ends: whether the row (or a rider that
+   * lands on it) dealt its creature more than 0, which ends those conditions.
+   */
+  wounded?: boolean;
+  /**
+   * Set on the hits and crits of a row a `dealing` condition reads: whether the landing dealt the
+   * condition's damage type (the row's own, or a rider's that landed with it). The split is by the
+   * odds alone, so it is exact for each row's and rider's marginal, not for the turn's joint.
+   */
+  typed?: boolean;
+}
+
+/** `draw` with its mass scaled by `factor`, its own part with it. */
+function scaleDraw(draw: Draw, factor: number): Draw {
+  const scaled = { ...draw, slice: draw.slice.scaleMass(factor) };
+  return draw.own === undefined ? scaled : { ...scaled, own: draw.own.scaleMass(factor) };
+}
+
+/**
+ * `draw` split by whether it dealt more than 0: the row's own damage, or a folded rider's. A
+ * draw with folded riders splits its own part first; where that dealt nothing the riders decide,
+ * and each rider's payload is then conditioned on what the split says.
+ */
+function splitWounded(draw: Draw): Draw[] {
+  if (draw.outcome === "none") return [{ ...draw, wounded: false }];
+  const byDealt = (pmf: PMF): [PMF, PMF] => pmf.splitByFactor((damage) => (damage > 0 ? 1 : 0)) as [PMF, PMF];
+  const pieces: Draw[] = [];
+  if (draw.own === undefined || draw.riders === undefined) {
+    const [dealt, none] = byDealt(draw.slice);
+    if (dealt.mass() > 0) pieces.push({ ...draw, slice: dealt, wounded: true });
+    if (none.mass() > 0) pieces.push({ ...draw, slice: none, wounded: false });
+    return pieces;
+  }
+  const riders = draw.riders;
+  const fold = (part: PMF): PMF => riders.reduce((all, [, payload]) => all.convolve(payload, 0, true), part);
+  // Wounded where the row's own roll dealt more than 0, or else where a rider's payload did.
+  const [ownDealt, ownNone] = byDealt(draw.own);
+  if (ownDealt.mass() > 0) pieces.push({ ...draw, own: ownDealt, slice: fold(ownDealt), wounded: true });
+  const noneMass = ownNone.mass();
+  if (noneMass <= 0) return pieces;
+  // The own roll dealt nothing: the turn is wounded where some rider dealt more than 0.
+  const zero = riders.map(([, payload]) => payload.pAt(0));
+  const allZero = zero.reduce((product, p) => product * p, 1);
+  const quiet = riders.map(([id]): readonly [string, PMF] => [id, PMF.delta(0, 0)]);
+  if (1 - allZero > 0) {
+    const loud = riders.map(([id, payload], k): readonly [string, PMF] => {
+      // P(this payload, and the riders together dealt more than 0) / P(the riders dealt more than 0).
+      const othersZero = zero.reduce((product, p, j) => (j === k ? product : product * p), 1);
+      return [id, payload.splitByFactor((value) => (value > 0 ? 1 : 1 - othersZero))[0].scaleMass(1 / (1 - allZero))];
+    });
+    // What the riders dealt together, where that was more than 0, beside the own roll's.
+    const together = riders.reduce((all, [, payload]) => all.convolve(payload, 0, true), PMF.delta(0, 0));
+    const dealt = together.splitByFactor((value) => (value > 0 ? 1 : 0))[0];
+    pieces.push({ ...draw, own: ownNone.scaleMass(1 - allZero), riders: loud, slice: ownNone.convolve(dealt, 0, true), wounded: true });
+  }
+  if (allZero > 0) {
+    pieces.push({ ...draw, own: ownNone.scaleMass(allZero), riders: quiet, slice: ownNone.scaleMass(allZero), wounded: false });
+  }
+  return pieces;
 }
 
 /** What a save row's draw is to a rider reading the row under each landing kind. */
 export type ByKind = Readonly<Record<SaveLanding, StepOutcome>>;
+
+/**
+ * What an attack row's hit or crit is under each landing kind once it is split by its own damage:
+ * one that dealt more than 0 lands either way; one that dealt 0 lands for `fail` (an attack lands
+ * on a hit, whatever it deals) and is no landing, and no miss, for `damage`. Shared objects, so
+ * {@link mergeDraws} can tell equal kinds apart by identity.
+ */
+const DEALT: Readonly<Record<"hit" | "crit", ByKind>> = {
+  hit: { fail: "hit", damage: "hit" },
+  crit: { fail: "crit", damage: "crit" },
+};
+const NOT_DEALT: Readonly<Record<"hit" | "crit", ByKind>> = {
+  hit: { fail: "hit", damage: "none" },
+  crit: { fail: "crit", damage: "none" },
+};
 
 /**
  * The draws of one attack step under one state-dependent context. Masses sum to 1.
@@ -198,10 +335,21 @@ function mergeDraws(draws: readonly Draw[]): Draw[] {
         other.outcome === draw.outcome &&
         other.matched === draw.matched &&
         other.spends === draw.spends &&
-        other.byKind === draw.byKind
+        other.byKind === draw.byKind &&
+        other.wounded === draw.wounded &&
+        other.typed === draw.typed &&
+        // A wound split conditions the riders' payloads; parts with different conditions stay apart.
+        (draw.wounded === undefined || other.riders === draw.riders)
     );
     if (index === -1) merged.push(draw);
-    else merged[index] = { ...merged[index], slice: merged[index].slice.add(draw.slice) };
+    else {
+      const other = merged[index];
+      const sum = { ...other, slice: other.slice.add(draw.slice) };
+      merged[index] =
+        other.own === undefined && draw.own === undefined
+          ? sum
+          : { ...sum, own: (other.own ?? other.slice).add(draw.own ?? draw.slice) };
+    }
   }
   return merged;
 }
@@ -255,10 +403,17 @@ export function released<Codes extends readonly number[]>(
 export interface GrantApplication {
   /** Index into {@link TurnPlan.conditionIds}. */
   condition: number;
-  on: AttackTriggerOn;
-  /** Group whose pre-draw code `first-hit` / `first-miss` reads, else -1. */
+  on: Exclude<ConditionSpec["on"], "start">;
+  /** Group whose pre-draw code `first-hit` / `first-crit` / `first-miss` reads, else -1. */
   reads: number;
+  /**
+   * How a save row, or an attack row whose draws are split by damage dealt, lands the condition:
+   * the draw's `byKind` entry for it replaces its outcome. Undefined: the outcome as drawn.
+   */
+  landing: SaveLanding | undefined;
   chance: number;
+  /** With a grant save: its fail chance in the state's flags, replacing `chance`. */
+  chanceOf: ((flags: number) => number) | undefined;
   /** Flag bits set on the `chance` branch. */
   grants: number;
   /** Flag bits set on the other branch. */
@@ -267,17 +422,56 @@ export interface GrantApplication {
   inForce: number;
   /** Whether a later step reads one of `grants` — what `fireProbability` counts. */
   effective: boolean;
+  /**
+   * For a once-per-turn condition that waits for a reader: the bit that says it was tried
+   * (`first-*` then reads it instead of its group), or -1 where no later row reads it, so it is not
+   * tried here at all. 0: the group decides, as ever.
+   */
+  tried: number;
+  /** For a condition that fires where a folded rider landed: that rider's id, which the draw must carry. */
+  rider: string | undefined;
+  /** For a condition that needs a damage type dealt (`dealing`): only a `typed` draw lands it. */
+  dealing: boolean;
+  /**
+   * Whether the engine counts a try here (`stepStats` conditions, `attemptProbability`): a
+   * once-per-turn condition only where a later row reads one of its effects; any other always.
+   */
+  counted: boolean;
+  /** Whether a try the walk skips because its effects are in force still counts (the engine skips only one with `onSave`). */
+  countedInForce: boolean;
+  /** Bookkeeping only: nothing reads the condition, so a try sets nothing and only counts. */
+  countOnly: boolean;
 }
 
-/** Whether `outcome`, drawn in a state whose pre-draw group codes are `codes`, applies `app`. */
+/**
+ * Whether `outcome` (with the draw's `byKind`), drawn in a state whose pre-draw group codes are
+ * `codes`, applies `app`.
+ */
 export function grantApplies(
   app: GrantApplication,
-  outcome: StepOutcome,
-  codes: readonly number[]
+  drawn: StepOutcome,
+  codes: readonly number[],
+  byKind?: ByKind,
+  flags = 0,
+  riders?: Draw["riders"],
+  typed?: boolean
 ): boolean {
+  if (app.dealing && typed !== true) return false;
+  if (app.rider !== undefined) {
+    // It fires where its rider landed, once where it is once per turn.
+    if (!riders?.some(([id]) => id === app.rider)) return false;
+    return app.tried === 0 || (app.tried !== -1 && (flags & app.tried) === 0);
+  }
+  const outcome = app.landing !== undefined && byKind !== undefined ? byKind[app.landing] : drawn;
   // A "none" outcome (an attack that did not happen) is no landing and no miss,
   // so it applies no condition's grants.
   if (outcome === "none") return false;
+  if (app.tried !== 0) {
+    // Tried at most once, and only where a later row reads it.
+    if (app.tried === -1 || (flags & app.tried) !== 0) return false;
+    if (app.on === "first-crit") return outcome === "crit";
+    return app.on === "first-miss" ? outcome === "miss" : outcome !== "miss";
+  }
   switch (app.on) {
     case "every-hit":
       return outcome !== "miss";
@@ -285,6 +479,8 @@ export function grantApplies(
       return outcome !== "miss" && ((codes[app.reads] >> 2) & 0b11) === FIRST_NONE;
     case "any-crit":
       return outcome === "crit";
+    case "first-crit":
+      return outcome === "crit" && (codes[app.reads] & CRIT_BIT) === 0;
     case "any-miss":
       return outcome === "miss";
     case "first-miss":
@@ -347,6 +543,15 @@ export interface Step {
   spendSlot: number;
   /** `next-attack` flag bits this step reads, and so clears when it rolls. */
   consumes: number;
+  /** `next-hit` flag bits (a vulnerability) this step reads, and so clears when it hits or crits. */
+  hitConsumes: number;
+  /** Bits of the conditions damage ends that this step finds set: a `wounded` draw clears them. */
+  wounds: number;
+  /**
+   * For an attack gated on an earlier one (`AttackOptions.after`): the group slot it reads, and
+   * whether any outcome opens it (else a landing). Where it is closed the attack does not happen.
+   */
+  gate: { slot: number; any: boolean } | undefined;
   /** Conditions this step's outcome may apply, in declaration order. */
   grants: readonly GrantApplication[];
   /** Flag bits this step reads that grant advantage. */
@@ -355,6 +560,24 @@ export interface Step {
   readDisadvantage: number;
   /** Flag bits this step reads that grant crit-on-hit. */
   readCritOnHit: number;
+  /**
+   * The flags this step reads, each with what it puts in force here (`MOD_*` bits, and whether it
+   * takes penalty dice off a save) and its source: an index into {@link TurnPlan.effectSources}.
+   */
+  flagReads: readonly { bit: number; modifiers: number; penalty: boolean; source: number }[];
+  /**
+   * The row's own PMF in each context it can roll in (none for a pure-damage step). A context past
+   * the first is built when a state first rolls in it: until then its entry is empty (a hole).
+   */
+  contextPmfs: readonly PMF[];
+  /** Per context, the d20 the row rolls there. */
+  contextRollTypes: readonly RollType[];
+  /** Per context, whether the row's target is vulnerable there (its landings deal double). */
+  contextVulnerable: readonly boolean[];
+  /** Which of {@link Step.contextPmfs} a state rolls in. */
+  contextIndexOf: (codes: readonly number[], fired: readonly FireMode[], flags: number, counts: readonly number[]) => number;
+  /** Whether a substitute rewrites the row's own damage, so it is not its context's PMF. */
+  transformed: boolean;
 }
 
 /** Trigger kinds that read a group's accumulated state (as opposed to `not-fired`,
@@ -369,35 +592,90 @@ const READS_GROUP: Record<string, true> = {
 };
 
 /**
- * Triggers a condition accepts. Only `first-hit` and `first-miss` read a group —
+ * Triggers a condition accepts. Only `first-hit`, `first-crit` and `first-miss` read a group —
  * whether this is the first such outcome — so only they allocate one.
  */
 const GRANT_TRIGGERS: Record<string, { readsGroup: boolean }> = {
   "every-hit": { readsGroup: false },
   "first-hit": { readsGroup: true },
   "any-crit": { readsGroup: false },
+  "first-crit": { readsGroup: true },
   "any-miss": { readsGroup: false },
   "first-miss": { readsGroup: true },
+  start: { readsGroup: false },
 };
 
-/** A read flag's modifiers, as a 3-bit key: which roll context a set of flags selects. */
-const MOD_ADVANTAGE = 1;
-const MOD_DISADVANTAGE = 2;
-const MOD_CRIT_ON_HIT = 4;
+/**
+ * The effects this release's walk puts on a creature: a {@link GrantSpec} or a vulnerability to
+ * the next hit (read by attack rolls), or a save disadvantage or penalty dice (read by saves).
+ */
+type WalkEffect =
+  | GrantSpec
+  | { condition: string; rule: ConditionRule; until: "end-of-turn" | "until-damaged" }
+  | { vulnerability: true; until: "next-hit" }
+  | { saveDisadvantage: true; until: "end-of-turn" | "next-save"; to?: readonly string[] }
+  | { savePenalty: { count: number; sides: number }; until: "end-of-turn" | "next-save"; to?: readonly string[] };
 
-/** One granted modifier of one condition, as the plan tracks it. */
+/** One effect of one condition, as the plan tracks it. */
 interface Flag {
   /** For messages: the condition and which of its grants. */
   name: string;
   condition: string;
-  grant: GrantSpec;
-  /** Steps whose variant it selects; a `next-attack` flag is consumed by each. */
+  /** The creature it is on. */
+  creature: string;
+  /** What it puts in force on a row that reads it (`MOD_*` bits). */
+  modifiers: number;
+  /** The dice it takes off a save that reads it. */
+  penalty: PenaltyDice | undefined;
+  /** The rows that read it: attack rolls, saves, or (a condition) whichever its rule changes. */
+  side: "attack" | "save" | "both";
+  /** Per reading step, what it puts in force there (`MOD_*` bits). */
+  reads: ReadonlyMap<number, number>;
+  /** Whether a grant's own save reads it: an effect on saves that lasts and is not scoped with `to`. */
+  grantSaveReads: boolean;
+  /** What it puts in force on a grant's own save made with `ability`. */
+  saveRead: (ability: string | undefined) => number;
+  until: WalkEffect["until"];
+  /** Steps whose variant it selects; a `next-*` flag is consumed by each (a `next-hit` flag by each hit). */
   readers: number[];
-  /** The last step that reads it, for a variant or a skip check; -1 if none. */
+  /** The first step that can set it: the condition's first source. */
+  first: number;
+  /** The last step that reads it, for a variant, a skip check or a grant's save; -1 if none. */
   lastRead: number;
   /** Its bit in the walk's flag word, or -1 when nothing reads it. */
   bit: number;
 }
+
+/** What a {@link ConditionRule}'s modifiers put in force on an attack roll, and on a save. */
+const ATTACK_MODIFIERS: Readonly<Record<string, number>> = {
+  advantage: MOD_ADVANTAGE,
+  disadvantage: MOD_DISADVANTAGE,
+  critOnHit: MOD_CRIT_ON_HIT,
+  vulnerable: MOD_VULNERABLE,
+};
+const SAVE_MODIFIERS: Readonly<Record<string, number>> = {
+  autoFail: MOD_AUTO_FAIL,
+  saveDisadvantage: MOD_SAVE_DISADVANTAGE,
+  disadvantage: MOD_SAVE_DISADVANTAGE,
+};
+
+/** The `MOD_*` bits of a rule's `modifiers` in `table` (modifiers the row kind ignores add nothing). */
+function maskOf(modifiers: readonly string[], table: Readonly<Record<string, number>>): number {
+  return modifiers.reduce((mask, modifier) => mask | (table[modifier] ?? 0), 0);
+}
+
+/** The abilities a save may name without a rule naming it. */
+const ABILITIES: Readonly<Record<string, true>> = {
+  strength: true,
+  dexterity: true,
+  constitution: true,
+  intelligence: true,
+  wisdom: true,
+  charisma: true,
+};
+
+/** Whether a flag is still needed once step `step` is done: set by then, and read later. */
+const liveAfter = (flag: Flag, step: number): boolean => flag.first <= step && step < flag.lastRead;
 
 /**
  * Decide whether `step` fires in state `codes`, and in which mode.
@@ -464,6 +742,8 @@ function toPMF(
       const mass = part.mass();
       return Math.abs(mass - 1) <= EPS ? part : part.normalize();
     }
+    // A contextual source rolls its own row's context when nothing in the state changes it.
+    if (isContextual(part)) return rollUnder(part, contextOf(rowCheckOf(part) as RowCheck, 0), eps, id);
     // `Damage` rules this out, but a consumer deserializing UI state reaches
     // here untyped. Reporting it as a spec error beats a bare TypeError from
     // calling a method that isn't there.
@@ -487,6 +767,15 @@ function toPMF(
     return resolved;
   });
   return PMF.convolveMany(pmfs, eps);
+}
+
+/** `source`'s PMF under `context`, checked like a `toPMF()` result. */
+function rollUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
+  const resolved = (source.under as (context: RowContext, eps?: number) => unknown)(context, eps);
+  if (!(resolved instanceof PMF)) {
+    throw new TurnSpecError("not-an-attack", id, `"${id}" has an under() that did not return a PMF.`);
+  }
+  return resolved;
 }
 
 /**
@@ -577,6 +866,12 @@ function sliceSource(
   damage?: Damage | readonly Damage[],
   eps: number = EPS
 ): SourceSlices | null {
+  if (damage === undefined) {
+    // A PMF slices the same way every time: a row in several contexts, or on several rows, reuses it.
+    let known = slicesOfPmf.get(pmf);
+    if (known === undefined) slicesOfPmf.set(pmf, (known = slicePmf(pmf, pmf.outcomes(), pmf.outcomes())));
+    return known;
+  }
   const labels = pmf.outcomes();
   let shapeLabels = labels;
   if (damage !== undefined) {
@@ -587,6 +882,13 @@ function sliceSource(
       shapeLabels = others.length === 0 ? [] : toPMF(others, eps).outcomes();
     }
   }
+  return slicePmf(pmf, labels, shapeLabels);
+}
+
+const slicesOfPmf = new WeakMap<PMF, SourceSlices | null>();
+
+/** `pmf` by outcome, or null where its shape (`shapeLabels`) has no hit or crit. */
+function slicePmf(pmf: PMF, labels: readonly string[], shapeLabels: readonly string[]): SourceSlices | null {
   if (!shapeLabels.includes("hit") && !shapeLabels.includes("crit")) return null;
 
   const missParts = ["missNone", "missDamage"]
@@ -608,6 +910,9 @@ function sliceSource(
  * builder resolves to a save's `weights`.
  */
 function isSaveShaped(source: Damage, pmf: PMF, eps: number): boolean {
+  // A source that declares its row is what it declares, whatever its PMF in one context holds.
+  const declared = rowCheckOf(source);
+  if (declared !== undefined) return declared.kind === "save";
   const labels = pmf.outcomes();
   if (labels.includes("saveFail") || labels.includes("saveHalf")) return true;
   const resolvable = source as { resolve?: (eps?: number) => { weights?: { fail?: unknown } } };
@@ -713,7 +1018,7 @@ function keepBetterOfFresh(spend: PMF, base: PMF): { kept: PMF; beaten: PMF } {
 }
 
 /** The keys a declared-attack wrapper may carry. */
-const ATTACK_KEYS: Record<string, true> = { source: true, id: true, tag: true, chance: true };
+const ATTACK_KEYS: Record<string, true> = { source: true, id: true, tag: true, chance: true, target: true, after: true };
 
 /** A declared attack, unwrapped. */
 function attackEntry(
@@ -733,7 +1038,7 @@ function attackEntry(
       throw new TurnSpecError(
         "unknown-key",
         typeof wrapper.id === "string" ? wrapper.id : id,
-        `Attack "${typeof wrapper.id === "string" ? wrapper.id : id}" carries an unknown key "${key}". Valid keys are source, id, tag and chance.`
+        `Attack "${typeof wrapper.id === "string" ? wrapper.id : id}" carries an unknown key "${key}". Valid keys are source, id, tag, chance and target.`
       );
     }
   }
@@ -765,69 +1070,94 @@ function attachedConditionsOf(source: unknown): readonly AttachedCondition[] | u
 }
 
 /**
- * The one {@link ConditionSpec} an {@link AttachedCondition} becomes: `of` is the
- * carrying attack's id, the gate's `save` becomes `chance` (its P(fail)), and its
- * `onSave` grants become the success-branch grants. Mirrors `Turn`'s trigger verbs.
+ * The one {@link EvaluatedCondition} an {@link AttachedCondition} becomes: `of` is the
+ * carrying attack's id and the gate's fields are read as `Turn`'s trigger verbs read them
+ * ({@link gateFields}).
  */
 function conditionFromAttached(
   slotId: string,
   index: number,
   attached: AttachedCondition,
   eps: number
-): ConditionSpec {
-  const gate = attached.gate;
-  const save = gate?.save;
-  const chance = gate?.chance;
-  const onSave = gate?.onSave;
-  if (save !== undefined && chance !== undefined) {
-    throw new Error(
-      "An attached condition takes either save or chance, not both: each is the chance the grants take."
-    );
-  }
-  if (onSave !== undefined && save === undefined && chance === undefined) {
-    throw new Error(
-      "An attached condition's onSave needs a save or a chance: without one there is no other branch to apply it on."
-    );
-  }
-  if (save !== undefined && typeof (save as Partial<ToPMF>).toPMF !== "function") {
-    throw new Error("An attached condition's save must be a DC check such as d20.plus(2).dc(15).");
-  }
-  // A save's P(fail): the DC check's PMF puts it at 1. `vsAC` leaves it alone —
-  // it is the target's save bonus, not its AC.
-  const probability = save === undefined ? chance : save.toPMF(eps).pAt(1);
-  const grants = (Array.isArray(attached.grants) ? attached.grants : [attached.grants]).map(
-    grantSpec
-  );
-  const saved = onSave === undefined ? [] : Array.isArray(onSave) ? [...onSave] : [onSave];
-  return {
+): EvaluatedCondition {
+  const grants = (Array.isArray(attached.grants) ? attached.grants : [attached.grants]) as readonly Lasting[];
+  const condition: ConditionSpec = {
     id: `${slotId}:${index}`,
     on: attached.on,
     of: [slotId],
-    ...(probability === undefined ? {} : { chance: probability }),
-    grants,
-    ...(saved.length === 0 ? {} : { onSave: saved.map(grantSpec) }),
+    ...gateFields(attached.gate ?? {}, eps),
+    grants: grants.map(effectSpec),
   };
+  return condition as EvaluatedCondition;
 }
 
 /** A rider's payload per source; a spec that is not typed can carry one on any trigger. */
-function perSourceOf(rider: Rider): PerSource | undefined {
+function perSourceOf(rider: EvaluatedRider): PerSource | undefined {
   return "perSource" in rider ? rider.perSource : undefined;
 }
 
 /** A `first-hit` rider with a payload per source: folded into its sources' draws, not a step. */
-function isFirstHitFold(rider: Rider): boolean {
+function isFirstHitFold(rider: EvaluatedRider): boolean {
   return rider.on === "first-hit" && perSourceOf(rider) !== undefined;
 }
 
-export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
+/** A condition's grant save as a list of the options the target picks from; empty without a save. */
+function saveOptionsOf(condition: { save?: GrantSaveSpec | readonly GrantSaveSpec[] }): readonly GrantSaveSpec[] {
+  const { save } = condition;
+  if (save === undefined) return [];
+  return Array.isArray(save) ? save : [save as GrantSaveSpec];
+}
+
+/** A {@link ConditionSpec} with its effects as the walk reads them. */
+type EvaluatedCondition = Omit<ConditionSpec, "on" | "grants" | "onSave"> & {
+  on: ConditionSpec["on"];
+  grants: readonly WalkEffect[];
+  onSave?: readonly WalkEffect[];
+};
+
+/** A {@link Rider} whose damage is a {@link RiderDamage} (a `ContextualPayload` is read per attack instead). */
+type EvaluatedRider = Rider extends infer R
+  ? R extends unknown
+    ? Omit<R, "damage" | "landing"> & { damage: RiderDamage; landing?: SaveLanding | "any" }
+    : never
+  : never;
+
+/** A rider payload that only {@link ContextualPayload.at} can read. */
+function isContextualPayload(damage: unknown): boolean {
+  if (typeof damage !== "object" || damage === null || Array.isArray(damage) || damage instanceof PMF) return false;
+  const candidate = damage as { at?: unknown; toPMF?: unknown };
+  return typeof candidate.at === "function" && typeof candidate.toPMF !== "function";
+}
+
+/**
+ * Builds the plan of `spec`. `declined` names optional conditions the turn does not attempt
+ * (see `Turn`): each stays, with no row it watches, so it never lands.
+ */
+export function buildPlan(
+  spec: TurnSpec,
+  eps: number = EPS,
+  declined: ReadonlySet<string> = new Set(),
+  /**
+   * `"joint"`: each draw's slice has its riders' payloads convolved in, as the joint `pmf` walk
+   * needs. `"masses"`: the slice is the row's own part at the folded mass, for the walks that carry
+   * only mass (every reader but `pmf`): the same plan, none of the fold convolutions.
+   */
+  folds: "joint" | "masses" = "joint"
+): TurnPlan {
+  const declaredConditions = (spec.conditions ?? []) as readonly EvaluatedCondition[];
+  const { stateLimit } = spec;
+  if (stateLimit !== undefined && !(Number.isInteger(stateLimit) && stateLimit >= 1)) {
+    throw new RangeError(`A turn's stateLimit must be a whole number of 1 or more, got ${stateLimit}.`);
+  }
   const fail = (code: TurnSpecErrorCode, id: string, message: string): never => {
     throw new TurnSpecError(code, id, message);
   };
 
-  const declaredRiders = spec.riders ?? [];
+  // A rider's `ContextualPayload` damage is replaced below (`placed`): from there on every damage is a `RiderDamage`.
+  const declaredRiders = (spec.riders ?? []) as readonly EvaluatedRider[];
   // `every-hit` capped at 1 IS `first-hit`: lowered here, before anything reads the riders, so
   // it takes the same step, fire slot, `otherwise` / `not-fired`, `of` naming and arithmetic.
-  const riders: readonly Rider[] = declaredRiders.map((rider) => {
+  const lowered: readonly EvaluatedRider[] = declaredRiders.map((rider): EvaluatedRider => {
     if (rider.on !== "every-hit" || rider.max !== 1) return rider;
     const { id, of, damage, critDamage, perSource, landing } = rider;
     return {
@@ -841,8 +1171,69 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     };
   });
   const substitutes: readonly SubstituteSpec[] = spec.substitutes ?? [];
-  const declaredConditions: readonly ConditionSpec[] = spec.conditions ?? [];
   const probes: readonly ProbeSpec[] = spec.observe ?? [];
+  // A rider that lands on a row ends that row's conditions damage ends, so with any such condition
+  // a first-hit damage rider is folded into its sources' draws (a payload per source, the same on
+  // each): it lands on the row itself, not in a step after every attack. Not one another entry names.
+  // A rider whose payload depends on the attack it lands on (`ContextualPayload`) is folded into
+  // its sources' draws, where that attack is known; its `damage` stands in as nothing (the fold
+  // reads the payload per attack). An `any-crit` rider with such a payload or a `max` is folded too,
+  // landing on its first `max` crits only.
+  /** By rider index: the {@link ContextualPayload} a folded rider reads per attack. */
+  const contextualPayloads = new Map<number, ContextualPayload>();
+  /** By rider index: the riders folded to land on crits only. */
+  const critOnly = new Set<number>();
+  const placed = lowered.map((rider, index): EvaluatedRider => {
+    const contextual = isContextualPayload(rider.damage) ? (rider.damage as unknown as ContextualPayload) : undefined;
+    const declaredMax = rider.on === "any-crit" && "max" in rider ? rider.max : undefined;
+    // `Infinity` lands on every crit: uncapped.
+    const max = declaredMax === Infinity ? undefined : declaredMax;
+    const everyCrit = declaredMax === Infinity;
+    if (contextual) contextualPayloads.set(index, contextual);
+    const damage = contextual ? PMF.delta(0, eps) : rider.damage;
+    if (rider.on === "any-crit" && (contextual !== undefined || declaredMax !== undefined)) {
+      critOnly.add(index);
+      return (
+        everyCrit
+          ? { ...rider, damage, on: "every-hit", max: undefined }
+          : max === undefined || max === 1
+            ? { ...rider, damage, on: "first-hit", perSource: {} }
+            : { ...rider, damage, on: "every-hit", max }
+      ) as EvaluatedRider;
+    }
+    if (contextual === undefined) return rider;
+    if (rider.on === "first-hit") return { ...rider, damage, perSource: perSourceOf(rider) ?? {} };
+    if (rider.on === "every-hit") return { ...rider, damage };
+    const id = rider.id ?? `rider ${index + 1}`;
+    return fail(
+      "unsupported-trigger",
+      id,
+      `Rider "${id}" has a payload per attack on "${rider.on}". Only first-hit, every-hit and any-crit riders take one.`
+    );
+  });
+  const wakes = (spec.conditions ?? []).some((condition) =>
+    [...condition.grants, ...(condition.onSave ?? [])].some((effect) => effect.until === "until-damaged")
+  );
+  // A rider that another rider or a substitute watches stays a step; one a condition watches
+  // ("where that rider landed") is folded, so the condition can fire on the row it lands on.
+  const named = new Set<string>([
+    ...lowered.flatMap((rider) => (typeof rider.of === "string" ? [rider.of] : (rider.of ?? []))),
+    ...substitutes.flatMap((substitute) => substitute.of ?? []),
+  ]);
+  const watchedByConditions = new Set((spec.conditions ?? []).flatMap((condition) => condition.of ?? []));
+  const riders: readonly EvaluatedRider[] = placed.map((rider) =>
+    rider.on === "first-hit" &&
+    perSourceOf(rider) === undefined &&
+    (wakes ||
+      rider.landing === "any" ||
+      rider.joins !== undefined ||
+      (rider.id !== undefined && watchedByConditions.has(rider.id))) &&
+    (rider.id === undefined || !named.has(rider.id)) &&
+    !Array.isArray(rider.damage) &&
+    sliceSource(toPMF(rider.damage as Damage, eps), rider.damage as Damage, eps) === null
+      ? { ...rider, perSource: {} }
+      : rider
+  );
 
   // --- attacks -------------------------------------------------------------
   const attackIds: string[] = [];
@@ -852,13 +1243,35 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const attackSlices: (SourceSlices | null)[] = [];
   const attackChances: number[] = [];
   const attackIdsByTag = new Map<string, string[]>();
+  /** The creature each declared attack is aimed at (`AttackOptions.target`). */
+  const attackTargets: string[] = [];
+  /** Per declared attack, the earlier attack whose landing gates it (`AttackOptions.after`). */
+  const attackAfters: (AttackOptions["after"] | undefined)[] = [];
 
+  /** One source declared as several rows (`attacks(12, sword)`) resolves and slices once. */
+  const resolvedSources = new Map<Damage, { pmf: PMF; slices: SourceSlices | null }>();
   spec.attacks.forEach((entry, index) => {
     const { id, tag, source, chance } = attackEntry(entry, index);
     if (!(chance >= 0 && chance <= 1)) {
       throw new RangeError(`Attack "${id}" needs a chance in [0, 1], got ${chance}.`);
     }
-    const pmf = toPMF(source, eps, id);
+    let resolved = resolvedSources.get(source);
+    if (resolved === undefined) {
+      const resolvedPmf = toPMF(source, eps, id);
+      // A declared attack (or a row that lands without a roll) whose PMF holds no landing in this
+      // context (every roll misses) still is one: it simply never lands. Validity is structural.
+      const declared = rowCheckOf(source);
+      resolved = {
+        pmf: resolvedPmf,
+        slices:
+          sliceSource(resolvedPmf) ??
+          (declared !== undefined && declared.kind !== "save"
+            ? { hit: PMF.emptyMass(), crit: PMF.emptyMass(), miss: resolvedPmf }
+            : null),
+      };
+      resolvedSources.set(source, resolved);
+    }
+    const pmf = resolved.pmf;
     attackIds.push(id);
     attackSources.push(source);
     attackPMFs.push(pmf);
@@ -866,8 +1279,16 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     // probability. The walk uses the full slices plus a "none" draw instead, so
     // a not-happened attack never reads as a miss or a landing.
     attackSingles.push(chance === 1 ? pmf : pmf.applyHitFrequency(chance));
-    attackSlices.push(sliceSource(pmf));
+    attackSlices.push(resolved.slices);
     attackChances.push(chance);
+    const target =
+      typeof entry === "object" && entry !== null && "source" in entry && "target" in entry ? entry.target : undefined;
+    if (target !== undefined && typeof target !== "string") {
+      throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string target.`);
+    }
+    attackTargets.push(target ?? DEFAULT_CREATURE);
+    const after = typeof entry === "object" && entry !== null && "source" in entry && "after" in entry ? entry.after : undefined;
+    attackAfters.push(after);
     if (tag !== undefined) {
       const tagged = attackIdsByTag.get(tag);
       if (tagged) tagged.push(id);
@@ -880,7 +1301,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // each entry becomes one ConditionSpec whose `of` is that attack's id. Declared
   // conditions come first, so their default `condition N` ids never collide with
   // the `${slotId}:${index}` ids the attached entries get.
-  const attachedConditions: ConditionSpec[] = [];
+  const attachedConditions: EvaluatedCondition[] = [];
   attackIds.forEach((slotId, index) => {
     const attached = attachedConditionsOf(attackSources[index]);
     if (!attached) return;
@@ -888,7 +1309,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       attachedConditions.push(conditionFromAttached(slotId, entryIndex, entry, eps));
     });
   });
-  const conditions: readonly ConditionSpec[] = [...declaredConditions, ...attachedConditions];
+  const conditions: readonly EvaluatedCondition[] = [...declaredConditions, ...attachedConditions];
 
   // --- ids -----------------------------------------------------------------
   const stringId = (value: unknown, fallback: string): string => {
@@ -906,6 +1327,28 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     stringId(condition.id, `condition ${index + 1}`)
   );
   const probeIds = probes.map((probe, index) => stringId(probe.id, `probe ${index + 1}`));
+  // Where an effect comes from, as the engine reports it: the starting condition (a `start`
+  // condition with no id on the primary target, putting one condition on it for the turn), then
+  // each other condition in order.
+  const startingIndex = conditions.findIndex(
+    (condition) =>
+      condition.on === "start" &&
+      condition.id === undefined &&
+      (condition.target ?? DEFAULT_CREATURE) === DEFAULT_CREATURE &&
+      condition.grants.length === 1 &&
+      "rule" in condition.grants[0] &&
+      condition.grants[0].until === "end-of-turn"
+  );
+  const effectSources: EffectSource[] = [
+    ...(startingIndex === -1 ? [] : [{ kind: "starting" as const }]),
+    ...conditionIds.flatMap((id, index) => (index === startingIndex ? [] : [{ kind: "grant" as const, grant: id }])),
+  ];
+  /** The index into `effectSources` of the effects condition `id` puts in force. */
+  const effectSourceOf = (id: string): number => {
+    const index = conditionIds.indexOf(id);
+    if (index === startingIndex) return 0;
+    return effectSources.findIndex((source) => source.kind === "grant" && source.grant === id);
+  };
   const seen = new Set<string>();
   for (const id of [...attackIds, ...riderIds, ...substituteIds, ...conditionIds, ...probeIds]) {
     if (seen.has(id)) fail("duplicate-id", id, `Duplicate id "${id}".`);
@@ -950,7 +1393,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       );
     }
     if (rider.landing !== undefined) {
-      if (rider.landing !== "fail" && rider.landing !== "damage") {
+      if (rider.landing !== "fail" && rider.landing !== "damage" && rider.landing !== "any") {
         fail(
           "unsupported-trigger",
           id,
@@ -971,14 +1414,14 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const declared = declaredRiders[index];
     const max = "max" in declared ? declared.max : undefined;
     if (max !== undefined) {
-      if (declared.on !== "every-hit") {
+      if (declared.on !== "every-hit" && declared.on !== "any-crit") {
         fail(
           "unsupported-trigger",
           id,
           `Rider "${id}" has a max on "${declared.on}". Only every-hit riders are capped; first-hit already applies once.`
         );
       }
-      if (typeof max !== "number" || !Number.isInteger(max) || max < 1) {
+      if (typeof max !== "number" || !(Number.isInteger(max) || (declared.on === "any-crit" && max === Infinity)) || max < 1) {
         throw new RangeError(`Rider "${id}" needs a positive integer max, got ${String(max)}.`);
       }
     }
@@ -1005,19 +1448,68 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       fail(
         "unsupported-trigger",
         id,
-        `Condition "${id}" triggers on "${condition.on}"; a condition reads every-hit, first-hit, any-crit, first-miss or any-miss.`
+        `Condition "${id}" triggers on "${condition.on}"; a condition reads every-hit, first-hit, any-crit, first-crit, first-miss or any-miss.`
       );
     }
     const { chance } = condition;
     if (chance !== undefined && !(chance >= 0 && chance <= 1)) {
       throw new RangeError(`Condition "${id}" needs a chance in [0, 1], got ${chance}.`);
     }
-    if (condition.onSave !== undefined && chance === undefined) {
+    const options = saveOptionsOf(condition);
+    if (options.length > 0 && chance !== undefined) {
+      throw new Error(`Condition "${id}" has both a save and a chance; the save is the chance its grants take.`);
+    }
+    for (const option of options) {
+      const valid =
+        "failChance" in option
+          ? typeof option.failChance === "function"
+          : Number.isFinite(option.dc) && Number.isFinite(option.bonus);
+      if (!valid) throw new Error(`Condition "${id}" has a save that is neither { dc, bonus } nor { failChance }.`);
+    }
+    if (condition.on === "start") {
+      const tried = (["save", "chance", "onSave", "landing", "dealing"] as const).find((field) => condition[field] !== undefined);
+      if (tried !== undefined) {
+        throw new Error(`Condition "${id}" is in force from the start, so nothing tries it: it takes no "${tried}".`);
+      }
+    } else if (condition.target !== undefined) {
+      throw new Error(`Condition "${id}" names a target, which only a "start" condition takes: the others are on the creature of the row that lands them.`);
+    }
+    if (condition.onSave !== undefined && chance === undefined && options.length === 0) {
       throw new Error(
         `Condition "${id}" has onSave grants but no save or chance: there is no other branch to apply them on.`
       );
     }
+    if (condition.landing !== undefined && condition.landing !== "fail" && condition.landing !== "damage") {
+      fail("unsupported-trigger", id, `Condition "${id}" declares landing "${String(condition.landing)}". Use "fail" or "damage".`);
+    }
     for (const grant of [...condition.grants, ...(condition.onSave ?? [])]) {
+      if ("vulnerability" in grant) {
+        const until: unknown = grant.until;
+        if (until !== "next-hit") {
+          throw new Error(`Condition "${id}" has a vulnerability lasting "${String(until)}"; use "next-hit".`);
+        }
+        continue;
+      }
+      if ("saveDisadvantage" in grant || "savePenalty" in grant) {
+        const until: unknown = grant.until;
+        if (until !== "end-of-turn" && until !== "next-save") {
+          throw new Error(`Condition "${id}" has a save effect lasting "${String(until)}"; use "end-of-turn" or "next-save".`);
+        }
+        if ("savePenalty" in grant) {
+          const { count, sides } = grant.savePenalty;
+          if (!(Number.isInteger(count) && count >= 1 && Number.isInteger(sides) && sides >= 1)) {
+            throw new RangeError(`Condition "${id}" has a save penalty of ${count}d${sides}; use whole dice of 1 or more.`);
+          }
+        }
+        continue;
+      }
+      if ("rule" in grant) {
+        const until: unknown = grant.until;
+        if (until !== "end-of-turn" && until !== "until-damaged") {
+          throw new Error(`Condition "${id}" has a condition lasting "${String(until)}"; use "end-of-turn" or "until-damaged".`);
+        }
+        continue;
+      }
       if (!grant.advantage && !grant.disadvantage && !grant.critOnHit) {
         throw new Error(`Condition "${id}" has a grant that sets no modifier.`);
       }
@@ -1288,12 +1780,54 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
   // Per rider: the source ids a trigger watches, or for `not-fired` the negated
   // node's id. Per substitute: the source ids it watches.
+  // A folded rider named in another rider's `of` is a partner: that rider lands on the partner's
+  // rows (those in `where`) only where the partner lands too (Spellfire Adept on a smite).
+  const partnersOf = riders.map((rider) =>
+    !Array.isArray(rider.of)
+      ? []
+      : (rider.of as readonly string[]).filter((entry) => {
+          const index = riderIndexById.get(entry);
+          // A partner lands once: a first-hit rider folded into its sources (a smite).
+          return index !== undefined && isFirstHitFold(riders[index]);
+        })
+  );
+  const ownSourcesOf = (rider: EvaluatedRider, index: number): string[] => {
+    const id = riderIds[index];
+    // An explicit `of: []` watches nothing, so the rider never lands; an omitted `of` defaults.
+    if (Array.isArray(rider.of) && rider.of.length === 0) return [];
+    const declared = typeof rider.of === "string" ? [rider.of] : (rider.of ?? defaultOf(index));
+    const of = declared.filter((entry) => !partnersOf[index].includes(entry));
+    // Only partners: the rider lands on no row of its own.
+    if (of.length === 0 && partnersOf[index].length > 0) return [];
+    return resolveSources(id, of, rider.on === "dice-match", rider.landing === "any" ? "fail" : rider.landing);
+  };
+  /** Per rider, the rows a partner opens to it, with the partners that open each. */
+  const openedBy = riders.map((rider, index) => {
+    const opened = new Map<string, string[]>();
+    for (const partner of partnersOf[index]) {
+      const partnerIndex = riderIndexById.get(partner) as number;
+      const rows = rider.where?.[partner] ?? ownSourcesOf(riders[partnerIndex], partnerIndex);
+      for (const row of rows) opened.set(row, [...(opened.get(row) ?? []), partner]);
+    }
+    return opened;
+  });
+  riders.forEach((rider, index) => {
+    for (const key of Object.keys(rider.where ?? {})) {
+      if (!partnersOf[index].includes(key)) {
+        fail("unknown-id", key, `Rider "${riderIds[index]}" has "where" for "${key}", which is not a partner in its "of".`);
+      }
+    }
+    if (partnersOf[index].length > 0 && rider.on !== "first-hit") {
+      fail("unsupported-trigger", riderIds[index], `Rider "${riderIds[index]}" lands alongside a partner, so it lands once: use first-hit.`);
+    }
+  });
   const sourceIdsByNode: string[][] = [
     ...riders.map((rider, index) => {
-      const id = riderIds[index];
       if (rider.on !== "not-fired") {
-        return resolveSources(id, rider.of ?? defaultOf(index), rider.on === "dice-match", rider.landing);
+        const own = ownSourcesOf(rider, index);
+        return [...own, ...[...openedBy[index].keys()].filter((row) => !own.includes(row))];
       }
+      const id = riderIds[index];
       const target = rider.of;
       if (target === id) {
         fail("self-reference", id, `Rider "${id}" cannot depend on itself.`);
@@ -1320,8 +1854,104 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     ),
   ];
   // Per condition: the source ids whose outcomes apply its grants.
-  const conditionSources = conditions.map((condition, index) =>
-    resolveSources(conditionIds[index], condition.of ?? defaultOf(riderCount), false)
+  /** Whether rider `index` is folded into its sources' draws, where a landing of it is known. */
+  const foldedRider = (index: number): boolean => riders[index].on === "every-hit" || isFirstHitFold(riders[index]);
+  // Per condition: the folded rider whose landing fires it (`of: [rider id]`, the attacks in `where`), if any.
+  const conditionRiders = conditions.map((condition, index): string | undefined => {
+    const named = (condition.of ?? []).filter((entry) => {
+      const riderIndex = riderIndexById.get(entry);
+      return riderIndex !== undefined && foldedRider(riderIndex);
+    });
+    if (named.length === 0) return undefined;
+    if (named.length !== (condition.of ?? []).length || named.length > 1) {
+      fail(
+        "not-an-attack",
+        conditionIds[index],
+        `Condition "${conditionIds[index]}" names a rider beside other entries in "of"; a condition fires where one rider landed, or on its rows.`
+      );
+    }
+    return named[0];
+  });
+  conditions.forEach((condition, index) => {
+    for (const key of Object.keys(condition.where ?? {})) {
+      if (key !== conditionRiders[index]) {
+        fail("unknown-id", key, `Condition "${conditionIds[index]}" has "where" for "${key}", which is not the rider in its "of".`);
+      }
+    }
+  });
+  const conditionSources = conditions.map((condition, index) => {
+    if (condition.on === "start" || (Array.isArray(condition.of) && condition.of.length === 0)) return [];
+    if (declined.has(conditionIds[index])) return [];
+    const rider = conditionRiders[index];
+    if (rider === undefined) {
+      return resolveSources(conditionIds[index], condition.of ?? defaultOf(riderCount), false, condition.landing);
+    }
+    // The rows the rider can land on, in `where` when the condition lists them.
+    const sources = sourceIdsByNode[riderIndexById.get(rider) as number];
+    const where = condition.where?.[rider];
+    if (where === undefined) return sources;
+    // An id must exist; one the rider does not watch is never a landing of it, so it counts nothing.
+    for (const entry of where) {
+      if (!attackIndexById.has(entry) && !riderIndexById.has(entry)) {
+        fail("unknown-id", entry, `Condition "${conditionIds[index]}" counts "${rider}" landing on "${entry}", which is not in this turn.`);
+      }
+    }
+    return sources.filter((sourceId) => where.includes(sourceId));
+  });
+  // Attack rows a condition reads under `landing: "damage"`: their hits and crits split by
+  // whether the row's own damage was above 0, so the condition lands only where it was.
+  // So are the attack rows a rider reads under `landing: "damage"`: "when you deal damage".
+  riders.forEach((rider, index) => {
+    if (rider.joins === undefined) return;
+    const id = riderIds[index];
+    if (rider.landing === "any") {
+      fail("unsupported-trigger", id, `Rider "${id}" joins rows but lands on anything: a miss has no roll to join.`);
+    }
+    for (const joined of rider.joins) {
+      if (!attackIndexById.has(joined)) fail("unknown-id", joined, `Rider "${id}" joins "${joined}", which is not an attack in this turn.`);
+    }
+  });
+  // An attack gated on an earlier one: validated here, before the parent's draws are split.
+  attackAfters.forEach((after, index) => {
+    if (after === undefined) return;
+    const id = attackIds[index];
+    const parent = attackIndexById.get(after.of);
+    if (parent === undefined) fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which is not an attack in this turn.`);
+    if ((parent as number) >= index) fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which does not come before it.`);
+    if (after.landing !== "hit" && after.landing !== "damage" && after.landing !== "any") {
+      fail("unsupported-trigger", id, `Attack "${id}" happens after a landing of "${String(after.landing)}". Use "hit", "damage" or "any".`);
+    }
+  });
+  const dealtSources = new Set([
+    ...attackAfters.flatMap((after) => (after?.landing === "damage" && !isSaveRow(after.of) ? [after.of] : [])),
+    ...conditions.flatMap((condition, index) =>
+      condition.landing === "damage" ? conditionSources[index].filter((id) => !isSaveRow(id)) : []
+    ),
+    ...riders.flatMap((rider, index) =>
+      rider.on !== "not-fired" && rider.landing === "damage" ? sourceIdsByNode[index].filter((id) => !isSaveRow(id)) : []
+    ),
+  ]);
+  // Attack rows a condition reads under `dealing`: their hits and crits split by whether the
+  // landing dealt that damage type. A turn names one type, as the engine's does.
+  const dealingTypes = [...new Set(conditions.flatMap((condition) => (condition.dealing === undefined ? [] : [condition.dealing])))];
+  if (dealingTypes.length > 1) {
+    fail("unsupported-trigger", conditionIds[0], `A turn may name one damage type a landing must deal; this one names ${dealingTypes.join(", ")}.`);
+  }
+  const dealingType = dealingTypes[0];
+  conditions.forEach((condition, index) => {
+    if (condition.dealing === undefined) return;
+    if (!["every-hit", "first-hit", "any-crit", "first-crit"].includes(condition.on) || conditionRiders[index] !== undefined) {
+      fail(
+        "unsupported-trigger",
+        conditionIds[index],
+        `Condition "${conditionIds[index]}" needs ${condition.dealing} damage dealt, which only a hit or crit of an attack row can say.`
+      );
+    }
+  });
+  const dealingSources = new Set(
+    conditions.flatMap((condition, index) =>
+      condition.dealing === undefined ? [] : conditionSources[index].filter((id) => !isSaveRow(id))
+    )
   );
   // Per probe: the source ids whose crits it reports.
   const probeSources = probes.map((probe, index) =>
@@ -1379,9 +2009,13 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   const groupKeys: string[] = [];
   const groupLandings: (SaveLanding | null)[] = [];
   const groupOf = (sourceIds: readonly string[], landing?: SaveLanding): number => {
-    // A landing kind splits a group only through the save rows among its sources: two riders
-    // over the same sources with different kinds read the row differently, so they cannot share.
-    const kind = landing !== undefined && sourceIds.some(isSaveRow) ? landing : null;
+    // A landing kind splits a group only through the save rows among its sources, or the attack
+    // rows a `damage` condition splits by damage dealt: two readers over the same sources with
+    // different kinds read those rows differently, so they cannot share.
+    const kind =
+      landing !== undefined && sourceIds.some((id) => isSaveRow(id) || (landing === "damage" && dealtSources.has(id)))
+        ? landing
+        : null;
     // JSON, not a delimiter join: an id is consumer-supplied, and a delimiter
     // that can appear inside one makes the encoding non-injective, so two
     // distinct source sets could share a group.
@@ -1403,14 +2037,20 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const rider = riders[node];
     // A folded first-hit rider needs no group: it is applied inside its sources' draws.
     if (!READS_GROUP[rider.on] || isFirstHitFold(rider)) continue;
-    const group = groupOf(sourceIdsByNode[node], rider.landing);
+    // A rider that lands on anything reads a save's every class: a failure or a pass advances its group alike.
+    const group = groupOf(sourceIdsByNode[node], rider.landing === "any" ? "fail" : rider.landing);
     readsByRider.set(node, group);
     if (rider.on === "every-hit") everyHitGroups.set(riderIds[node], group);
   }
   // A condition reuses the group its `of` already has: a first-hit grant and a first-hit
   // rider over the same attacks share one. Only first-hit / first-miss read it.
+  // A gated attack reads its parent's group: a hit (`first`), damage dealt (`first` under the
+  // `damage` kind), or anything (a failure or a pass of a save alike, any change of its code).
+  const gateGroups = attackAfters.map((after) =>
+    after === undefined ? -1 : groupOf([after.of], after.landing === "hit" ? undefined : after.landing === "any" ? "fail" : "damage")
+  );
   const conditionGroups = conditions.map((condition, index) =>
-    GRANT_TRIGGERS[condition.on].readsGroup ? groupOf(conditionSources[index]) : -1
+    GRANT_TRIGGERS[condition.on].readsGroup ? groupOf(conditionSources[index], condition.landing) : -1
   );
   // A probe reads the crit bit of its sources' group at the final collapse, sharing the group
   // any rider over the same sources has.
@@ -1456,81 +2096,323 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   // and `end-of-turn` are distinct flags even for the same modifier. A flag read by
   // no later step gets no bit at all: setting it could change nothing.
   // A list of several attacks rolls attacks too, so a grant does not skip it silently.
-  const rollsAttack = sequence.map((entry) =>
-    entry.attack !== -1
-      ? attackSlices[entry.attack] !== null
-      : slicesOf(entry.id) !== null || attackLists[entry.rider]
+  // What each row declares about itself: its range or the ability it saves with, which decide
+  // what a condition's rule does to it.
+  const rowFacts = sequence.map((entry) => rowCheckOf(damageOf(entry.id)));
+  // A row that lands without a roll (`kind: "auto"`) rolls no d20: no effect reads it.
+  const rollsAttack = sequence.map(
+    (entry, position) =>
+      rowFacts[position]?.kind !== "auto" &&
+      (entry.attack !== -1 ? attackSlices[entry.attack] !== null : slicesOf(entry.id) !== null || attackLists[entry.rider])
   );
+  const savesAt = sequence.map((entry) => entry.attack !== -1 && isSaveRow(entry.id));
+  const rules = conditions.flatMap((condition) =>
+    [...condition.grants, ...(condition.onSave ?? [])].flatMap((effect) =>
+      "rule" in effect ? [effect.rule, ...(effect.rule.onEnd ? [effect.rule.onEnd.rule] : [])] : []
+    )
+  );
+  const ruledAbilities = new Set(rules.flatMap((rule) => Object.keys(rule.save ?? {})));
+  /** Checks a save's ability against the turn's rules: needed where a rule reads saves by ability, and known. */
+  const checkAbility = (owner: string, ability: string | undefined): void => {
+    if (ability === undefined) {
+      if (ruledAbilities.size > 0) {
+        fail(
+          "save-without-ability",
+          owner,
+          `"${owner}" is a save with no ability, but a condition in this turn changes saves by ability (${[...ruledAbilities].join(", ")}).`
+        );
+      }
+      return;
+    }
+    if (!ABILITIES[ability] && !ruledAbilities.has(ability)) {
+      fail("unknown-ability", owner, `"${owner}" saves with "${ability}", which is neither a 5e ability nor one a condition's rule names.`);
+    }
+  };
+  sequence.forEach((entry, position) => {
+    if (savesAt[position] && rowFacts[position] !== undefined) checkAbility(entry.id, rowFacts[position]?.ability);
+  });
+  conditions.forEach((condition, index) => {
+    for (const option of saveOptionsOf(condition)) checkAbility(conditionIds[index], option.ability);
+  });
+
+  // The creature each step is aimed at: a declared attack's `target`; a rider's, its first source's.
+  const creatureOf = (sourceId: string): string => {
+    const attackIndex = attackIndexById.get(sourceId);
+    if (attackIndex !== undefined) return attackTargets[attackIndex];
+    const watched = sourceIdsByNode[riderIndexById.get(sourceId) as number] ?? [];
+    return watched.length > 0 && riders[riderIndexById.get(sourceId) as number].on !== "not-fired"
+      ? creatureOf(watched[0])
+      : DEFAULT_CREATURE;
+  };
+  const creatureAt = sequence.map((entry) => creatureOf(entry.id));
+
   const conditionFlags = conditions.map((condition, index) => {
     const id = conditionIds[index];
     const sources = new Set(conditionSources[index]);
-    const applyAt = sequence.flatMap((entry, position) => (sources.has(entry.id) ? [position] : []));
-    const flagOf = (grant: GrantSpec, label: string): Flag => {
-      const targets = grant.to === undefined ? null : new Set(resolveSources(id, grant.to, false));
-      // Every attack roll after the condition's first source, attack-shaped riders included.
-      const readers = sequence.flatMap((entry, position) =>
-        position > applyAt[0] && rollsAttack[position] && (targets === null || targets.has(entry.id))
-          ? [position]
-          : []
-      );
-      if (targets !== null && readers.length === 0) {
-        fail(
-          "unknown-id",
-          id,
-          `Condition "${id}"'s ${label} is read by ${grant.to?.map((to) => `"${to}"`).join(", ")}, none of which rolls an attack after "${sequence[applyAt[0]].id}".`
-        );
+    const start = condition.on === "start";
+    const applyAt = start ? [] : sequence.flatMap((entry, position) => (sources.has(entry.id) ? [position] : []));
+    // Its effects are per creature: each source puts them on the creature it is aimed at; a
+    // `start` condition has them on its `target` from before the first row.
+    const creatures = start
+      ? [condition.target ?? DEFAULT_CREATURE]
+      : [...new Set(applyAt.map((position) => creatureAt[position]))];
+    /** What a condition's rule puts in force on the row at `position` (`MOD_*` bits). */
+    const ruleRead = (name: string, rule: ConditionRule, position: number): number => {
+      if (savesAt[position]) {
+        const ability = rowFacts[position]?.ability;
+        return ability === undefined ? 0 : maskOf(rule.save?.[ability] ?? [], SAVE_MODIFIERS);
       }
+      if (!rollsAttack[position] || rule.attack === undefined) return 0;
+      const range = rowFacts[position]?.range;
+      if (range === "melee" || range === "ranged") return maskOf(rule.attack[range] ?? [], ATTACK_MODIFIERS);
+      const melee = maskOf(rule.attack.melee ?? [], ATTACK_MODIFIERS);
+      if (range === undefined && melee === maskOf(rule.attack.ranged ?? [], ATTACK_MODIFIERS)) return melee;
+      return fail(
+        "unknown-range",
+        sequence[position].id,
+        `"${sequence[position].id}" is read by the condition "${name}", whose rule differs by range, but its row declares ${range === undefined ? "no range" : `the range "${String(range)}"`}. Use "melee" or "ranged".`
+      );
+    };
+    const flagOf = (effect: WalkEffect, label: string, creature: string, first: number): Flag => {
+      const to = "to" in effect ? effect.to : undefined;
+      // A `to` id must exist, but one with no row after the condition's first source that reads
+      // the effect (an earlier row, an attack for a save effect) is simply never read: a no-op there.
+      const targets =
+        to === undefined
+          ? null
+          : new Set(
+              to.flatMap((entry) => {
+                if (attackIndexById.has(entry) || riderIndexById.has(entry)) return [entry];
+                const tagged = attackIdsByTag.get(entry);
+                if (tagged) return tagged;
+                return resolveSources(id, [entry], false);
+              })
+            );
+      const side = "rule" in effect ? "both" : "saveDisadvantage" in effect || "savePenalty" in effect ? "save" : "attack";
+      const modifiers =
+        "vulnerability" in effect
+          ? MOD_VULNERABLE
+          : "saveDisadvantage" in effect
+            ? MOD_SAVE_DISADVANTAGE
+            : "savePenalty" in effect || "rule" in effect
+              ? 0
+              : (effect.advantage ? MOD_ADVANTAGE : 0) |
+                (effect.disadvantage ? MOD_DISADVANTAGE : 0) |
+                (effect.critOnHit ? MOD_CRIT_ON_HIT : 0);
+      // Every attack roll on the creature after the condition's first source there, attack-shaped
+      // riders included; for a save effect, every save row; for a condition, every row its rule changes.
+      const reads = new Map<number, number>();
+      sequence.forEach((entry, position) => {
+        if (!(position > first) || creatureAt[position] !== creature) return;
+        if (targets !== null && !targets.has(entry.id)) return;
+        if ("rule" in effect) {
+          const read = ruleRead(effect.condition, effect.rule, position);
+          if (read !== 0) reads.set(position, read);
+        } else if (side === "attack" ? rollsAttack[position] : savesAt[position]) {
+          reads.set(position, modifiers);
+        }
+      });
+      const readers = [...reads.keys()];
       return {
-        name: `"${id}" ${label}`,
+        name: `"${id}" ${label}${creatures.length > 1 ? ` on "${creature}"` : ""}`,
         condition: id,
-        grant,
+        creature,
+        modifiers,
+        reads,
+        penalty: "savePenalty" in effect ? effect.savePenalty : undefined,
+        side,
+        // A grant's own save is no row: it reads what lasts (not a `next-save` effect) and is not scoped with `to`.
+        grantSaveReads: side !== "attack" && to === undefined && effect.until !== "next-save",
+        saveRead: (ability) =>
+          "rule" in effect
+            ? ability === undefined
+              ? 0
+              : maskOf(effect.rule.save?.[ability] ?? [], SAVE_MODIFIERS)
+            : modifiers,
+        until: effect.until,
         readers,
+        first,
         lastRead: readers.length ? readers[readers.length - 1] : -1,
         bit: -1,
       };
     };
-    const main = condition.grants.map((grant, grantIndex) => flagOf(grant, `grant ${grantIndex + 1}`));
-    const onSave = (condition.onSave ?? []).map((grant, grantIndex) =>
-      flagOf(grant, `onSave grant ${grantIndex + 1}`)
+    /** An effect's flags: a condition that damage ends brings the one it leaves behind (`onEnd`), lasting the turn. */
+    const flagsOf = (effect: WalkEffect, label: string, creature: string, first: number): Flag[] => [
+      flagOf(effect, label, creature, first),
+      ...("rule" in effect && effect.until === "until-damaged" && effect.rule.onEnd
+        ? [
+            flagOf(
+              { condition: effect.rule.onEnd.condition, rule: effect.rule.onEnd.rule, until: "end-of-turn" },
+              `${label} onEnd`,
+              creature,
+              first
+            ),
+          ]
+        : []),
+    ];
+    const byCreature = new Map(
+      creatures.map((creature) => {
+        const at = applyAt.filter((position) => creatureAt[position] === creature);
+        const first = start ? -1 : at[0];
+        const main = condition.grants.flatMap((grant, grantIndex) => flagsOf(grant, `grant ${grantIndex + 1}`, creature, first));
+        const onSave = (condition.onSave ?? []).flatMap((grant, grantIndex) =>
+          flagsOf(grant, `onSave grant ${grantIndex + 1}`, creature, first)
+        );
+        // An application whose grants are all end-of-turn and all in force is skipped,
+        // onSave with it. With an onSave to skip, that check reads the grants at every source.
+        if (main.length > 0 && main.every((flag) => flag.until === "end-of-turn") && onSave.length > 0) {
+          for (const flag of main) flag.lastRead = Math.max(flag.lastRead, at[at.length - 1]);
+        }
+        return [creature, { main, onSave }] as const;
+      })
     );
-    // An application whose grants are all end-of-turn and all in force is skipped,
-    // onSave with it. With an onSave to skip, that check reads the grants at every source.
-    const lastingOnly = main.length > 0 && main.every((flag) => flag.grant.until === "end-of-turn");
-    if (lastingOnly && onSave.length > 0) {
-      for (const flag of main) flag.lastRead = Math.max(flag.lastRead, applyAt[applyAt.length - 1]);
-    }
-    return { main, onSave, lastingOnly, applyAt };
+    const main = [...byCreature.values()].flatMap((flags) => flags.main);
+    const onSave = [...byCreature.values()].flatMap((flags) => flags.onSave);
+    const lastingOnly = main.length > 0 && main.every((flag) => flag.until === "end-of-turn");
+    return { main, onSave, lastingOnly, applyAt, byCreature, start };
   });
 
-  const liveFlags = conditionFlags.flatMap(({ main, onSave }) =>
-    [...main, ...onSave].filter((flag) => flag.lastRead !== -1)
-  );
-  if (liveFlags.length > MAX_LIVE_FLAGS) {
+  // A grant's own save reads the effects that last on its target and were set before the row
+  // that tries it, so those stay live through every row that can try it.
+  const allFlags = conditionFlags.flatMap(({ main, onSave }) => [...main, ...onSave]);
+  conditions.forEach((condition, index) => {
+    const options = saveOptionsOf(condition);
+    if (options.length === 0) return;
+    for (const position of conditionFlags[index].applyAt) {
+      for (const flag of allFlags) {
+        if (
+          flag.grantSaveReads &&
+          flag.creature === creatureAt[position] &&
+          flag.first < position &&
+          (flag.penalty !== undefined || options.some((option) => flag.saveRead(option.ability) !== 0))
+        ) {
+          flag.lastRead = Math.max(flag.lastRead, position);
+        }
+      }
+    }
+  });
+
+  // A once-per-turn condition (`first-*`) is tried only on a landing where a later row on that
+  // landing's creature reads one of its effects: a landing with no reader after it keeps the try
+  // for a later one (the engine's rule). With one creature the readers only thin out along the turn,
+  // so the first landing decides either way and the condition's group says it; otherwise a bit of
+  // its own says it was tried.
+  // A rider that may not happen (`happens`): one coin for the turn. A rider that lands once at most
+  // has it folded into its payload; one that can land several times keeps the coin as a bit from
+  // before the first row to its last landing, so all its landings share it.
+  const happensOf = riders.map((rider, index) => {
+    const happens = rider.happens ?? 1;
+    if (!(happens >= 0 && happens <= 1)) {
+      throw new RangeError(`Rider "${riderIds[index]}" needs happens in [0, 1], got ${happens}.`);
+    }
+    return happens;
+  });
+  const coinFlags = riders.map((rider, index): Flag | undefined => {
+    if (happensOf[index] === 1 || rider.on !== "every-hit") return undefined;
+    const watched = new Set(sourceIdsByNode[index]);
+    const positions = sequence.flatMap((entry, position) => (watched.has(entry.id) ? [position] : []));
+    return {
+      name: `"${riderIds[index]}" happens`,
+      condition: riderIds[index],
+      creature: DEFAULT_CREATURE,
+      modifiers: 0,
+      reads: new Map(),
+      penalty: undefined,
+      side: "attack",
+      grantSaveReads: false,
+      saveRead: () => 0,
+      until: "end-of-turn",
+      readers: [],
+      first: -1,
+      lastRead: positions.length === 0 ? -1 : positions[positions.length - 1],
+      bit: -1,
+    };
+  });
+
+  const triedFlags = conditions.map((condition, index): Flag | undefined => {
+    if (condition.on !== "first-hit" && condition.on !== "first-crit" && condition.on !== "first-miss") return undefined;
+    const { applyAt, byCreature } = conditionFlags[index];
+    const follows = applyAt.map((position) => {
+      const flags = byCreature.get(creatureAt[position]);
+      return [...(flags?.main ?? []), ...(flags?.onSave ?? [])].some((flag) => flag.readers.some((reader) => reader > position));
+    });
+    // A condition on a rider's landing has no group of the rider's landings to read: it always keeps a bit.
+    // Nor does one that needs a damage type dealt: an untyped landing must not spend it.
+    if (
+      conditionRiders[index] === undefined &&
+      condition.dealing === undefined &&
+      follows.every((follow, k) => k === 0 || follow <= follows[k - 1])
+    ) {
+      return undefined;
+    }
+    const tries = applyAt.filter((_, k) => follows[k]);
+    return {
+      name: `"${conditionIds[index]}" tried`,
+      condition: conditionIds[index],
+      creature: DEFAULT_CREATURE,
+      modifiers: 0,
+      reads: new Map(),
+      penalty: undefined,
+      side: "attack",
+      grantSaveReads: false,
+      saveRead: () => 0,
+      until: "end-of-turn",
+      readers: [],
+      first: tries[0],
+      lastRead: tries[tries.length - 1],
+      bit: -1,
+    };
+  });
+  // A flag lives from its first setter to its last reader. Flags whose lives do not overlap share
+  // a bit (the engine's `placeBits`): the walk clears a bit once its flag is dead, so the next
+  // flag on it starts clear. A flag nothing reads gets no bit at all: setting it could change nothing.
+  const liveFlags = [
+    ...conditionFlags.flatMap(({ main, onSave }) => [...main, ...onSave].filter((flag) => flag.lastRead !== -1)),
+    ...triedFlags.filter((flag): flag is Flag => flag !== undefined && flag.lastRead > flag.first),
+    ...coinFlags.filter((flag): flag is Flag => flag !== undefined && flag.lastRead > flag.first),
+  ];
+  const busyUntil: number[] = [];
+  for (const flag of [...liveFlags].sort((a, b) => a.first - b.first)) {
+    let bit = busyUntil.findIndex((last) => last < flag.first);
+    if (bit === -1) bit = busyUntil.length;
+    busyUntil[bit] = flag.lastRead;
+    flag.bit = bit;
+  }
+  if (busyUntil.length > MAX_FLAG_BITS) {
     fail(
-      "too-many-flags",
-      liveFlags[MAX_LIVE_FLAGS].condition,
-      `A turn may carry at most ${MAX_LIVE_FLAGS} granted modifiers that a later attack reads; this one has ${liveFlags.length}: ${liveFlags.map((flag) => flag.name).join(", ")}.`
+      "too-many-states",
+      liveFlags[0].condition,
+      `A turn may carry at most ${MAX_FLAG_BITS} effects live at once; this one needs ${busyUntil.length}: ${liveFlags.map((flag) => flag.name).join(", ")}.`
     );
   }
-  liveFlags.forEach((flag, bit) => {
-    flag.bit = bit;
-  });
-  const bitsOf = (flags: readonly Flag[]): number =>
-    flags.reduce((mask, flag) => (flag.bit === -1 ? mask : mask | (1 << flag.bit)), 0);
-  const modifiersOfBit = liveFlags.map(
-    ({ grant }) =>
-      (grant.advantage ? MOD_ADVANTAGE : 0) |
-      (grant.disadvantage ? MOD_DISADVANTAGE : 0) |
-      (grant.critOnHit ? MOD_CRIT_ON_HIT : 0)
-  );
+  /** The bits of `flags` still needed once step `step` is done. */
+  const liveBitsOf = (flags: readonly Flag[], step: number): number =>
+    flags.reduce((mask, flag) => (flag.bit !== -1 && liveAfter(flag, step) ? mask | (1 << flag.bit) : mask), 0);
+  const flagLiveAfter = sequence.map((_, step) => liveBitsOf(liveFlags, step));
+  /** Per step, the flags it reads with what each puts in force there, in declaration order. */
+  const readsAt: { flag: Flag; modifiers: number }[][] = sequence.map(() => []);
   const readMaskAt = new Array<number>(sequence.length).fill(0);
   const consumesAt = new Array<number>(sequence.length).fill(0);
+  const hitConsumesAt = new Array<number>(sequence.length).fill(0);
   for (const flag of liveFlags) {
-    for (const reader of flag.readers) {
+    for (const [reader, modifiers] of flag.reads) {
+      readsAt[reader].push({ flag, modifiers });
       readMaskAt[reader] |= 1 << flag.bit;
-      if (flag.grant.until === "next-attack") consumesAt[reader] |= 1 << flag.bit;
+      if (flag.until === "next-attack" || flag.until === "next-save") consumesAt[reader] |= 1 << flag.bit;
+      if (flag.until === "next-hit") hitConsumesAt[reader] |= 1 << flag.bit;
     }
   }
+  // Per step, the bits of the conditions that damage ends and that the step finds set: cleared
+  // once the step has read them, where it dealt damage.
+  const woundsAt = sequence.map((_, step) =>
+    liveFlags.reduce(
+      (mask, flag) =>
+        flag.until === "until-damaged" && flag.creature === creatureAt[step] && flag.first < step && step <= flag.lastRead
+          ? mask | (1 << flag.bit)
+          : mask,
+      0
+    )
+  );
 
   // --- group slots -----------------------------------------------------------
   // A group is live from the first step that can advance it to the last step that reads it: the
@@ -1550,11 +2432,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   };
   sequence.forEach((entry, position) => {
     if (entry.rider !== -1) readAt(readsByRider.get(entry.rider) ?? -1, position);
+    if (entry.attack !== -1) readAt(gateGroups[entry.attack], position);
   });
   conditions.forEach((_, index) => {
     const { main, onSave, applyAt } = conditionFlags[index];
-    if ((bitsOf(main) | bitsOf(onSave)) === 0) return;
-    // A first-hit / first-miss grant reads its group's pre-draw code at each source step.
+    if (![...main, ...onSave].some((flag) => flag.bit !== -1)) return;
+    // A first-* grant reads its group's pre-draw code at each source step.
     for (const position of applyAt) readAt(conditionGroups[index], position);
   });
   for (const group of [...everyHitGroups.values(), ...probeGroups]) readAt(group, sequence.length);
@@ -1593,22 +2476,135 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     for (const group of groups.slice(0, -1)) releasesAt[groupLastStep[group]].push(slot);
   });
 
+  /**
+   * The chance a condition's grant save fails at step `position`, as a function of the state's
+   * flags; undefined without a save. The save reads what lasts the turn on its target and was set
+   * before this row (not a `next-save` effect, which belongs to the save rows, nor one scoped with
+   * `to`); the target saves with the option it fails least.
+   */
+  const grantSaveChance = (
+    id: string,
+    options: readonly GrantSaveSpec[],
+    position: number
+  ): ((flags: number) => number) | undefined => {
+    if (options.length === 0) return undefined;
+    const reads = allFlags.filter(
+      (flag) =>
+        flag.grantSaveReads &&
+        flag.bit !== -1 &&
+        flag.creature === creatureAt[position] &&
+        flag.first < position &&
+        position <= flag.lastRead
+    );
+    const known = new Map<number, number>();
+    return (flags) => {
+      let key = 0;
+      for (const flag of reads) key |= flags & (1 << flag.bit);
+      const cached = known.get(key);
+      if (cached !== undefined) return cached;
+      const read = reads.filter((flag) => (flags & (1 << flag.bit)) !== 0);
+      const penaltyDice = read.flatMap((flag) => (flag.penalty ? [flag.penalty] : [])).sort(byDie);
+      let fail = 1;
+      for (const option of options) {
+        // The option's ability decides what the target's conditions do to this save.
+        const modifiers = read.reduce((mask, flag) => mask | flag.saveRead(option.ability), 0);
+        const context: RowContext = {
+          rollType: combineRollType(
+            "rollType" in option ? (option.rollType ?? "flat") : "flat",
+            false,
+            (modifiers & MOD_SAVE_DISADVANTAGE) !== 0,
+            false
+          ),
+          autoHit: false,
+          critOnHit: false,
+          autoFail: (modifiers & MOD_AUTO_FAIL) !== 0,
+          vulnerable: false,
+          penaltyDice,
+          joined: [],
+        };
+        // An automatic failure never reaches a `failChance`.
+        const chance = context.autoFail
+          ? 1
+          : "failChance" in option
+            ? option.failChance(context)
+            : saveFailChance(option.bonus, option.dc, context);
+        if (!(chance >= 0 && chance <= 1)) {
+          throw new RangeError(`Condition "${id}" has a save whose fail chance is ${chance}, not a probability.`);
+        }
+        fail = Math.min(fail, chance);
+      }
+      known.set(key, fail);
+      return fail;
+    };
+  };
   const grantsAt: GrantApplication[][] = sequence.map(() => []);
   conditions.forEach((condition, index) => {
-    const { main, onSave, lastingOnly, applyAt } = conditionFlags[index];
-    const grants = bitsOf(main);
-    const onSaveBits = bitsOf(onSave);
-    if ((grants | onSaveBits) === 0) return;
+    const { main, onSave, applyAt, byCreature, start } = conditionFlags[index];
+    if (start) return;
+    const once = condition.on.startsWith("first-");
+    const countedInForce = (condition.onSave ?? []).length === 0;
+    if (![...main, ...onSave].some((flag) => flag.bit !== -1)) {
+      // Nothing reads it: it changes nothing, but a condition that may land again and again is
+      // still tried on every landing, as the engine counts it. A once-per-turn one is never tried.
+      if (once) return;
+      for (const position of applyAt) {
+        grantsAt[position].push({
+          condition: index,
+          on: condition.on as Exclude<ConditionSpec["on"], "start">,
+          reads: -1,
+          landing: condition.landing,
+          chance: condition.chance ?? 1,
+          chanceOf: grantSaveChance(conditionIds[index], saveOptionsOf(condition), position),
+          grants: 0,
+          onSave: 0,
+          inForce: 0,
+          effective: false,
+          tried: 0,
+          rider: conditionRiders[index],
+          dealing: condition.dealing !== undefined,
+          counted: true,
+          countedInForce,
+          countOnly: true,
+        });
+      }
+      return;
+    }
+    const tried = triedFlags[index];
+    // A condition tried at one row only needs no bit that lives: one above the flag word, set and dropped.
+    const triedBit = tried === undefined ? 0 : tried.bit !== -1 ? 1 << tried.bit : 1 << MAX_FLAG_BITS;
     for (const position of applyAt) {
+      // The flags on the creature this source is aimed at.
+      const flags = byCreature.get(creatureAt[position]) as { main: Flag[]; onSave: Flag[] };
+      const held = flags.main.filter((flag) => flag.bit !== -1);
+      const lastingOnly = flags.main.length > 0 && flags.main.every((flag) => flag.until === "end-of-turn");
+      // Only bits still needed after this step are set: a dead flag's bit may be another's by then.
+      const grants = liveBitsOf(flags.main, position);
+      // In force: every held grant was set before this step and is still read, so its bit is its own.
+      const inForce =
+        lastingOnly && held.length > 0 && held.every((flag) => flag.first < position && position <= flag.lastRead)
+          ? held.reduce((mask, flag) => mask | (1 << flag.bit), 0)
+          : 0;
+      const follows = [...flags.main, ...flags.onSave].some((flag) => flag.readers.some((reader) => reader > position));
+      // A once-per-turn condition puts nothing in force where no later row reads it (the engine's
+      // `readerFollows`): a later condition's save alone does not make it worth trying.
+      const puts = !once || follows;
       grantsAt[position].push({
         condition: index,
-        on: condition.on,
+        on: condition.on as Exclude<ConditionSpec["on"], "start">,
         reads: slotOf(conditionGroups[index]),
+        landing: condition.landing,
         chance: condition.chance ?? 1,
-        grants,
-        onSave: onSaveBits,
-        inForce: lastingOnly ? grants : 0,
-        effective: main.some((flag) => flag.readers.some((reader) => reader > position)),
+        chanceOf: grantSaveChance(conditionIds[index], saveOptionsOf(condition), position),
+        grants: puts ? grants : 0,
+        onSave: puts ? liveBitsOf(flags.onSave, position) : 0,
+        inForce,
+        effective: flags.main.some((flag) => flag.readers.some((reader) => reader > position)),
+        tried: tried === undefined ? 0 : follows ? triedBit : -1,
+        rider: conditionRiders[index],
+        dealing: condition.dealing !== undefined,
+        counted: !once || follows,
+        countedInForce,
+        countOnly: false,
       });
     }
   });
@@ -1626,19 +2622,37 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
   interface HitPayload {
     /** Index into `everyHitIds`, or -1 for a first-hit rider. */
     rider: number;
+    /** The rider's id. */
+    id: string;
     /** The fire slot a first-hit rider marks when it applies, or -1. */
     slot: number;
     /** The rider's counter's bit in a source's variant mask, or 0 when uncapped. */
     bit: number;
-    /** How the rider reads a save row among its sources (see {@link SaveLanding}). */
-    landing: SaveLanding | undefined;
+    /** How the rider reads a save row among its sources (see {@link SaveLanding}); `any` lands on every outcome. */
+    landing: SaveLanding | "any" | undefined;
+    /** Lands on crits only (a folded `any-crit` rider). */
+    critOnly: boolean;
     hit: PMF;
     crit: PMF;
+    /** Its payloads where the row's hit used up a vulnerability: doubled with the attack. */
+    vulnerable: () => { hit: PMF; crit: PMF };
+    /** The bit of a source's variant mask that says its coin (`happens`) came up, or 0 when it has none. */
+    coinBit: number;
+    /** On a row a partner opens to it: the partners, one of which must land in the same draw. */
+    partners: readonly string[];
+    /** P(its payload on this row deals `type`), as a plain hit and as a crit; for a `dealing` condition. */
+    typedOdds: ((type: string) => { hit: number; crit: number }) | undefined;
   }
   const everyHitIds = riderIds.filter((_, index) => riders[index].on === "every-hit");
   const counterMax: number[] = [];
   /** Per counter, the landing kind its riders read a save row under; undefined when no source is a save row. */
-  const counterLanding: (SaveLanding | undefined)[] = [];
+  const counterLanding: (SaveLanding | "any" | undefined)[] = [];
+  /** Per counter, whether its riders land on crits only. */
+  const counterCritOnly: boolean[] = [];
+  /** Per counter, whether its riders land only where an attack row dealt damage (`landing: "damage"`). */
+  const counterDealt: boolean[] = [];
+  /** Per counter, whether its riders land alongside a partner on some row. */
+  const counterPartnered: boolean[] = [];
   const counterIdByKey = new Map<string, number>();
   const perHitBySource = new Map<string, HitPayload[]>();
   /**
@@ -1646,10 +2660,19 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
    * says whether counter i's riders apply in that variant.
    */
   const countersBySource = new Map<string, number[]>();
-  const payloadOf = (payload: RiderPayload, id: string): { hit: PMF; crit: PMF } => {
+  const payloadOf = (payload: RiderPayload, id: string): Pick<HitPayload, "hit" | "crit" | "vulnerable"> => {
     const hit = toPMF(payload.damage, eps, id);
-    return { hit, crit: critPMF(payload, hit, eps) };
+    const crit = critPMF(payload, hit, eps);
+    let doubled: { hit: PMF; crit: PMF } | undefined;
+    // A plain payload doubles with the attack it lands on, as the whole roll does.
+    const vulnerable = () => (doubled ??= { hit: hit.mapDamage((d) => 2 * d), crit: crit.mapDamage((d) => 2 * d) });
+    return { hit, crit, vulnerable };
   };
+  /** `pmf` dealt with probability `happens`, else nothing: one landing of a rider that may not happen. */
+  const thin = (pmf: PMF, happens: number): PMF =>
+    happens === 1 ? pmf : pmf.scaleMass(happens).add(PMF.delta(0, eps).scaleMass(1 - happens));
+  /** Per source, the coins (rider indexes) whose riders fold into it, in payload order. */
+  const coinsBySource = new Map<string, number[]>();
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
@@ -1694,7 +2717,9 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         }
       }
     }
-    let shared: { hit: PMF; crit: PMF } | undefined;
+    let shared: Pick<HitPayload, "hit" | "crit" | "vulnerable"> | undefined;
+    const contextual = contextualPayloads.get(node);
+    const ownRows = partnersOf[node].length === 0 ? sources : ownSourcesOf(rider, node);
     let counter = -1;
     // The cap: an every-hit rider's `max`, or 1 for a first-hit rider (a `max: 1` every-hit rider
     // was lowered to one, so a folded first-hit rider is the per-source spelling of it).
@@ -1720,12 +2745,24 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       }
       // Riders share a counter only when they land on the same rows: over a save row, on the same
       // classes of it, so the landing kind is part of the key there.
-      const kind = rider.landing !== undefined && sources.some(isSaveRow) ? rider.landing : undefined;
-      const key = JSON.stringify([[...sources].sort(), cap, kind ?? null]);
+      const kind =
+        rider.landing === "any" ? "any" : rider.landing !== undefined && sources.some(isSaveRow) ? rider.landing : undefined;
+      const dealtOnly = rider.landing === "damage" && sources.some((sourceId) => dealtSources.has(sourceId));
+      const key = JSON.stringify([
+        [...sources].sort(),
+        cap,
+        kind ?? null,
+        ...(critOnly.has(node) ? ["crit"] : []),
+        ...(dealtOnly ? ["dealt"] : []),
+        ...(partnersOf[node].length > 0 ? [riderIds[node]] : []),
+      ]);
       let known = counterIdByKey.get(key);
       if (known === undefined) {
         known = counterMax.push(cap) - 1;
         counterLanding.push(kind);
+        counterCritOnly.push(critOnly.has(node));
+        counterDealt.push(dealtOnly);
+        counterPartnered.push(partnersOf[node].length > 0);
         counterIdByKey.set(key, known);
       }
       counter = known;
@@ -1734,7 +2771,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const slot = rider.on === "first-hit" ? (fireSlots.get(id) as number) : -1;
     for (const sourceId of sources) {
       const each = own.get(sourceId);
-      const payload = each ? payloadOf(each, id) : (shared ??= payloadOf(rider, id));
+      const landing = contextual?.at(sourceId);
+      const payload = landing
+        ? { hit: landing.onHit, crit: landing.onCrit, vulnerable: () => ({ hit: landing.vulnerable.onHit, crit: landing.vulnerable.onCrit }) }
+        : each
+          ? payloadOf(each, id)
+          : (shared ??= payloadOf(rider, id));
       let bit = 0;
       if (counter !== -1) {
         const counters = countersBySource.get(sourceId) ?? [];
@@ -1746,10 +2788,54 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         }
         bit = 1 << local;
       }
-      const entry = { rider: applyIndex, slot, bit, landing: rider.landing, ...payload };
+      // A rider that lands once at most takes its coin in its payload; one with a coin bit, in its variant.
+      const coined = coinFlags[node] !== undefined && coinFlags[node].bit !== -1;
+      const happens = coined ? 1 : happensOf[node];
+      const thinned =
+        happens === 1
+          ? payload
+          : {
+              hit: thin(payload.hit, happens),
+              crit: thin(payload.crit, happens),
+              vulnerable: () => {
+                const doubled = payload.vulnerable();
+                return { hit: thin(doubled.hit, happens), crit: thin(doubled.crit, happens) };
+              },
+            };
+      if (coined) {
+        const coins = coinsBySource.get(sourceId) ?? [];
+        coins.push(node);
+        coinsBySource.set(sourceId, coins);
+      }
+      const entry = {
+        rider: applyIndex,
+        id,
+        slot,
+        bit,
+        landing: rider.landing,
+        critOnly: critOnly.has(node),
+        coinBit: coined ? -1 : 0,
+        // A row of its own it lands on for its trigger; a row only a partner opens, alongside that partner.
+        partners: ownRows.includes(sourceId) ? [] : (openedBy[node].get(sourceId) ?? []),
+        typedOdds:
+          contextual?.dealt === undefined
+            ? undefined
+            : (type: string) => {
+                const odds = (contextual.dealt as NonNullable<ContextualPayload["dealt"]>)(type, sourceId);
+                return { hit: odds.hit * happens, crit: odds.crit * happens };
+              },
+        ...thinned,
+      };
       const existing = perHitBySource.get(sourceId);
       if (existing) existing.push(entry);
       else perHitBySource.set(sourceId, [entry]);
+    }
+  }
+  // A coin's bit in a source's variant mask comes after its counters' bits.
+  for (const [sourceId, coins] of coinsBySource) {
+    const base = (countersBySource.get(sourceId) ?? []).length;
+    for (const payload of perHitBySource.get(sourceId) ?? []) {
+      if (payload.coinBit === -1) payload.coinBit = 1 << (base + coins.indexOf(riderIndexById.get(payload.id) as number));
     }
   }
   for (const [sourceId, counters] of countersBySource) {
@@ -1761,28 +2847,153 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       );
     }
   }
-  /** `slice` with the every-hit riders of variant `mask` folded in: every uncapped one, and each capped one whose bit is set. */
-  const fold = (sourceId: string, outcome: "hit" | "crit", slice: PMF, mask: number): PMF => {
-    let folded = slice;
-    for (const payload of perHitBySource.get(sourceId) ?? []) {
-      if (payload.bit !== 0 && (mask & payload.bit) === 0) continue;
-      folded = folded.convolve(payload[outcome], eps, true);
-    }
-    return folded;
+  /**
+   * `slice` with the every-hit riders of variant `mask` folded in: every uncapped one, and each
+   * capped one whose bit is set; with the own part and the riders' payloads when any is folded.
+   */
+  /**
+   * The payloads of `sourceId` that land on a draw of `outcome` from variant `mask`: within their
+   * cap, on a crit for a crit-only rider, where damage was dealt for a `damage` rider, on a miss only
+   * for an `any` rider, and on a row a partner opens only where that partner lands too. With
+   * `coins`, a rider whose coin did not come up is left out (it lands, but deals nothing).
+   */
+  const activeAt = (
+    sourceId: string,
+    mask: number,
+    outcome: "hit" | "crit" | "miss",
+    dealt: boolean | undefined,
+    coins: boolean
+  ): HitPayload[] => {
+    const lands = (perHitBySource.get(sourceId) ?? []).filter(
+      (payload) =>
+        (payload.bit === 0 || (mask & payload.bit) !== 0) &&
+        (!payload.critOnly || outcome === "crit") &&
+        // "When you deal damage": a hit that dealt nothing is no landing for it.
+        !(dealt === false && payload.landing === "damage") &&
+        (outcome !== "miss" || (payload.landing === "any" && !payload.critOnly))
+    );
+    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
+    return lands.filter(
+      (payload) =>
+        (payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))) &&
+        (!coins || payload.coinBit === 0 || (mask & payload.coinBit) !== 0)
+    );
   };
-  /** What a hit or crit drawn from variant `mask` of `sourceId` applies, counts and marks as fired. */
+  /**
+   * `slice` with the riders that land on it folded in (see {@link activeAt}); with the own part and
+   * the riders' payloads when any is folded.
+   */
+  /** Per builder, its re-derivation under each modifier key (see the step's `rederive`). */
+  const rederivedBuilders = new Map<unknown, Map<number, { pmf: () => PMF; signature: string }>>();
+  /** Per source, its PMF under each context signature (see the step's `rederive`). */
+  const pmfsUnder = new Map<unknown, Map<string, PMF>>();
+  /** Folds already made: several rows fold the same payload into the same slice. */
+  const foldsMade = new WeakMap<PMF, WeakMap<PMF, PMF>>();
+  const fold = (
+    sourceId: string,
+    outcome: "hit" | "crit" | "miss",
+    slice: PMF,
+    mask: number,
+    vulnerable = false,
+    dealt?: boolean,
+    joined: readonly string[] = []
+  ): Pick<Draw, "slice" | "own" | "riders"> => {
+    let folded = slice;
+    const parts: [string, PMF][] = [];
+    for (const payload of activeAt(sourceId, mask, outcome, dealt, true)) {
+      // A rider that lands on anything is no part of the attack's damage: its plain payload, never doubled.
+      const any = payload.landing === "any" && !payload.critOnly;
+      // A rider whose dice joined the row's roll (`joins`) deals nothing beside it there; its landing still counts.
+      const paid = joined.includes(payload.id)
+        ? PMF.delta(0, eps)
+        : any
+          ? payload.hit
+          : vulnerable
+            ? payload.vulnerable()[outcome as "hit" | "crit"]
+            : payload[outcome as "hit" | "crit"];
+      if (folds === "joint") {
+        let byPaid = foldsMade.get(folded);
+        if (byPaid === undefined) foldsMade.set(folded, (byPaid = new WeakMap()));
+        let next = byPaid.get(paid);
+        if (next === undefined) byPaid.set(paid, (next = folded.convolve(paid, eps, true)));
+        folded = next;
+      } else {
+        const paidMass = paid.mass();
+        if (paidMass !== 1) folded = folded.scaleMass(paidMass);
+      }
+      parts.push([payload.id, paid]);
+    }
+    return parts.length === 0 ? { slice: folded } : { slice: folded, own: slice, riders: parts };
+  };
+  /** What a draw of `outcome` from variant `mask` of `sourceId` applies, counts and marks as fired. */
   const landingOf = (
     sourceId: string,
-    mask: number
+    mask: number,
+    outcome: "hit" | "crit" | "miss",
+    dealt?: boolean
   ): { applies: number[]; bumps: number[]; fires: number[] } => {
-    const active = (perHitBySource.get(sourceId) ?? []).filter(
-      (payload) => payload.bit === 0 || (mask & payload.bit) !== 0
-    );
+    const active = activeAt(sourceId, mask, outcome, dealt, false);
     return {
       applies: active.flatMap((payload) => (payload.rider === -1 ? [] : [payload.rider])),
-      bumps: (countersBySource.get(sourceId) ?? []).filter((_, local) => (mask & (1 << local)) !== 0),
+      bumps: (countersBySource.get(sourceId) ?? []).filter(
+        (counter, local) =>
+          (mask & (1 << local)) !== 0 &&
+          (!counterCritOnly[counter] || outcome === "crit") &&
+          !(dealt === false && counterDealt[counter]) &&
+          (outcome !== "miss" || (counterLanding[counter] === "any" && !counterCritOnly[counter])) &&
+          // A counter of a rider a partner gates here counts only where it landed.
+          (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local))
+      ),
       fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
     };
+  };
+
+  /**
+   * `draws` of a hit or crit of `sourceId`, split by whether the landing dealt the `dealing` type:
+   * the row's own odds in its context (within a part that dealt damage, scaled to it), or a rider's
+   * that landed with it, each independent. The split is by odds alone: exact for every marginal.
+   */
+  const typedSplit = (
+    sourceId: string,
+    outcome: "hit" | "crit",
+    draws: Draw[],
+    rowContext: RowContext | undefined
+  ): Draw[] => {
+    const type = dealingType as string;
+    const source = damageOf(sourceId);
+    const dealt = isContextual(source) ? source.dealt : undefined;
+    if (rowContext === undefined || dealt === undefined) {
+      fail(
+        "not-an-attack",
+        sourceId,
+        `"${sourceId}" is read by a condition that needs ${type} damage dealt, but its source cannot say the odds it deals it (ContextualSource.dealt).`
+      );
+    }
+    const rowOdds = (dealt as NonNullable<ContextualSource["dealt"]>).call(source, type, rowContext as RowContext)[outcome];
+    const whole = draws.reduce((sum, draw) => sum + (draw.own ?? draw.slice).mass(), 0);
+    const dealtMass = draws.reduce((sum, draw) => sum + (draw.byKind === NOT_DEALT[outcome] ? 0 : (draw.own ?? draw.slice).mass()), 0);
+    return draws.flatMap((draw) => {
+      // Typed damage above 0 is damage dealt: a part that dealt none is typed only by a rider.
+      const own = draw.byKind === NOT_DEALT[outcome] ? 0 : Math.min(1, dealtMass > 0 ? (rowOdds * whole) / dealtMass : 0);
+      let untyped = 1 - own;
+      for (const [id] of draw.riders ?? []) {
+        const payload = (perHitBySource.get(sourceId) ?? []).find((each) => each.id === id);
+        if (payload === undefined || payload.landing === "any") continue;
+        if (payload.typedOdds === undefined) {
+          fail(
+            "not-an-attack",
+            id,
+            `Rider "${id}" lands on "${sourceId}", which a condition needing ${type} damage reads, but it cannot say the odds it deals it (ContextualPayload.dealt).`
+          );
+        }
+        untyped *= 1 - (payload.typedOdds as NonNullable<HitPayload["typedOdds"]>)(type)[outcome];
+      }
+      const typed = 1 - untyped;
+      return [
+        ...(typed > 0 ? [{ ...scaleDraw(draw, typed), typed: true }] : []),
+        ...(untyped > 0 ? [{ ...scaleDraw(draw, untyped), typed: false }] : []),
+      ];
+    });
   };
 
   // --- draws -----------------------------------------------------------------
@@ -1817,9 +3028,11 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     sourceId: string,
     slices: SourceSlices,
     policy: SubstitutePolicy | null,
-    mask: number
+    mask: number,
+    vulnerable = false,
+    joined: readonly string[] = [],
+    rowContext?: RowContext
   ): { fixed: Draw[]; choices: HoldChoice[] } => {
-    const { applies, bumps, fires } = landingOf(sourceId, mask);
     const match = matchNeeded.has(sourceId) ? matchInfoOf(sourceId) : null;
     // With neither split, the slices already carry the channels — draw them as they are.
     const payload = policy || match ? basePayload(sourceId) : null;
@@ -1835,20 +3048,43 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           ? Mixture.mix([[outcome, payload.base[outcome], 1]], eps).scaleMass(mass)
           : slice;
       const info = match?.[outcome] ?? null;
-      const finish = (part: PMF): PMF =>
-        fold(sourceId, outcome, separate ? part.convolve(separate, eps, true) : part, mask);
+      const own = (part: PMF): PMF => (separate ? part.convolve(separate, eps, true) : part);
+      /** `part` as draws: one, or, for a row a `damage` condition reads, split by whether its own damage was above 0. */
+      const draw = (part: PMF, matched: boolean, spends: boolean): Draw[] =>
+        dealingSources.has(sourceId) ? typedSplit(sourceId, outcome, plainDraw(part, matched, spends), rowContext) : plainDraw(part, matched, spends);
+      const plainDraw = (part: PMF, matched: boolean, spends: boolean): Draw[] => {
+        if (!dealtSources.has(sourceId)) {
+          return [
+            {
+              outcome,
+              matched,
+              spends,
+              ...landingOf(sourceId, mask, outcome),
+              ...fold(sourceId, outcome, own(part), mask, vulnerable, undefined, joined),
+            },
+          ];
+        }
+        const whole = own(part);
+        const [dealt, none] = whole.splitByFactor((damage) => (damage > 0 ? 1 : 0));
+        // A part that is all of it stays the very PMF.
+        const pieces: [PMF, boolean][] =
+          none.mass() <= 0 ? [[whole, true]] : dealt.mass() <= 0 ? [[whole, false]] : [[dealt, true], [none, false]];
+        return pieces.map(([piece, isDealt]) => ({
+          outcome,
+          matched,
+          spends,
+          ...landingOf(sourceId, mask, outcome, isDealt),
+          ...fold(sourceId, outcome, piece, mask, vulnerable, isDealt, joined),
+          byKind: isDealt ? DEALT[outcome] : NOT_DEALT[outcome],
+        }));
+      };
       /** `part`'s draws: split by match odds on its value, unless its dice's match status is `known`. */
       const drawsOf = (part: PMF, spends: boolean, known?: boolean): Draw[] => {
-        if (!info || known !== undefined) {
-          return [{ outcome, matched: known ?? false, spends, applies, bumps, fires, slice: finish(part) }];
-        }
+        if (!info || known !== undefined) return draw(part, known ?? false, spends);
         const [matched, unmatched] = part.splitByFactor(
           (damage) => info.matchProbabilityByDamage.get(damage) ?? 0
         );
-        return [
-          { outcome, matched: true, spends, applies, bumps, fires, slice: finish(matched) },
-          { outcome, matched: false, spends, applies, bumps, fires, slice: finish(unmatched) },
-        ];
+        return [...draw(matched, true, spends), ...draw(unmatched, false, spends)];
       };
 
       if (!policy || mass <= 0) {
@@ -1887,7 +3123,18 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         });
       }
     }
-    fixed.push({ outcome: "miss", matched: false, spends: false, applies: [], bumps: [], fires: [], slice: slices.miss });
+    // A miss lands the riders that land on anything; the rest it lands nothing.
+    if ((perHitBySource.get(sourceId) ?? []).some((payload) => payload.landing === "any" && !payload.critOnly)) {
+      fixed.push({
+        outcome: "miss",
+        matched: false,
+        spends: false,
+        ...landingOf(sourceId, mask, "miss"),
+        ...fold(sourceId, "miss", slices.miss, mask, false, undefined, joined),
+      });
+    } else {
+      fixed.push({ outcome: "miss", matched: false, spends: false, applies: [], bumps: [], fires: [], slice: slices.miss });
+    }
     return { fixed, choices };
   };
 
@@ -1900,7 +3147,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       const existing = updatesById.get(sourceId) ?? { slots: [], kinds: [] };
       updatesById.set(sourceId, existing);
       existing.slots.push(slot);
-      existing.kinds.push(isSaveRow(sourceId) ? groupLandings[group] : null);
+      existing.kinds.push(isSaveRow(sourceId) || dealtSources.has(sourceId) ? groupLandings[group] : null);
     }
   });
 
@@ -1920,7 +3167,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     let marked: FireMode[] | null = null;
     for (const payload of perHitBySource.get(sourceId) ?? []) {
       if (payload.slot === -1 || (marked ?? fired)[payload.slot] !== null) continue;
-      if (draw?.byKind !== undefined && draw.byKind[payload.landing ?? "fail"] !== "hit") continue;
+      if (draw?.byKind !== undefined && payload.landing !== "any" && draw.byKind[payload.landing ?? "fail"] !== "hit") continue;
       marked ??= [...fired];
       marked[payload.slot] = "hit";
     }
@@ -1932,15 +3179,19 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
    * under their own kind are folded in. Every class keeps the `outcome` a row nobody watches has,
    * a hit, so the row's own statistics do not depend on which riders read it.
    */
-  const saveRowDraws = (sourceId: string, mask: number): Draw[] =>
-    classesOf(sourceId).map((slice, index) => {
+  const saveRowDraws = (sourceId: string, mask: number, classes: SaveClasses = classesOf(sourceId)): Draw[] =>
+    classes.map((slice, index) => {
       // The riders that apply on this class: every uncapped one, and each capped one whose bit is
       // set in `mask`, and only where the class lands under the rider's own kind.
       const active = (perHitBySource.get(sourceId) ?? []).filter(
         (payload) =>
-          (payload.bit === 0 || (mask & payload.bit) !== 0) && CLASS_LANDS[index][payload.landing ?? "fail"]
+          (payload.bit === 0 || (mask & payload.bit) !== 0) &&
+          (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
+          !payload.critOnly &&
+          (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
       );
       let folded = slice;
+      const parts: [string, PMF][] = active.map((payload) => [payload.id, payload.hit]);
       for (const payload of active) folded = folded.convolve(payload.hit, eps, true);
       return {
         outcome: "hit",
@@ -1949,10 +3200,14 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         applies: active.flatMap((payload) => (payload.rider === -1 ? [] : [payload.rider])),
         // A counter counts the landings of its riders: the classes that land under its kind.
         bumps: (countersBySource.get(sourceId) ?? []).filter(
-          (counter, local) => (mask & (1 << local)) !== 0 && CLASS_LANDS[index][counterLanding[counter] ?? "fail"]
+          (counter, local) =>
+            (mask & (1 << local)) !== 0 &&
+            !counterCritOnly[counter] &&
+            (counterLanding[counter] === "any" || CLASS_LANDS[index][(counterLanding[counter] as SaveLanding | undefined) ?? "fail"])
         ),
         fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
         slice: folded,
+        ...(parts.length === 0 ? {} : { own: slice, riders: parts }),
         byKind: CLASS_OUTCOMES[index],
       };
     });
@@ -2040,15 +3295,10 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     let readAdvantage = 0;
     let readDisadvantage = 0;
     let readCritOnHit = 0;
-    if (readMask !== 0) {
-      for (let bit = 0; bit < modifiersOfBit.length; bit++) {
-        if (readMask & (1 << bit)) {
-          const modifiers = modifiersOfBit[bit];
-          if (modifiers & MOD_ADVANTAGE) readAdvantage |= 1 << bit;
-          if (modifiers & MOD_DISADVANTAGE) readDisadvantage |= 1 << bit;
-          if (modifiers & MOD_CRIT_ON_HIT) readCritOnHit |= 1 << bit;
-        }
-      }
+    for (const { flag, modifiers } of readsAt[stepIndex]) {
+      if (modifiers & MOD_ADVANTAGE) readAdvantage |= 1 << flag.bit;
+      if (modifiers & MOD_DISADVANTAGE) readDisadvantage |= 1 << flag.bit;
+      if (modifiers & MOD_CRIT_ON_HIT) readCritOnHit |= 1 << flag.bit;
     }
     if (rider?.on === "any-miss" && slices) {
       // Its step runs after every declared attack, but in play the reroll happens right
@@ -2073,6 +3323,8 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
 
     /** The distinct capped counters watching this step's source: bit i of a cap mask is `capped[i]`'s with-rider flag. */
     const capped = countersBySource.get(entry.id) ?? [];
+    /** The coins of the riders folded here: bit `capped.length + k` of a variant mask says coin k came up. */
+    const coined = coinsBySource.get(entry.id) ?? [];
 
     /**
      * The plain draws and, under a substitute, one variant per hold mask (variant 1 +
@@ -2081,15 +3333,21 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
      */
     const tableAt = (
       contextSlices: SourceSlices,
-      cap: number
+      cap: number,
+      vulnerable: boolean,
+      joined: readonly string[],
+      rowContext: RowContext | undefined
     ): { variants: StepVariant[]; select: Step["select"] } => {
-      const plain = drawsFor(entry.id, contextSlices, null, cap).fixed;
+      const plain = drawsFor(entry.id, contextSlices, null, cap, vulnerable, joined, rowContext).fixed;
       if (substitute === undefined) return { variants: [plain], select: plainSelect };
       const { fixed, choices } = drawsFor(
         entry.id,
         contextSlices,
         substitutes[substitute].policy ?? { kind: "always" },
-        cap
+        cap,
+        vulnerable,
+        joined,
+        rowContext
       );
       const own: StepVariant[] = [plain];
       for (let mask = 0; mask < 1 << choices.length; mask++) {
@@ -2134,7 +3392,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     const blocked = (
       make: (cap: number) => { variants: StepVariant[]; select: Step["select"] }
     ): { variants: StepVariant[]; select: Step["select"] } => {
-      const blocks = Array.from({ length: 1 << capped.length }, (_, cap) => make(cap));
+      const blocks = Array.from({ length: 1 << (capped.length + coined.length) }, (_, cap) => make(cap));
       if (blocks.length === 1) return blocks[0];
       // Every block has the same hold choices (they read the base payload, not the fold), so
       // block 0's variant count and choice rule serve for all.
@@ -2147,26 +3405,138 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           capped.forEach((counter, bit) => {
             if (counts[counter] < counterMax[counter]) cap |= 1 << bit;
           });
+          coined.forEach((node, k) => {
+            if (flags & (1 << (coinFlags[node] as Flag).bit)) cap |= 1 << (capped.length + k);
+          });
           return cap * size + local(codes, fired, flags, counts);
         },
       };
     };
-    const table = (contextSlices: SourceSlices): { variants: StepVariant[]; select: Step["select"] } =>
-      blocked((cap) => tableAt(contextSlices, cap));
+    const table = (
+      contextSlices: SourceSlices,
+      vulnerable = false,
+      joined: readonly string[] = [],
+      rowContext: RowContext | undefined = baseContext
+    ): { variants: StepVariant[]; select: Step["select"] } =>
+      blocked((cap) => tableAt(contextSlices, cap, vulnerable, joined, rowContext));
 
-    if (watchedKinds !== undefined) {
-      // A watched save row has one set of class draws per cap mask, and no roll context or hold choice.
-      ({ variants, select } = blocked((cap) => ({ variants: [saveRowDraws(entry.id, cap)], select: plainSelect })));
-    } else if (slices && readMask === 0) {
-      ({ variants, select } = table(slices));
-    } else if (slices) {
-      // Read flags select a roll context: the source re-derived through `withCheck` with
-      // the granted modifiers combined into its own roll type. One table per distinct
-      // resolved context the read flags can reach, not per flag set.
+    // A watched save row draws by class (one set per cap mask, no hold choice); any other row by
+    // its hit / crit / miss slices (an unwatched save row is one "hit" draw of its whole PMF).
+    const unwatchedSave = entry.attack !== -1 && attackSlices[entry.attack] === null;
+    const baseCheck = rowCheckOf(damageOf(entry.id));
+    /** The row's own context, where no flag is read: what the base table rolls in. */
+    const baseContext = baseCheck === undefined ? undefined : contextOf(baseCheck, 0);
+    const baseRollType: RollType = baseContext?.rollType ?? "flat";
+    /** The step's d20 by state; its own roll unless read flags pick a context. */
+    /** The row's own PMF in each context its tables roll in, and which context a state picks. */
+    const ownPmf =
+      entry.attack !== -1 ? attackPMFs[entry.attack] : slices ? riderPMF(entry.rider) : undefined;
+    const contextPmfs: PMF[] = ownPmf === undefined ? [] : [ownPmf];
+    const contextVulnerable: boolean[] = ownPmf === undefined ? [] : [false];
+    const contextRollTypes: RollType[] = ownPmf === undefined ? [] : [baseRollType];
+    let contextIndexOf: Step["contextIndexOf"] = () => 0;
+    const tableOf = (
+      pmf: PMF | undefined,
+      vulnerable = false,
+      joined: readonly string[] = [],
+      rowContext: RowContext | undefined = baseContext
+    ): { variants: StepVariant[]; select: Step["select"] } => {
+      if (watchedKinds !== undefined) {
+        const classes = pmf === undefined ? undefined : saveClasses(pmf);
+        return blocked((cap) => ({ variants: [saveRowDraws(entry.id, cap, classes)], select: plainSelect }));
+      }
+      if (pmf === undefined) return table(slices as SourceSlices);
+      return table(
+        unwatchedSave ? { hit: pmf, crit: PMF.emptyMass(), miss: PMF.emptyMass() } : (sliceSource(pmf) as SourceSlices),
+        vulnerable,
+        joined,
+        rowContext
+      );
+    };
+
+    // Occurrence probability: with probability 1 - chance the attack does not
+    // happen at all. That branch is a "none" draw — no miss, no landing, no
+    // crit, no match, 0 damage — labelled missNone so the chart conserves mass
+    // the way applyHitFrequency's freed mass does. Declared attacks only;
+    // riders already fire on their trigger's terms.
+    const chance = entry.attack !== -1 ? attackChances[entry.attack] : 1;
+    const none: Draw = {
+      outcome: "none",
+      matched: false,
+      spends: false,
+      applies: [],
+      bumps: [],
+      fires: [],
+      slice: PMF.missNone(eps).scaleMass(1 - chance),
+    };
+    /**
+     * A variant as the walk draws it: a row that finds a condition damage ends splits each draw by
+     * whether it dealt damage, and a row that may not happen draws "none" beside its outcomes.
+     */
+    const finish = (variant: StepVariant): StepVariant => {
+      const split = woundsAt[stepIndex] !== 0 ? variant.flatMap(splitWounded) : variant;
+      return chance < 1 ? mergeDraws([...split.map((draw) => scaleDraw(draw, chance)), none]) : split;
+    };
+    /** Whether `variants` are finished already (a row that builds its context tables as it goes). */
+    let finished = false;
+
+    // The riders whose dice join this row's roll while they have a landing left (`Rider.joins`).
+    const joiners = riders.flatMap((rider, index) =>
+      (rider.joins ?? []).includes(entry.id) && sourceIdsByNode[index].includes(entry.id) ? [index] : []
+    );
+    if ((watchedKinds !== undefined || slices) && readMask === 0 && joiners.length === 0) {
+      ({ variants, select } = tableOf(undefined));
+    } else if (watchedKinds !== undefined || slices) {
+      // Read flags select a roll context. A contextual source rolls under it; a builder is
+      // re-derived through `withCheck` with the granted modifiers combined into its own roll
+      // type. One table per distinct resolved context the read flags can reach, not per flag set.
       const source = damageOf(entry.id);
+      const check = rowCheckOf(source);
       const rebindable = source as { withCheck?: (fn: (check: Check) => Check) => Damage };
-      /** The source re-derived under modifier key `key`, and its resolved context. */
-      const rederive = (key: number): { source: Damage; signature: string } => {
+      const reads = readsAt[stepIndex];
+      // Each penalty flag the step reads has a key bit of its own above the modifiers.
+      const penaltyFlags = reads.filter(({ flag }) => flag.penalty !== undefined).map(({ flag }) => flag);
+      const keyOf = ({ flag, modifiers }: { flag: Flag; modifiers: number }): number =>
+        flag.penalty === undefined ? modifiers : 1 << (MOD_PENALTY_SHIFT + penaltyFlags.indexOf(flag));
+      // Each joining rider has a key bit above the penalties: set while it has a landing left.
+      const joinerBit = (j: number): number => 1 << (MOD_PENALTY_SHIFT + penaltyFlags.length + j);
+      const joinedOf = (key: number): string[] =>
+        joiners.flatMap((index, j) => (key & joinerBit(j) ? [riderIds[index]] : [])).sort();
+      /** Whether joining rider `index` has a landing left: its first landing not made, or its cap not reached. */
+      const leftAt = joiners.map((index) => {
+        const payload = (perHitBySource.get(entry.id) ?? []).find((each) => each.id === riderIds[index]);
+        if (payload === undefined) return () => false;
+        if (payload.bit !== 0) {
+          const counter = (countersBySource.get(entry.id) ?? [])[Math.log2(payload.bit)];
+          return (_fired: readonly FireMode[], counts: readonly number[]) => counts[counter] < counterMax[counter];
+        }
+        if (payload.slot !== -1) return (fired: readonly FireMode[]) => fired[payload.slot] === null;
+        return () => true;
+      });
+      /** The source's PMF under context key `key`, and its resolved context. */
+      const rederive = (key: number): { pmf: () => PMF; signature: string } => {
+        if (check !== undefined) {
+          const penalties = penaltyFlags.flatMap((flag, j) =>
+            key & (1 << (MOD_PENALTY_SHIFT + j)) ? [flag.penalty as PenaltyDice] : []
+          );
+          const context = { ...contextOf(check, key, penalties), joined: joinedOf(key) };
+          return {
+            pmf: () => rollUnder(source as unknown as ContextualSource, context, eps, entry.id),
+            signature: contextKey(context),
+          };
+        }
+        if (key & ~(MOD_ADVANTAGE | MOD_DISADVANTAGE | MOD_CRIT_ON_HIT)) {
+          fail(
+            "no-rebindable-source",
+            entry.id,
+            `"${entry.id}" reads a vulnerability or a save effect, or a rider joins its roll, which only a source that rolls under a row context (\`under\`) can take.`
+          );
+        }
+        // Rows of one builder re-derive it once per key: the key holds only builder modifiers here.
+        let byKey = rederivedBuilders.get(source);
+        if (byKey === undefined) rederivedBuilders.set(source, (byKey = new Map()));
+        const known = byKey.get(key);
+        if (known !== undefined) return known;
         let signature = "";
         const rederived = (rebindable as Required<typeof rebindable>).withCheck((base) => {
           const next: Check = {
@@ -2180,10 +3550,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
           signature = `${next.rollType}|${next.critOnHit}`;
           return next;
         });
-        return { source: rederived, signature };
+        const variant = { pmf: () => toPMF(rederived, eps, entry.id), signature };
+        byKey.set(key, variant);
+        return variant;
       };
       let plain: string | undefined;
-      if (!Array.isArray(source) && typeof rebindable.withCheck === "function") {
+      if (check !== undefined || (!Array.isArray(source) && typeof rebindable.withCheck === "function")) {
         try {
           plain = rederive(0).signature;
         } catch {
@@ -2198,38 +3570,84 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
         );
       }
       let reachable = [0];
-      modifiersOfBit.forEach((modifiers, bit) => {
-        if (readMask & (1 << bit)) {
-          reachable = [...new Set([...reachable, ...reachable.map((key) => key | modifiers)])];
-        }
+      for (const flag of reads) {
+        reachable = [...new Set([...reachable, ...reachable.map((key) => key | keyOf(flag))])];
+      }
+      joiners.forEach((_, j) => {
+        reachable = [...new Set([...reachable, ...reachable.map((key) => key | joinerBit(j))])];
       });
-      const tables = [table(slices)];
+      // The base context's table is built now (it validates the row); every other context's the
+      // first time a state rolls in it, as the engine compiles a context only where one is reached.
+      const base = tableOf(undefined);
+      const tables: ({ variants: StepVariant[]; select: Step["select"] } | undefined)[] = [base];
+      const offsets: number[] = [0];
+      finished = true;
+      variants.push(...base.variants.map(finish));
       const tableByContext = new Map([[plain as string, 0]]);
-      const tableOfKey = new Array<number>(MOD_CRIT_ON_HIT << 1).fill(0);
+      const tableOfKey = new Map<number, number>();
+      /** Per context index past the base, the key it was first reached with and its re-derivation. */
+      const pending = new Map<number, { key: number; variant: { pmf: () => PMF; signature: string } }>();
+      const rollTypeIn = (key: number, signature: string): RollType =>
+        check !== undefined ? contextOf(check, key).rollType : (signature.split("|")[0] as RollType);
+      const rowContextOf = (key: number): RowContext | undefined =>
+        check === undefined
+          ? undefined
+          : {
+              ...contextOf(
+                check,
+                key,
+                penaltyFlags.flatMap((flag, j) => (key & (1 << (MOD_PENALTY_SHIFT + j)) ? [flag.penalty as PenaltyDice] : []))
+              ),
+              joined: joinedOf(key),
+            };
+      contextRollTypes[0] = rollTypeIn(0, plain as string);
       for (const key of reachable) {
         const variant = rederive(key);
         let index = tableByContext.get(variant.signature);
         if (index === undefined) {
           index = tables.length;
-          tables.push(table(sliceSource(toPMF(variant.source, eps, entry.id)) as SourceSlices));
+          tables.push(undefined);
+          offsets.push(-1);
+          pending.set(index, { key, variant });
+          contextVulnerable.push(rowContextOf(key)?.vulnerable ?? false);
+          contextRollTypes.push(rollTypeIn(key, variant.signature));
           tableByContext.set(variant.signature, index);
         }
-        tableOfKey[key] = index;
+        tableOfKey.set(key, index);
       }
-      const offsets: number[] = [];
-      for (const each of tables) {
-        offsets.push(variants.length);
-        variants.push(...each.variants);
-      }
-      select = (codes, fired, flags, counts) => {
-        const read = flags & readMask;
-        let key = 0;
-        for (let bit = 0; read >> bit !== 0; bit++) {
-          if (read & (1 << bit)) key |= modifiersOfBit[bit];
-        }
-        const index = tableOfKey[key];
-        return offsets[index] + tables[index].select(codes, fired, flags, counts);
+      contextPmfs.length = tables.length;
+      /** Context `index`'s table, built (and its variants appended) the first time it is asked for. */
+      const tableIn = (index: number): { variants: StepVariant[]; select: Step["select"] } => {
+        const known = tables[index];
+        if (known !== undefined) return known;
+        const { key, variant } = pending.get(index) as { key: number; variant: { pmf: () => PMF; signature: string } };
+        const rowContext = rowContextOf(key);
+        // Rows of one source roll the same PMF in the same context: re-derive it once.
+        let bySignature = pmfsUnder.get(source);
+        if (bySignature === undefined) pmfsUnder.set(source, (bySignature = new Map()));
+        let pmf = bySignature.get(variant.signature);
+        if (pmf === undefined) bySignature.set(variant.signature, (pmf = variant.pmf()));
+        contextPmfs[index] = pmf;
+        const built = tableOf(pmf, rowContext?.vulnerable ?? false, joinedOf(key), rowContext);
+        tables[index] = built;
+        offsets[index] = variants.length;
+        variants.push(...built.variants.map(finish));
+        return built;
       };
+      const keyIn = (fired: readonly FireMode[], flags: number, counts: readonly number[]): number => {
+        let key = 0;
+        for (const read of reads) if (flags & (1 << read.flag.bit)) key |= keyOf(read);
+        leftAt.forEach((left, j) => {
+          if (left(fired, counts)) key |= joinerBit(j);
+        });
+        return key;
+      };
+      select = (codes, fired, flags, counts) => {
+        const index = tableOfKey.get(keyIn(fired, flags, counts)) as number;
+        const built = tableIn(index);
+        return offsets[index] + built.select(codes, fired, flags, counts);
+      };
+      contextIndexOf = (_codes, fired, flags, counts) => tableOfKey.get(keyIn(fired, flags, counts)) as number;
     } else if (readMask !== 0) {
       fail(
         "no-rebindable-source",
@@ -2238,30 +3656,12 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       );
     }
 
-    // Occurrence probability: with probability 1 - chance the attack does not
-    // happen at all. That branch is a "none" draw — no miss, no landing, no
-    // crit, no match, 0 damage — labelled missNone so the chart conserves mass
-    // the way applyHitFrequency's freed mass does. Declared attacks only;
-    // riders already fire on their trigger's terms.
-    const chance = entry.attack !== -1 ? attackChances[entry.attack] : 1;
-    if (chance < 1) {
-      const none: Draw = {
-        outcome: "none",
-        matched: false,
-        spends: false,
-        applies: [],
-        bumps: [],
-        fires: [],
-        slice: PMF.missNone(eps).scaleMass(1 - chance),
-      };
-      variants = variants.map((variant) =>
-        mergeDraws([
-          ...variant.map((draw) => ({ ...draw, slice: draw.slice.scaleMass(chance) })),
-          none,
-        ])
-      );
-    }
+    if (!finished) variants = variants.map(finish);
 
+    const happens = rider ? happensOf[entry.rider] : 1;
+    if (happens < 1 && slices) {
+      fail("unsupported-trigger", entry.id, `Rider "${entry.id}" rolls its own attack and sets "happens"; only a damage rider may not happen.`);
+    }
     const hit = rider && !slices ? riderPMF(entry.rider) : null;
     const negated =
       rider?.on === "not-fired" ? (fireSlots.get(rider.of) as number) : -1;
@@ -2270,7 +3670,7 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       trigger: rider,
       variants,
       select,
-      damage: hit && rider ? { hit, crit: critPMF(rider, hit, eps) } : null,
+      damage: hit && rider ? { hit: thin(hit, happens), crit: thin(critPMF(rider, hit, eps), happens) } : null,
       updates,
       updateKinds,
       releases: releasesAt[stepIndex],
@@ -2282,10 +3682,27 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
       negates: negated,
       spendSlot,
       consumes: consumesAt[stepIndex],
+      hitConsumes: hitConsumesAt[stepIndex],
+      wounds: woundsAt[stepIndex],
+      gate:
+        entry.attack !== -1 && gateGroups[entry.attack] !== -1
+          ? { slot: slotOf(gateGroups[entry.attack]), any: attackAfters[entry.attack]?.landing === "any" }
+          : undefined,
       grants: grantsAt[stepIndex],
       readAdvantage,
       readDisadvantage,
       readCritOnHit,
+      flagReads: readsAt[stepIndex].map(({ flag, modifiers }) => ({
+        bit: flag.bit,
+        modifiers,
+        penalty: flag.penalty !== undefined,
+        source: effectSourceOf(flag.condition),
+      })),
+      contextPmfs,
+      contextVulnerable,
+      contextRollTypes,
+      contextIndexOf,
+      transformed: substitute !== undefined,
     });
   });
 
@@ -2304,6 +3721,14 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     perHitGroups: new Map(
       [...everyHitGroups].map(([id, group]): [string, number] => [id, slotOfGroup[group]])
     ),
+    perHitCritOnly: new Set([...critOnly].map((index) => riderIds[index])),
+    perHitAny: new Set(riders.flatMap((rider, index) => (rider.landing === "any" && !critOnly.has(index) ? [riderIds[index]] : []))),
+    riderRows: new Map(
+      riderIds.map((id, index) => {
+        const watched = new Set(riders[index].on === "not-fired" ? [] : sourceIdsByNode[index]);
+        return [id, attackIds.filter((attackId) => watched.has(attackId))];
+      })
+    ),
     probes: new Map(
       probeIds.map((id, index): [string, number] => [id, slotOf(probeGroups[index])])
     ),
@@ -2311,6 +3736,38 @@ export function buildPlan(spec: TurnSpec, eps: number = EPS): TurnPlan {
     counterMax,
     groupLastReadStep: slotLastStep,
     conditionIds,
-    flagLastReadStep: liveFlags.map((flag) => flag.lastRead),
+    flagLiveAfter,
+    coins: coinFlags.flatMap((flag, index) =>
+      flag !== undefined && flag.bit !== -1 ? [{ id: riderIds[index], bit: 1 << flag.bit, happens: happensOf[index] }] : []
+    ),
+    startFlags: conditionFlags.reduce(
+      (mask, { start, main }) => (start ? main.reduce((bits, flag) => (flag.bit === -1 ? bits : bits | (1 << flag.bit)), mask) : mask),
+      0
+    ),
+    startConditions: conditionFlags.flatMap(({ start, main }, index) =>
+      start && main.some((flag) => flag.bit !== -1) ? [index] : []
+    ),
+    stateLimit: spec.stateLimit ?? MAX_TURN_STATES,
+    dealing: dealingType !== undefined,
+    effectSources,
+    optionalIds: conditionIds.filter((_, index) => conditions[index].optional === true),
+    // The engine's fallback for optional conditions past the search (`evaluate.ts` `meleeLeaning`):
+    // attempted where the later attack rolls on the creature of its first source are at least as
+    // often melee as not.
+    meleeLeaning: conditions.map((_, index) => {
+      const first = conditionFlags[index].applyAt[0];
+      if (first === undefined) return false;
+      let melee = 0;
+      let ranged = 0;
+      sequence.forEach((entry, position) => {
+        if (position <= first || entry.attack === -1 || creatureAt[position] !== creatureAt[first]) return;
+        const facts = rowFacts[position];
+        if (facts !== undefined && facts.kind !== "attack") return;
+        if (facts === undefined && !rollsAttack[position]) return;
+        if (facts?.range === "melee") melee++;
+        else ranged++;
+      });
+      return melee >= ranged;
+    }),
   };
 }

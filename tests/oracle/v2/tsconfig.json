@@ -1,0 +1,6 @@
+// Typechecks the oracle acceptance suite (tests are outside `yarn typecheck`): `yarn tsc -p tests/oracle/v2`.
+{
+  "extends": "../../../config/tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "types": ["node"], "typeRoots": ["../../../node_modules/@types"], "rootDir": "../../.." },
+  "include": ["./**/*.ts"]
+}

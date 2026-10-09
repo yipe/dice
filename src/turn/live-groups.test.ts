@@ -261,8 +261,9 @@ describe("turns that fit the old cap are bit for bit what the walk gave before g
   it("a 9-beam bounce chain", () => {
     const t = bounce({ source: orb, max: 9 });
     pin(t, { mean: 8.268560386709098, variance: 138.0756075547243, p0: 0.55 });
-    expect(t.fireProbability("bounce 1")).toBe(0.1836547851562501);
-    expect(t.fireProbability("bounce 9")).toBe(2.3769510383393754e-7);
+    // fireProbability reads the mass walk, to 1e-12 of 0.16's.
+    expect(t.fireProbability("bounce 1")).toBeCloseTo(0.1836547851562501, 12);
+    expect(t.fireProbability("bounce 9")).toBeCloseTo(2.3769510383393754e-7, 12);
   });
 
   it("nine overlapping first-hit groups, over four attacks", () => {
@@ -283,7 +284,8 @@ describe("turns that fit the old cap are bit for bit what the walk gave before g
     for (let i = 1; i <= 4; i++) t = t.onFirstMiss(sword, { of: [`attack ${i}`], id: `re ${i}` });
     t = t.onFirstHit(keepBestDamage().ifBelow({ hit: 9, crit: 20 }), { id: "keep" });
     pin(t, { mean: 35.899652185697796, variance: 63.87095718219878, p0: 0.000019683 });
-    expect(t.fireProbability("keep")).toBe(0.9917782308532256);
+    // fireProbability reads the mass walk, to 1e-12 of 0.16's.
+    expect(t.fireProbability("keep")).toBeCloseTo(0.9917782308532256, 12);
     expect(inspectTurn(t).groupCount).toBe(1);
   });
 

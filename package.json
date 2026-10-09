@@ -33,6 +33,11 @@
       "import": "./dist/builder/index.js",
       "require": "./dist/builder/index.cjs"
     },
+    "./dnd5e": {
+      "types": "./dist/dnd5e/index.d.ts",
+      "import": "./dist/dnd5e/index.js",
+      "require": "./dist/dnd5e/index.cjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
@@ -42,6 +47,9 @@
     "*": {
       "builder": [
         "dist/builder/index.d.ts"
+      ],
+      "dnd5e": [
+        "dist/dnd5e/index.d.ts"
       ],
       "": [
         "dist/index.d.ts"
@@ -69,9 +77,13 @@
     "types": "tsc -p config/tsconfig.build.json --emitDeclarationOnly && node config/postbuild-dts.mjs",
     "test": "vitest run",
     "test:watch": "vitest watch",
+    "compat:capture": "COMPAT=capture vitest run",
+    "compat:check": "COMPAT=check vitest run",
+    "oracle:expected": "tsx tests/oracle/v2/expected.ts",
     "prepare": "yarn build",
     "prepublishOnly": "yarn typecheck && yarn test && yarn build",
-    "example": "tsx examples/run.ts"
+    "example": "tsx examples/run.ts",
+    "bench": "vitest bench --run"
   },
   "publishConfig": {
     "access": "public"

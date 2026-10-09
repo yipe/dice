@@ -1,14 +1,18 @@
 import type { Check } from "../builder/types";
+import type { Bin, RollType } from "../common/types";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
-import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Grant, Transform } from "./effects";
-import { grantSpec, isGrant, isTransform, substituteFields } from "./effects";
-import type { FireMode, TurnPlan } from "./plan";
+import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Lasting, StartEffect, Transform } from "./effects";
+import { effectSpec, gateFields, isGrant, isTransform, lastingForTurn, substituteFields } from "./effects";
+import type { Draw, EffectSource, FireMode, Step, TurnPlan } from "./plan";
+import { ReaderTally, canonicalCodes, cappedPmf, codeNeeds, readerLedger, EFFECT_NAMES } from "./readers";
+import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./readers";
 import { buildPlan, fireMode, grantApplies, released } from "./plan";
 import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
 import type {
   Attack,
   AttackOptions,
+  AttackTriggerOn,
   ConditionSpec,
   Damage,
   ProbeSpec,
@@ -17,7 +21,6 @@ import type {
   RiderOptions,
   Source,
   SubstituteSpec,
-  ToPMF,
   TurnSpec,
 } from "./types";
 import { TurnSpecError } from "./types";
@@ -29,6 +32,12 @@ interface TurnState {
   substitutes: readonly SubstituteSpec[];
   conditions: readonly ConditionSpec[];
   observe: readonly ProbeSpec[];
+  /** See {@link TurnSpec.stateLimit}; set by {@link Turn.stateLimit}. */
+  stateLimit?: number;
+  /** Set on the turns an optional search walks: their optional conditions are already decided. */
+  optionalDecided?: true;
+  /** The optional conditions such a turn does not attempt, by id. */
+  declined?: readonly string[];
   /**
    * A chaining call defaulted some rider's, substitute's or condition's `of`.
    * Appending an attack now would leave it out of that set silently, so it throws
@@ -39,22 +48,94 @@ interface TurnState {
   last: { kind: "rider" | "substitute"; index: number } | null;
 }
 
-/** What a trigger verb accepts: damage, grants, or both in one list. */
-type Effect = RiderDamage | Grant | readonly (Damage | Grant)[];
+/** What a trigger verb accepts: damage, effects with a lifetime, or both in one list. */
+type Effect = RiderDamage | Lasting | readonly (Damage | Lasting)[];
 
 /**
  * Per-step statistics of a turn's walk, for one attack or attack-shaped rider.
  * Every field is a probability (mass): `rolled` is the mass in which the step
  * drew at all — 1 for a declared attack, a rider's fire mass for an attack-shaped
  * rider — `hit`/`crit` the mass of those draws that landed (crit included) / were
- * crits, and `live` the mass in which each granted modifier was in force when the
- * step read its flags, before the step consumes anything.
+ * crits, and `live` the mass in which each effect was in force when the step read
+ * its flags, before the step consumes anything (for a declared attack, whether or
+ * not it happens), with the part each source accounts for (sources overlap, so they
+ * need not add up). `conditions` lists each condition the step tried: the mass in
+ * which it was attempted here and in which it took (no save, or the save failed).
  */
 export interface StepStats {
   rolled: number;
   hit: number;
   crit: number;
+  live: LiveOdds;
+  conditions: readonly ConditionAttempt[];
+}
+
+/** What every walk counts as it goes, in its unnormalized mass units, per step (per every-hit rider for applications). */
+interface WalkCounts {
+  stateCounts: number[];
+  /** The mass in which a step drew at all. */
+  rolled: number[];
+  /** The mass of its hit (crit included) / crit draws. */
+  hitMass: number[];
+  critMass: number[];
+  /** The mass in which the matching modifier flag was set when the step read its flags. */
+  liveAdvantage: number[];
+  liveDisadvantage: number[];
+  liveCritOnHit: number[];
+  /** Per every-hit rider, the mass of the draws it applied to: its expected number of applications. */
+  applicationMass: number[];
+}
+
+/** What a walk counts per attack-shaped id: the 0.16 `stepStats` fields. */
+type WalkStats = Pick<StepStats, "rolled" | "hit" | "crit"> & {
   live: { advantage: number; disadvantage: number; critOnHit: number };
+};
+
+/** The odds of each effect in force when a row rolls, and the part each source accounts for. */
+export type LiveOdds = Readonly<Record<EffectName, number>> & {
+  sources: Readonly<Record<EffectName, readonly { source: EffectSource; odds: number }[]>>;
+};
+
+/** A condition a row can try: the odds it is attempted there and the odds it takes. */
+export interface ConditionAttempt {
+  id: string;
+  attempted: number;
+  taken: number;
+}
+
+/** An attack's (or attack-shaped rider's) marginal. */
+export interface AttackMarginal {
+  /** Its damage: `whenHappens` thinned by `occurs`. */
+  pmf: PMF;
+  /** Its damage in the states where it happens. */
+  whenHappens: PMF;
+  /** The odds it happens: its `chance`, its gate, and for an attack-shaped rider the odds it fires. */
+  occurs: number;
+  /** The odds of the d20 it rolls, in every state (for a declared attack, whether or not it happens). */
+  rollType: Readonly<Record<RollType, number>>;
+}
+
+/** A damage rider's marginal; `landings` by attack id, before its `happens`. */
+export interface RiderMarginal {
+  pmf: PMF;
+  landings: ReadonlyMap<string, RowLanding>;
+  /** P(it lands at least once), before its `happens`: {@link Turn.fireProbability}. */
+  anyLanding: number;
+}
+
+/** The reader walk's tallies (see {@link Turn.resolveReaders}). */
+interface Readers {
+  tally: ReaderTally;
+  states: readonly ReaderDamage[];
+  /** The masses' divisor: the terminal mass where it drifts from 1, else 1. */
+  total: number;
+  /** Firing masses and expected applications, already divided by `total`. */
+  fireMass: ReadonlyMap<string, number>;
+  applications: ReadonlyMap<string, number>;
+  /** Per attack-shaped id, what the walk counted of it, divided by `total`. */
+  stepStats: ReadonlyMap<string, WalkStats>;
+  unexact: ReadonlySet<string>;
+  peakStates: number;
 }
 
 /** Test seam: the plan and walk size of a turn. Not exported from the package. */
@@ -64,11 +145,19 @@ const inspections = new WeakMap<Turn, { plan: TurnPlan; stateCounts?: readonly n
  * The number of trigger groups `t` tracks and, per step, the number of distinct
  * walk states after it. Resolves `t` if it has not been resolved yet.
  */
+/** Test seam: the plan `t` walks. Not exported from the package. */
+export function inspectPlan(t: Turn): TurnPlan {
+  return (inspections.get(t) as { plan: TurnPlan }).plan;
+}
+
 export function inspectTurn(t: Turn): { groupCount: number; stateCounts: readonly number[] } {
   t.mean();
   const inspection = inspections.get(t) as { plan: TurnPlan; stateCounts: readonly number[] };
   return { groupCount: inspection.plan.groupCount, stateCounts: inspection.stateCounts };
 }
+
+/** How many optional conditions a turn searches over (the engine's `MAX_SEARCHED_OPTIONAL_GRANTS`). */
+const MAX_SEARCHED_OPTIONAL = 3;
 
 /**
  * What a walk state carries for the damage dealt so far. The full walk carries a PMF; a walk
@@ -80,8 +169,11 @@ interface Ledger<D> {
   mass(damage: D): number;
   add(a: D, b: D): D;
   scale(damage: D, factor: number): D;
-  /** `damage` with a draw's sub-mass `slice` (or a pure-damage payload) folded in. */
-  convolve(damage: D, slice: PMF): D;
+  /**
+   * `damage` with a draw's sub-mass `slice` (or a pure-damage payload) folded in. `step` and
+   * `draw` say where it came from, for a ledger that keeps one id's damage alone.
+   */
+  convolve(damage: D, slice: PMF, step: Step, draw?: Draw): D;
 }
 
 function pmfLedger(eps: number): Ledger<PMF> {
@@ -101,6 +193,23 @@ const massLedger: Ledger<number> = {
   scale: (damage, factor) => damage * factor,
   convolve: (damage, slice) => damage * slice.mass(),
 };
+
+/**
+ * A ledger that keeps the damage of one id alone (a row's own roll, or a rider's payloads) and
+ * the mass of every path: walked like the joint, its terminal states sum to that id's marginal.
+ */
+function marginalLedger(id: string, eps: number): Ledger<PMF> {
+  return {
+    ...pmfLedger(eps),
+    convolve: (damage, slice, step, draw) => {
+      if (draw === undefined) return step.id === id ? damage.convolve(slice, eps, true) : damage;
+      if (step.id === id) return damage.convolve(draw.own ?? slice, eps, true);
+      const payload = draw.riders?.find(([rider]) => rider === id)?.[1];
+      const scaled = damage.scaleMass(slice.mass());
+      return payload === undefined ? scaled : scaled.convolve(payload, eps, true);
+    },
+  };
+}
 
 /**
  * The walk's state: the group codes, the damage so far, which riders fired, the flag word and
@@ -123,6 +232,64 @@ interface WalkState<D> {
    * bind (see `Step.settled`).
    */
   counts: number[];
+}
+
+/** `pmf` given that it happens: its `missNone` mass at 0 beyond `1 - occurs` kept, the rest scaled up. */
+function unthinned(pmf: PMF, occurs: number): PMF {
+  const bins = new Map<number, Bin>();
+  const freed = 1 - occurs;
+  for (const [damage, bin] of pmf.map) {
+    if (damage !== 0) {
+      bins.set(damage, { ...bin, p: bin.p / occurs });
+      continue;
+    }
+    const missNone = Math.max(0, (bin.count.missNone ?? 0) - freed);
+    const p = Math.max(0, bin.p - freed) / occurs;
+    if (p > 0) bins.set(0, { ...bin, p, count: { ...bin.count, missNone: missNone / occurs } });
+  }
+  return new PMF(bins, pmf.epsilon);
+}
+
+/**
+ * Per attack-shaped id (a declared attack, or a rider that rolls its own attack: anything with
+ * variants), what a walk counted of its steps, divided by `total`. A rider that fires at several
+ * positions in the rail (a `first-miss` reroll watching many attacks) has one step per position
+ * under one id; those steps are mutually exclusive, so their masses sum.
+ */
+function stepStatsOf(
+  plan: TurnPlan,
+  walked: Pick<WalkCounts, "rolled" | "hitMass" | "critMass" | "liveAdvantage" | "liveDisadvantage" | "liveCritOnHit">,
+  total: number
+): Map<string, WalkStats> {
+  const stats = new Map<string, WalkStats>();
+  plan.steps.forEach((step, s) => {
+    if (step.variants.length === 0) return;
+    const known = stats.get(step.id);
+    const add = (counted: number, before = 0): number => before + counted / total;
+    stats.set(step.id, {
+      rolled: add(walked.rolled[s], known?.rolled),
+      hit: add(walked.hitMass[s], known?.hit),
+      crit: add(walked.critMass[s], known?.crit),
+      live: {
+        advantage: add(walked.liveAdvantage[s], known?.live.advantage),
+        disadvantage: add(walked.liveDisadvantage[s], known?.live.disadvantage),
+        critOnHit: add(walked.liveCritOnHit[s], known?.live.critOnHit),
+      },
+    });
+  });
+  return stats;
+}
+
+const noneFirstOf = new WeakMap<readonly Draw[], readonly Draw[]>();
+/** `draws` with its "none" draw (the row did not happen), if any, first. */
+function noneFirst(draws: readonly Draw[]): readonly Draw[] {
+  let ordered = noneFirstOf.get(draws);
+  if (ordered === undefined) {
+    const none = draws.filter((draw) => draw.outcome === "none");
+    ordered = none.length === 0 ? draws : [...none, ...draws.filter((draw) => draw.outcome !== "none")];
+    noneFirstOf.set(draws, ordered);
+  }
+  return ordered;
 }
 
 /**
@@ -152,16 +319,17 @@ export class Turn {
   private readonly eps: number;
   private readonly state: TurnState;
   private readonly plan: TurnPlan;
-  private resolved?: {
-    pmf: PMF;
-    fireMass: ReadonlyMap<string, number>;
-    applications: ReadonlyMap<string, number>;
-    stepStats: ReadonlyMap<string, StepStats>;
-  };
+  private resolved?: { pmf: PMF };
   /** Firing masses from a walk that carried no damage; see {@link Turn.fireProbability}. */
   private massed?: ReadonlyMap<string, number>;
+  /** Per-id marginals, read from the reader walk; see {@link Turn.marginal}. */
+  private readonly marginals = new Map<string, AttackMarginal | RiderMarginal>();
+  private readers?: Readers;
+  private patterns?: ReadonlyMap<string, ReadonlyMap<string, LandingPattern>>;
   /** The plan without probes, built on first use when there are probes (see {@link Turn.resolve}). */
   private plainPlan?: TurnPlan;
+  /** The state the plan is built from: optional conditions decided (see {@link optionalChoice}). */
+  private readonly planned: TurnState;
 
   private constructor(state: TurnState, eps: number) {
     // Copied, because a caller can hand in an array they still hold and keep
@@ -179,8 +347,44 @@ export class Turn {
     this.eps = eps;
     // Built here, not on first use, so every way of constructing a Turn
     // validates at the same moment: the call that introduced the mistake.
-    this.plan = buildPlan(this.state, eps);
+    ({ planned: this.planned, plan: this.plan } = Turn.optionalChoice(this.state, eps));
     inspections.set(this, { plan: this.plan });
+  }
+
+  /**
+   * `state` with its optional ("you can") conditions decided, as the engine decides them
+   * (`optionalGrants.ts`): with up to {@link MAX_SEARCHED_OPTIONAL} of them, each subset is
+   * attempted and the one with the highest mean is kept, the full set first so a tie (within
+   * 1e-12) keeps it; past that, with no search, each is attempted where the later attack rolls on
+   * its creature lean melee ({@link TurnPlan.meleeLeaning}). A declined one stays in the turn with
+   * an explicit `of: []`, so it never lands and its id still reads.
+   */
+  private static optionalChoice(state: TurnState, eps: number): { planned: TurnState; plan: TurnPlan } {
+    // The plan says which conditions are optional: declared ones and those attached to a source.
+    const full = buildPlan(state, eps, new Set(state.declined), "masses");
+    const optional = full.optionalIds;
+    if (state.optionalDecided || optional.length === 0) return { planned: state, plan: full };
+    const variant = (attempted: (id: string) => boolean): TurnState => ({
+      ...state,
+      optionalDecided: true,
+      declined: optional.filter((id) => !attempted(id)),
+    });
+    if (optional.length > MAX_SEARCHED_OPTIONAL) {
+      const planned = variant((id) => full.meleeLeaning[full.conditionIds.indexOf(id)]);
+      return { planned, plan: buildPlan(planned, eps, new Set(planned.declined), "masses") };
+    }
+    // Each subset is scored as the engine scores it: the sum of the marginal means.
+    let best: { turn: Turn; mean: number } | undefined;
+    for (let mask = (1 << optional.length) - 1; mask >= 0; mask--) {
+      const turn = new Turn(
+        variant((id) => (mask & (1 << optional.indexOf(id))) !== 0),
+        eps
+      );
+      const mean = turn.marginalMean();
+      if (best === undefined || mean > best.mean + 1e-12) best = { turn, mean };
+    }
+    const { turn } = best as { turn: Turn };
+    return { planned: turn.planned, plan: turn.plan };
   }
 
   /**
@@ -203,7 +407,16 @@ export class Turn {
         ? { kind: "substitute", index: substitutes.length - 1 }
         : null;
     return new Turn(
-      { attacks: spec.attacks, riders, substitutes, conditions, observe, defaulted: false, last },
+      {
+        attacks: spec.attacks,
+        riders,
+        substitutes,
+        conditions,
+        observe,
+        defaulted: false,
+        last,
+        ...(spec.stateLimit === undefined ? {} : { stateLimit: spec.stateLimit }),
+      },
       eps
     );
   }
@@ -212,9 +425,14 @@ export class Turn {
     return new Turn({ ...this.state, ...changes }, this.eps);
   }
 
-  /** What a chaining call's omitted `of` means: the attacks so far, plus any reroll so far. */
-  private defaultOf(): readonly string[] {
-    return [...this.plan.attackIds, ...this.plan.rerollIds];
+  /**
+   * What a chaining call's omitted `of` means: the attacks so far, plus any reroll so far. With
+   * none yet it stays omitted, so the call fails as having no sources (an explicit `of: []` is a
+   * reader of nothing instead).
+   */
+  private defaultOf(): readonly string[] | undefined {
+    const of = [...this.plan.attackIds, ...this.plan.rerollIds];
+    return of.length === 0 ? undefined : of;
   }
 
   /**
@@ -229,12 +447,14 @@ export class Turn {
    */
   attack(source: Source, options?: string | AttackOptions): Turn {
     this.refuseAttackAfterRider();
-    const { id, tag, chance } =
-      typeof options === "string" ? { id: options, tag: undefined, chance: undefined } : (options ?? {});
+    const { id, tag, chance, target } =
+      typeof options === "string"
+        ? { id: options, tag: undefined, chance: undefined, target: undefined }
+        : (options ?? {});
     const entry: Attack =
-      id === undefined && tag === undefined && chance === undefined
+      id === undefined && tag === undefined && chance === undefined && target === undefined
         ? source
-        : { id, tag, chance, source };
+        : { id, tag, chance, ...(target === undefined ? {} : { target }), source };
     return this.with({ attacks: [...this.state.attacks, entry] });
   }
 
@@ -300,34 +520,32 @@ export class Turn {
    * to the grants only; the damage lands whatever the save does. With both, `id`
    * names the rider and the condition takes the default `condition N`.
    */
-  private addEffect(on: ConditionSpec["on"], effect: Effect, options: EveryHitOptions): Turn {
-    const { save, chance, onSave, ...riderOptions } = options;
-    const gated = save !== undefined || chance !== undefined || onSave !== undefined;
+  private addEffect(on: AttackTriggerOn | "first-crit", effect: Effect, options: EveryHitOptions): Turn {
+    const { save, chance, onSave, dealing, target, optional, happens, ...riderOptions } = options;
     const parts: readonly unknown[] = Array.isArray(effect) ? effect : [effect];
     const grants = parts.filter(isGrant);
+    const damage = parts.filter((part) => !isGrant(part)) as Damage[];
+    if (on === "first-crit" && damage.length > 0) {
+      throw new TurnSpecError(
+        "unsupported-trigger",
+        riderOptions.id ?? "",
+        "onFirstCrit applies effects; damage on a crit is onAnyCrit."
+      );
+    }
+    const coin = happens === undefined ? {} : { happens };
     if (grants.length === 0) {
-      if (gated) {
+      if ([save, chance, onSave, dealing, target, optional].some((field) => field !== undefined)) {
         throw new Error(
-          "save, chance and onSave gate grants only, and this call has none: damage is never gated by them. Pass a SaveBuilder as the damage for damage that depends on a save."
+          "save, chance, onSave, dealing, target and optional shape effects only, and this call has none: damage is never gated by them. Pass a SaveBuilder as the damage for damage that depends on a save."
         );
       }
-      return this.rider({ ...riderOptions, damage: effect as RiderDamage, on });
+      return this.rider({ ...riderOptions, ...coin, damage: effect as RiderDamage, on: on as AttackTriggerOn });
     }
     if (riderOptions.max !== undefined || riderOptions.perSource !== undefined) {
       throw new Error(
         "max and perSource shape a damage rider, and this call has grants: a grant is never capped and has no payload. Add the damage in its own call."
       );
     }
-    if (save !== undefined && chance !== undefined) {
-      throw new Error("Pass either save or chance, not both: each is the chance the grants take.");
-    }
-    if (onSave !== undefined && save === undefined && chance === undefined) {
-      throw new Error("onSave needs a save or a chance: without one there is no other branch to apply it on.");
-    }
-    if (save !== undefined && typeof (save as Partial<ToPMF>).toPMF !== "function") {
-      throw new Error("save must be a DC check such as d20.plus(2).dc(15).");
-    }
-    const damage = parts.filter((part) => !isGrant(part)) as Damage[];
     if (damage.length === 0 && riderOptions.critDamage !== undefined) {
       throw new TurnSpecError(
         "unused-crit-damage",
@@ -335,37 +553,55 @@ export class Turn {
         "A grant deals no damage, so critDamage has nothing to apply to."
       );
     }
-    if (damage.length === 0 && riderOptions.landing !== undefined) {
-      throw new TurnSpecError(
-        "unsupported-trigger",
-        riderOptions.id ?? "",
-        "A grant is a condition, which reads attack rolls and cannot watch a save row; landing says how a damage rider reads one."
-      );
+    if (damage.length === 0 && happens !== undefined) {
+      throw new Error("happens is a damage rider's coin, and this call has no damage; use chance for effects.");
     }
 
     const of = riderOptions.of ?? this.defaultOf();
-    // A save's P(fail): the DC check's PMF puts it at 1. `vsAC` leaves it alone —
-    // it is the target's save bonus, not its AC.
-    const probability = save === undefined ? chance : save.toPMF(this.eps).pAt(1);
-    const saved = onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave as Grant];
     const condition: ConditionSpec = {
       ...(damage.length === 0 && riderOptions.id !== undefined ? { id: riderOptions.id } : {}),
       on,
       of,
-      ...(probability === undefined ? {} : { chance: probability }),
-      grants: grants.map(grantSpec),
-      ...(saved.length === 0 ? {} : { onSave: saved.map(grantSpec) }),
+      ...gateFields(options, this.eps),
+      grants: grants.map(effectSpec),
     };
     const riders =
       damage.length === 0
         ? this.state.riders
-        : [...this.state.riders, { ...riderOptions, of, damage, on } as Rider];
+        : [...this.state.riders, { ...riderOptions, ...coin, of, damage, on } as Rider];
     return this.with({
       riders,
       conditions: [...this.state.conditions, condition],
       defaulted: this.state.defaulted || riderOptions.of === undefined,
       last: damage.length === 0 ? null : { kind: "rider", index: this.state.riders.length },
     });
+  }
+
+  /**
+   * Applies effects on the first crit among `of` only — beside {@link Turn.onAnyCrit}, which
+   * applies them on every crit. Damage on a crit is `onAnyCrit`.
+   */
+  onFirstCrit(effect: Lasting | readonly Lasting[], options: ConditionOptions = {}): Turn {
+    return this.addEffect("first-crit", effect, options);
+  }
+
+  /**
+   * What a creature already has when the turn starts: `atStart(restrained())`. An effect
+   * without a lifetime lasts the turn. `target` names the creature; omitted, the target.
+   */
+  atStart(effect: StartEffect | readonly StartEffect[], options: { target?: string } = {}): Turn {
+    const effects: readonly StartEffect[] = Array.isArray(effect) ? effect : [effect as StartEffect];
+    const condition: ConditionSpec = {
+      on: "start",
+      ...(options.target === undefined ? {} : { target: options.target }),
+      grants: effects.map((entry) => effectSpec(lastingForTurn(entry))),
+    };
+    return this.with({ conditions: [...this.state.conditions, condition] });
+  }
+
+  /** The most distinct turn states the walk may carry; more is `too-many-states`. */
+  stateLimit(limit: number): Turn {
+    return this.with({ stateLimit: limit });
   }
 
   /**
@@ -626,18 +862,25 @@ export class Turn {
   vsAC(ac: number): Turn {
     if (!Number.isFinite(ac)) throw new RangeError(`vsAC(ac) needs a finite number, got ${ac}.`);
     let rebound = 0;
-    const rebind = (damage: Damage): Damage => {
+    // A source on several rows rebinds once, so the rows still share it (and the plan resolves it once).
+    const reboundSources = new Map<Source, Source>();
+    const rebind = <T extends Source>(damage: T): T => {
       const attack = damage as {
         check?: { attackConfig?: { ac?: number } };
-        withCheck?: (fn: (check: Check) => Check) => Damage;
+        withCheck?: (fn: (check: Check) => Check) => T;
       };
       if (typeof attack.withCheck !== "function") return damage;
       if (typeof attack.check?.attackConfig?.ac !== "number") return damage;
       rebound++;
-      return attack.withCheck((check) => ({ ...check, ac }));
+      let rebuilt = reboundSources.get(damage) as T | undefined;
+      if (rebuilt === undefined) {
+        rebuilt = attack.withCheck((check) => ({ ...check, ac }));
+        reboundSources.set(damage, rebuilt);
+      }
+      return rebuilt;
     };
-    const rebindAll = (damage: RiderDamage): RiderDamage =>
-      Array.isArray(damage) ? damage.map(rebind) : rebind(damage as Damage);
+    const rebindAll = <T extends Rider["damage"]>(damage: T): T =>
+      (Array.isArray(damage) ? damage.map(rebind) : rebind(damage as Damage)) as T;
 
     const attacks = this.state.attacks.map(
       (entry): Attack =>
@@ -669,12 +912,27 @@ export class Turn {
    * resolved at that point.
    */
   get pmf(): PMF {
+    if (this.plan.dealing) {
+      throw new TurnSpecError(
+        "dealing-joint-unsupported",
+        this.plan.conditionIds.join(", "),
+        "A condition in this turn needs a damage type dealt (`dealing`): the turn knows only the odds a landing dealt it, so it reads every attack's and rider's marginal and the mean, but not the joint distribution."
+      );
+    }
     return this.resolve().pmf;
   }
 
-  /** Mean damage for the turn. */
+  /**
+   * Mean damage for the turn. With a `dealing` condition, the sum of every attack's and rider's
+   * marginal mean (the mean is linear, so it is exact where the joint is not available).
+   */
   mean(): number {
-    return this.pmf.mean();
+    return this.plan.dealing ? this.marginalMean() : this.pmf.mean();
+  }
+
+  /** The sum of every attack's and rider's marginal mean: the mean, from the reader walk alone. */
+  private marginalMean(): number {
+    return [...this.plan.attackIds, ...this.plan.riderIds].reduce((sum, id) => sum + this.marginal(id).pmf.mean(), 0);
   }
 
   /**
@@ -731,6 +989,155 @@ export class Turn {
   }
 
   /**
+   * The damage one attack, attack-shaped rider or rider deals this turn on its own: its
+   * marginal distribution (a row's own roll in the contexts the turn puts it in, with its
+   * `chance`; a rider's payloads wherever it lands), with the rest of the mass at 0. The means
+   * of every attack's and rider's marginal add up to {@link Turn.mean}.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not an attack or a rider.
+   */
+  marginal(id: string): AttackMarginal | RiderMarginal {
+    const known = this.marginals.get(id);
+    if (known !== undefined) return known;
+    if (!this.plan.attackIds.includes(id) && !this.plan.riderIds.includes(id)) {
+      throw new TurnSpecError(
+        "unknown-id",
+        id,
+        `"${id}" is not an attack or rider in this turn. Attacks and riders: ${[...this.plan.attackIds, ...this.plan.riderIds]
+          .map((each) => `"${each}"`)
+          .join(", ")}.`
+      );
+    }
+    const readers = this.resolveReaders();
+    const plan = this.walkPlan;
+    const rows = plan.steps.flatMap((step, s) => (step.id === id && step.contextPmfs.length !== 0 ? [s] : []));
+    const result = rows.length !== 0 ? this.rowMarginal(id, rows, readers) : this.riderMarginal(id, readers);
+    this.marginals.set(id, result);
+    return result;
+  }
+
+  /**
+   * A row's marginal from the reader walk: the mass of each context it rolls in times that
+   * context's PMF. A row a substitute rewrites is not its contexts' PMFs, so its own damage is
+   * walked instead.
+   */
+  private rowMarginal(id: string, rows: readonly number[], readers: Readers): AttackMarginal {
+    const { tally, total } = readers;
+    const steps = this.walkPlan.steps;
+    let rolled = 0;
+    let happened = 0;
+    const rollType: Record<RollType, number> = { flat: 0, advantage: 0, disadvantage: 0, "elven accuracy": 0 };
+    const contexts: [PMF, number][] = [];
+    for (const s of rows) {
+      happened += tally.happened[s];
+      for (const type of Object.keys(rollType) as RollType[]) rollType[type] += tally.rollTypes[s][type] / total;
+      steps[s].contextPmfs.forEach((pmf, context) => {
+        const mass = tally.contextMass[s][context];
+        if (mass <= 0) return;
+        rolled += mass;
+        contexts.push([pmf, mass]);
+      });
+    }
+    const occurs = Math.min(1, happened / total);
+    if (rows.some((s) => steps[s].transformed)) {
+      const pmf = this.projectedMarginal(id);
+      return { pmf, whenHappens: occurs > 0 ? unthinned(pmf, occurs) : PMF.delta(0, this.eps), occurs, rollType };
+    }
+    const whenHappens =
+      contexts.length === 0
+        ? PMF.delta(0, this.eps)
+        : contexts.length === 1
+          ? contexts[0][0]
+          : PMF.mix(
+              contexts.map(([pmf, mass]) => [pmf, mass / rolled]),
+              0
+            );
+    const pmf = contexts.length === 0 ? PMF.missNone(this.eps) : whenHappens.applyHitFrequency(occurs);
+    return { pmf, whenHappens, occurs, rollType };
+  }
+
+  /**
+   * A damage rider's marginal from the reader walk: a capped rider's carried damage, or the mass
+   * of each payload a rider that lands once lands with; the rest of the mass at 0.
+   */
+  private riderMarginal(id: string, readers: Readers): RiderMarginal {
+    const { tally, total, states } = readers;
+    const plan = this.walkPlan;
+    const coin = plan.coins.find((each) => each.id === id);
+    // A rider whose coin did not come up lands but carries no payload: its landings are counted
+    // on the coin's side alone, and the coin is independent of them.
+    const perLanding = coin === undefined ? total : total * coin.happens;
+    // Every attack the rider watches, in declaration order, as the engine books it: one it never
+    // lands on has zeros.
+    const booked = tally.landings.get(id);
+    const landings = new Map(
+      (plan.riderRows.get(id) ?? []).map((row): [string, RowLanding] => {
+        const landing = booked?.get(row) ?? { hit: 0, crit: 0, doubled: { hit: 0, crit: 0 } };
+        return [
+          row,
+          {
+            hit: landing.hit / perLanding,
+            crit: landing.crit / perLanding,
+            doubled: { hit: landing.doubled.hit / perLanding, crit: landing.doubled.crit / perLanding },
+          },
+        ];
+      })
+    );
+    const anyLanding = (readers.fireMass.get(id) ?? 0) / total;
+    const capped = plan.everyHitIds.indexOf(id);
+    let pmf: PMF;
+    if (capped !== -1 && readers.unexact.has(id)) pmf = this.projectedMarginal(id);
+    else if (capped !== -1) pmf = cappedPmf(states, capped, total);
+    else {
+      const weights = [...(tally.onceWeights.get(id) ?? [])].map(([payload, mass]): [PMF, number] => [payload, mass / total]);
+      const landed = weights.reduce((sum, [, weight]) => sum + weight, 0);
+      pmf = PMF.mix([...weights, [PMF.missNone(this.eps), Math.max(0, 1 - landed)]], 0);
+    }
+    return { pmf, landings, anyLanding };
+  }
+
+  /** `id`'s marginal by a walk that carries its damage alone: for what the reader walk cannot read. */
+  private projectedMarginal(id: string): PMF {
+    const { states } = this.walk(marginalLedger(id, this.eps), this.walkPlan);
+    let total = PMF.emptyMass();
+    for (const state of states.values()) total = total.add(state.damage);
+    return needsNormalizing(total.mass(), this.eps) ? total.normalize() : total;
+  }
+
+  /**
+   * The reader walk: one walk carrying mass (and each capped rider's damage as a plain array)
+   * that tallies every marginal reader. Cached, like the other walks.
+   */
+  private resolveReaders(): Readers {
+    if (this.readers) return this.readers;
+    const plan = this.walkPlan;
+    const ledger = readerLedger(plan.everyHitIds);
+    const tally = new ReaderTally(plan.steps, new Set(plan.everyHitIds), plan.perHitAny);
+    const walked = this.walk(ledger, plan, tally);
+    const { states, stateCounts } = walked;
+    let mass = 0;
+    for (const state of states.values()) mass += state.damage.mass;
+    const total = needsNormalizing(mass, this.eps) ? mass : 1;
+    const fireMass = this.tally(states, ledger, plan);
+    const applications = new Map(plan.everyHitIds.map((id, rider) => [id, walked.applicationMass[rider]]));
+    if (total !== 1) {
+      for (const [id, each] of fireMass) fireMass.set(id, each / total);
+      for (const [id, each] of applications) applications.set(id, each / total);
+    }
+    this.readers = {
+      tally,
+      states: [...states.values()].map((state) => state.damage),
+      total,
+      fireMass,
+      applications,
+      stepStats: stepStatsOf(plan, walked, total),
+      unexact: ledger.unexact,
+      peakStates: Math.max(1, ...stateCounts),
+    };
+    return this.readers;
+  }
+
+  /**
    * P(this rider fired). For an `every-hit` rider, capped or not, it is P(at least one
    * source hit): the first landing always applies it, since a cap is at least 1. It can
    * fire more than once in a turn; {@link Turn.expectedApplications} counts how often.
@@ -742,18 +1149,16 @@ export class Turn {
    * For a probe it is the probability the probe reports: `any-crit` is P(at
    * least one source crit).
    *
-   * A probe is read from a walk that carries no damage distribution, only masses,
-   * so it costs no damage arithmetic; every other id is read from the full walk,
-   * bit for bit as before. The two agree to rounding, and exactly as a probe's
-   * value does not depend on which was resolved first, neither does anyone else's.
-   * With a pruning `eps` above 0 the probe's masses ignore the pruned damage bins.
+   * Read from a walk that carries no damage distribution, only masses, so it costs no
+   * damage arithmetic; it agrees with the joint `pmf` walk to rounding (≤ 1e-12 relative).
+   * With a pruning `eps` above 0 the masses ignore the pruned damage bins.
    *
    * @throws {TurnSpecError} `unknown-id` if `id` is not a rider, substitute,
    * condition or probe (attack ids included, since attacks always happen and
    * have no firing probability).
    */
   fireProbability(id: string): number {
-    const masses = this.plan.probes.has(id) ? this.resolveMasses() : this.resolve().fireMass;
+    const masses = this.plan.probes.has(id) ? this.resolveMasses() : this.resolveReaders().fireMass;
     const mass = masses.get(id);
     if (mass === undefined) {
       throw new TurnSpecError(
@@ -782,8 +1187,8 @@ export class Turn {
    * @throws {TurnSpecError} `unknown-id` if `id` is not a rider.
    */
   expectedApplications(id: string): number {
-    const resolved = this.resolve();
-    const mass = resolved.applications.get(id) ?? (this.plan.riderIds.includes(id) ? resolved.fireMass.get(id) : undefined);
+    const readers = this.resolveReaders();
+    const mass = readers.applications.get(id) ?? (this.plan.riderIds.includes(id) ? readers.fireMass.get(id) : undefined);
     if (mass === undefined) {
       throw new TurnSpecError(
         "unknown-id",
@@ -807,122 +1212,152 @@ export class Turn {
    * id included, since only those roll their own attack and have hit/crit odds.
    */
   stepStats(id: string): StepStats {
-    const resolved = this.resolve();
-    const stats = resolved.stepStats.get(id);
+    const { tally, total, stepStats } = this.resolveReaders();
+    const stats = stepStats.get(id);
     if (stats === undefined) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not an attack or attack-shaped rider in this turn. Attacks: ${[
-          ...resolved.stepStats.keys(),
-        ]
+        `"${id}" is not an attack or attack-shaped rider in this turn. Attacks: ${[...stepStats.keys()]
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
     }
-    // The cached entry is shared by every later call; hand out a copy so a caller
-    // mutating the result cannot change what the next read reports.
-    return { ...stats, live: { ...stats.live } };
+    // All of it from the reader walk: no damage arithmetic. The 0.16 fields agree with the joint
+    // walk's to rounding.
+    const plan = this.walkPlan;
+    const rows = plan.steps.flatMap((step, s) => (step.id === id && step.variants.length !== 0 ? [s] : []));
+    const odds = {} as Record<EffectName, number>;
+    const sources = {} as Record<EffectName, { source: EffectSource; odds: number }[]>;
+    EFFECT_NAMES.forEach((name, e) => {
+      odds[name] = rows.reduce((sum, s) => sum + tally.effects[s][e], 0) / total;
+      const bySource = new Map<number, number>();
+      for (const s of rows) {
+        for (const [source, masses] of tally.effectSources[s]) {
+          if (masses[e] > 0) bySource.set(source, (bySource.get(source) ?? 0) + masses[e]);
+        }
+      }
+      sources[name] = [...bySource]
+        .sort(([a], [b]) => a - b)
+        .map(([source, mass]) => ({ source: plan.effectSources[source], odds: mass / total }));
+    });
+    const conditions = new Map<number, { attempted: number; taken: number }>();
+    for (const s of rows) {
+      for (const [c, { attempted, taken }] of tally.attempts[s]) {
+        const known = conditions.get(c) ?? { attempted: 0, taken: 0 };
+        conditions.set(c, { attempted: known.attempted + attempted, taken: known.taken + taken });
+      }
+    }
+    return {
+      ...stats,
+      live: { ...odds, ...stats.live, sources },
+      conditions: [...conditions].map(([c, { attempted, taken }]) => ({
+        id: plan.conditionIds[c],
+        attempted: attempted / total,
+        taken: taken / total,
+      })),
+    };
+  }
+
+  /**
+   * The expected number of times condition `id` is attempted this turn (for a `first-*`
+   * condition, the odds it is): each landing it watches that finds it not already spent or in
+   * force. 0 for a `start` condition, which is never tried.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not a condition.
+   */
+  attemptProbability(id: string): number {
+    const c = this.plan.conditionIds.indexOf(id);
+    if (c === -1) {
+      throw new TurnSpecError(
+        "unknown-id",
+        id,
+        `"${id}" is not a condition in this turn. Conditions: ${this.plan.conditionIds.map((each) => `"${each}"`).join(", ")}.`
+      );
+    }
+    const { tally, total } = this.resolveReaders();
+    return tally.attempts.reduce((sum, attempts) => sum + (attempts.get(c)?.attempted ?? 0), 0) / total;
+  }
+
+  /**
+   * The ways riders land on attack `id`: per outcome label (`hit`, `crit`, `saveFail`, …), whether
+   * the attack's own roll dealt damage, and the riders that landed with it, with its odds.
+   *
+   * @throws {TurnSpecError} `unknown-id` if `id` is not an attack.
+   */
+  landings(id: string): readonly LandingPattern[] {
+    if (!this.plan.attackIds.includes(id)) {
+      throw new TurnSpecError(
+        "unknown-id",
+        id,
+        `"${id}" is not an attack in this turn. Attacks: ${this.plan.attackIds.map((each) => `"${each}"`).join(", ")}.`
+      );
+    }
+    if (this.patterns === undefined) {
+      // Patterns cost a little on every landing, so only this reader tallies them, on a walk of its
+      // own. A rider's landing does not depend on its `happens`, so the walk takes every rider as
+      // happening: a coin that did not come up would hide where the rider landed.
+      const plan =
+        this.walkPlan.coins.length === 0
+          ? this.walkPlan
+          : buildPlan(
+              {
+                ...this.planned,
+                observe: [],
+                riders: this.planned.riders.map(({ happens: _happens, ...rider }) => rider),
+              },
+              this.eps,
+              new Set(this.planned.declined),
+              "masses"
+            );
+      const tally = new ReaderTally(
+        plan.steps,
+        new Set(plan.everyHitIds),
+        plan.perHitAny,
+        new Map(plan.riderIds.map((id, index) => [id, index]))
+      );
+      this.walk(massLedger, plan, tally);
+      this.patterns = tally.patterns;
+    }
+    const { total } = this.resolveReaders();
+    return [...(this.patterns.get(id)?.values() ?? [])].map((pattern) => ({
+      ...pattern,
+      mass: pattern.mass / total,
+    }));
+  }
+
+  /** The most states the walk held after any step. */
+  get peakStates(): number {
+    return this.resolveReaders().peakStates;
   }
 
   private get walkPlan(): TurnPlan {
     if (this.state.observe.length === 0) return this.plan;
-    this.plainPlan ??= buildPlan({ ...this.state, observe: [] }, this.eps);
+    this.plainPlan ??= buildPlan({ ...this.planned, observe: [] }, this.eps, new Set(this.planned.declined), "masses");
     return this.plainPlan;
   }
 
-  private resolve(): {
-    pmf: PMF;
-    fireMass: ReadonlyMap<string, number>;
-    applications: ReadonlyMap<string, number>;
-    stepStats: ReadonlyMap<string, StepStats>;
-  } {
+  /**
+   * The joint walk: the only one that carries a damage PMF in every state, read by `pmf` (and
+   * `mean`, `toQuery`) alone. Every other reader comes from the mass walks.
+   */
+  private resolve(): { pmf: PMF } {
     if (this.resolved) return this.resolved;
 
     // The damage walks a plan without the probes, so a probe's group never splits its states:
-    // what `pmf`, every other id and `stepStats` report is what the turn without probes reports.
-    const plan = this.walkPlan;
+    // what `pmf` reports is what the turn without probes reports. Its draws carry their riders'
+    // payloads convolved in; the plan the mass walks read does not, so it is built here, once.
+    const plan = buildPlan({ ...this.planned, observe: [] }, this.eps, new Set(this.planned.declined), "joint");
     const eps = this.eps;
-    const ledger = pmfLedger(eps);
-    const {
-      states,
-      stateCounts,
-      rolled,
-      hitMass,
-      critMass,
-      liveAdvantage,
-      liveDisadvantage,
-      liveCritOnHit,
-      applicationMass,
-    } = this.walk(ledger, plan);
+    const { states, stateCounts } = this.walk(pmfLedger(eps), plan);
     inspections.set(this, { plan: this.plan, stateCounts });
 
-    // Collapse: sum every terminal state, and tally per-rider firing mass.
-    const fireMass = this.tally(states, ledger, plan);
-    const applications = new Map<string, number>(
-      plan.everyHitIds.map((id, rider) => [id, applicationMass[rider]])
-    );
     let total: PMF | undefined;
     for (const state of states.values()) {
       total = total ? total.add(state.damage) : state.damage;
     }
-
     const pmf = total ?? PMF.delta(0, eps);
-    const totalMass = pmf.mass();
-    const normalizing = needsNormalizing(totalMass, eps);
-
-    // Firing masses are accumulated in the same unnormalized units as the
-    // terminal states, so they have to follow the distribution through
-    // normalization or `fireProbability` stops agreeing with `pmf`. Reachable
-    // whenever a caller supplies a source PMF whose own mass is not 1.
-    if (normalizing) {
-      for (const [id, mass] of fireMass) fireMass.set(id, mass / totalMass);
-      for (const [id, mass] of applications) applications.set(id, mass / totalMass);
-    }
-
-    // Per-step stats live in the same mass units, so they follow the same
-    // normalization. Only attack-shaped steps (a declared attack, or a rider that
-    // rolls its own attack — anything with variants) are reportable. A rider that
-    // fires at several positions in the rail (a `first-miss` reroll watching many
-    // attacks) has one step per position under one id; those steps are mutually
-    // exclusive, so their masses sum.
-    const scale = (mass: number): number => (normalizing ? mass / totalMass : mass);
-    const stepStats = new Map<string, StepStats>();
-    plan.steps.forEach((step, stepIndex) => {
-      if (step.variants.length === 0) return;
-      const next: StepStats = {
-        rolled: scale(rolled[stepIndex]),
-        hit: scale(hitMass[stepIndex]),
-        crit: scale(critMass[stepIndex]),
-        live: {
-          advantage: scale(liveAdvantage[stepIndex]),
-          disadvantage: scale(liveDisadvantage[stepIndex]),
-          critOnHit: scale(liveCritOnHit[stepIndex]),
-        },
-      };
-      const existing = stepStats.get(step.id);
-      if (existing === undefined) {
-        stepStats.set(step.id, next);
-      } else {
-        stepStats.set(step.id, {
-          rolled: existing.rolled + next.rolled,
-          hit: existing.hit + next.hit,
-          crit: existing.crit + next.crit,
-          live: {
-            advantage: existing.live.advantage + next.live.advantage,
-            disadvantage: existing.live.disadvantage + next.live.disadvantage,
-            critOnHit: existing.live.critOnHit + next.live.critOnHit,
-          },
-        });
-      }
-    });
-
-    this.resolved = {
-      pmf: normalizing ? pmf.normalize() : pmf,
-      fireMass,
-      applications,
-      stepStats,
-    };
+    this.resolved = { pmf: needsNormalizing(pmf.mass(), eps) ? pmf.normalize() : pmf };
     return this.resolved;
   }
 
@@ -965,7 +1400,12 @@ export class Turn {
       }
       // `every-hit` riders have no step: they fired iff something landed.
       for (const [id, group] of plan.perHitGroups) {
-        if (((state.codes[group] >> 2) & 0b11) !== FIRST_NONE) {
+        const landed = plan.perHitCritOnly.has(id)
+          ? (state.codes[group] & CRIT_BIT) !== 0
+          : plan.perHitAny.has(id)
+            ? state.codes[group] !== START_CODE
+            : ((state.codes[group] >> 2) & 0b11) !== FIRST_NONE;
+        if (landed) {
           fireMass.set(id, (fireMass.get(id) as number) + mass);
         }
       }
@@ -976,9 +1416,12 @@ export class Turn {
           fireMass.set(id, (fireMass.get(id) as number) + mass);
         }
       }
-      plan.conditionIds.forEach((id, c) => {
-        fireMass.set(id, (fireMass.get(id) as number) + state.applied[c]);
-      });
+      // The reader walk carries no applied masses (it reads riders' alone).
+      if (state.applied.length !== 0) {
+        plan.conditionIds.forEach((id, c) => {
+          fireMass.set(id, (fireMass.get(id) as number) + state.applied[c]);
+        });
+      }
     }
     return fireMass;
   }
@@ -987,16 +1430,8 @@ export class Turn {
    * Walks the plan's steps, carrying `ledger`'s damage in each state, and returns the terminal
    * states with the per-step statistics, in the same unnormalized mass units as the states.
    */
-  private walk<D>(ledger: Ledger<D>, plan: TurnPlan): {
+  private walk<D>(ledger: Ledger<D>, plan: TurnPlan, tally?: ReaderTally): WalkCounts & {
     states: Map<string, WalkState<D>>;
-    stateCounts: number[];
-    rolled: number[];
-    hitMass: number[];
-    critMass: number[];
-    liveAdvantage: number[];
-    liveDisadvantage: number[];
-    liveCritOnHit: number[];
-    applicationMass: number[];
   } {
     const eps = this.eps;
     const width = plan.groupCount;
@@ -1023,12 +1458,25 @@ export class Turn {
       codes: new Array<number>(width).fill(START_CODE),
       damage: ledger.start,
       fired: new Array<FireMode>(plan.slotCount).fill(null),
-      flags: 0,
-      applied: new Array<number>(conditionCount).fill(0),
+      flags: plan.startFlags,
+      applied: new Array<number>(conditionCount).fill(0).map((_, c) => (plan.startConditions.includes(c) ? 1 : 0)),
       counts: new Array<number>(counterCount).fill(0),
     };
     let states = new Map<string, State>([[String.fromCharCode(), start]]);
+    // A rider that may not happen splits the turn before its first row: its coin came up, or not.
+    for (const { bit, happens } of plan.coins) {
+      const split = new Map<string, State>();
+      for (const [key, state] of states) {
+        if (happens > 0) {
+          split.set(`${key}+`, { ...state, flags: state.flags | bit, damage: ledger.scale(state.damage, happens) });
+        }
+        if (happens < 1) split.set(`${key}-`, { ...state, damage: ledger.scale(state.damage, 1 - happens) });
+      }
+      states = split;
+    }
     const stateCounts: number[] = [];
+    // The reader walk keeps of each group code only what a later reader needs.
+    const needs = tally === undefined ? undefined : codeNeeds(plan);
 
     plan.steps.forEach((step, stepIndex) => {
       const next = new Map<string, State>();
@@ -1044,22 +1492,21 @@ export class Turn {
         if (plan.groupLastReadStep[g] > stepIndex) liveGroups.push(g);
       }
       // Flags get the same treatment, and a dead flag is cleared rather than merely
-      // left out of the key, so a stale bit can never be read back.
-      let liveFlags = 0;
-      plan.flagLastReadStep.forEach((last, bit) => {
-        if (last > stepIndex) liveFlags |= 1 << bit;
-      });
+      // left out of the key, so a stale bit can never be read back (or misread by the
+      // next flag that shares its bit).
+      const liveFlags = plan.flagLiveAfter[stepIndex];
+      const keyUnits: number[] = [];
 
       const merge = (state: State): void => {
         // A slot whose group dies at this step is reset too, for the same reason, so the group
         // that reuses the slot starts from nothing.
-        const codes = released(state.codes, step.releases);
+        const codes = needs === undefined
+          ? released(state.codes, step.releases)
+          : (canonicalCodes(released(state.codes, step.releases), needs[stepIndex]) as number[]);
         // Whether each rider fired (and each substitute was spent) is part of the
         // state: two paths that agree on group codes but disagree on a slot must
         // not merge — `not-fired`, `first-miss`, a substitute's variant choice AND
         // the final `fireMass` collapse all read `state.fired`.
-        let codesKey = "";
-        for (const g of liveGroups) codesKey += String.fromCharCode(codes[g]);
         const flags = state.flags & liveFlags;
         // A count the cap can no longer reach is the same as none: both take every later
         // with-rider draw. Zeroing it lets those states merge, so a cap at or above the
@@ -1067,13 +1514,16 @@ export class Turn {
         const counts = counterCount
           ? state.counts.map((count, counter) => (count <= step.settled[counter] ? 0 : count))
           : state.counts;
-        const key =
-          codesKey +
-          "\u0001" +
-          state.fired.map((mode) => (mode === null ? "-" : "+")).join("") +
-          "\u0002" +
-          String.fromCharCode(flags) +
-          (counterCount ? "\u0003" + String.fromCharCode(...counts) : "");
+        // The key, built as one flat string: the live group codes, "\u0001", "+"/"-" per fire slot,
+        // "\u0002", the flags (up to 30 bits: two UTF-16 units, so the key stays injective), then
+        // "\u0003" and the counts.
+        keyUnits.length = 0;
+        for (const g of liveGroups) keyUnits.push(codes[g]);
+        keyUnits.push(1);
+        for (const mode of state.fired) keyUnits.push(mode === null ? 45 : 43);
+        keyUnits.push(2, flags & 0xffff, flags >>> 16);
+        if (counterCount) keyUnits.push(3, ...counts);
+        const key = String.fromCharCode(...keyUnits);
         const existing = next.get(key);
         if (existing) {
           existing.damage = ledger.add(existing.damage, state.damage);
@@ -1081,11 +1531,32 @@ export class Turn {
             existing.applied = existing.applied.map((mass, c) => mass + state.applied[c]);
           }
         } else {
-          next.set(key, { ...state, codes, flags, counts });
+          // Every state merges once, so it can be the merged state itself.
+          state.codes = codes;
+          state.flags = flags;
+          state.counts = counts;
+          next.set(key, state);
         }
       };
 
+      const declaredRow = tally !== undefined && step.slot === -1 && step.variants.length !== 0;
+      const contexts = step.contextPmfs.length > 1;
       for (const state of states.values()) {
+        // A row's d20 and effects count in every state, whether or not it happens. A declared
+        // attack fires no slot, so the context it reads here is the one it rolls in.
+        let context = 0;
+        if (declaredRow) {
+          if (contexts) context = step.contextIndexOf(state.codes, state.fired, state.flags, state.counts);
+          tally.reach(stepIndex, context, state.flags, ledger.mass(state.damage));
+        }
+        // A gated attack whose parent did not land does not happen: it deals, lands and consumes nothing.
+        if (step.gate !== undefined) {
+          const code = state.codes[step.gate.slot];
+          if (step.gate.any ? code === START_CODE : ((code >> 2) & 0b11) === FIRST_NONE) {
+            merge(state);
+            continue;
+          }
+        }
         const mode = fireMode(step, state.codes, state.fired);
 
         if (mode === null) {
@@ -1113,24 +1584,39 @@ export class Turn {
 
         if (step.variants.length === 0) {
           const payload = step.damage as { hit: PMF; crit: PMF };
+          tally?.fire(step, mode === "crit" ? payload.crit : payload.hit, stateMass);
           merge({
             ...state,
-            damage: ledger.convolve(state.damage, mode === "crit" ? payload.crit : payload.hit),
+            damage: ledger.convolve(state.damage, mode === "crit" ? payload.crit : payload.hit, step),
             fired,
           });
           continue;
         }
 
         // Order at a step: read the flags to select the variant, clear the
-        // `next-attack` flags this roll consumes, draw, advance the groups, then
-        // apply this outcome's grants. An attack that did not happen ("none") rolls
-        // nothing, so it consumes nothing.
-        const draws = step.variants[step.select(state.codes, fired, state.flags, state.counts)];
+        // `next-attack` flags this roll consumes (and the `next-hit` ones a hit or crit
+        // consumes), draw, advance the groups, then apply this outcome's grants. An
+        // attack that did not happen ("none") rolls nothing, so it consumes nothing.
+        if (tally !== undefined) {
+          if (!declaredRow) {
+            if (contexts) context = step.contextIndexOf(state.codes, fired, state.flags, state.counts);
+            tally.reach(stepIndex, context, state.flags, stateMass);
+          }
+          tally.roll(stepIndex, context, stateMass);
+        }
+        const variant = step.variants[step.select(state.codes, fired, state.flags, state.counts)];
+        // The reader walk puts "the row did not happen" first, as the engine does, so the states it
+        // reaches (and the order conditions are first tried in) follow the engine's.
+        const draws = tally === undefined ? variant : noneFirst(variant);
         const consumed = state.flags & ~step.consumes;
-        for (const { outcome, matched, spends, applies, bumps, fires, slice, byKind } of draws) {
+        for (const draw of draws) {
+          const { outcome, matched, spends, applies, bumps, fires, slice, byKind } = draw;
           const sliceMass = slice.mass();
           if (sliceMass <= eps) continue;
-          const flags = outcome === "none" ? state.flags : consumed;
+          // A row that dealt damage ends the conditions damage ends, after it has read them.
+          const flags =
+            (outcome === "none" ? state.flags : outcome === "miss" ? consumed : consumed & ~step.hitConsumes) &
+            (draw.wounded ? ~step.wounds : ~0);
 
           const contribution = stateMass * sliceMass;
           if (outcome === "crit") {
@@ -1146,15 +1632,17 @@ export class Turn {
             for (const counter of bumps) counts[counter]++;
           }
 
-          const codes = [...state.codes];
-          step.updates.forEach((group, index) => {
+          const codes = state.codes.slice();
+          for (let index = 0; index < step.updates.length; index++) {
+            const group = step.updates[index];
             const kind = step.updateKinds[index];
             codes[group] = advance(
               codes[group],
               kind === null || byKind === undefined ? outcome : byKind[kind],
               matched
             );
-          });
+          }
+          tally?.draw(stepIndex, draw, contribution, context, state.codes, codes);
           let drawFired = fired;
           if (spends) {
             drawFired = [...fired];
@@ -1164,8 +1652,45 @@ export class Turn {
             if (drawFired === fired) drawFired = [...fired];
             for (const slot of fires) drawFired[slot] = outcome === "crit" ? "crit" : "hit";
           }
-          const damage = ledger.convolve(state.damage, slice);
-          if (step.grants.length === 0) {
+          const damage = ledger.convolve(state.damage, slice, step, draw);
+          // Each qualifying condition splits the draw by its chance: its grants on
+          // one part, its onSave grants on the other. Splits compose, since each
+          // condition rolls its own save. With none, the draw is one part.
+          let parts: { flags: number; share: number; applied: number[] }[] | undefined;
+          for (const app of step.grants) {
+            if (!grantApplies(app, outcome, state.codes, byKind, state.flags, draw.riders, draw.typed)) continue;
+            // A grant save fails by the state the row started in; a fixed chance is the same everywhere.
+            // A save forced by a row that dealt damage is made once it is dealt: what that ended is gone.
+            const chance =
+              app.chanceOf === undefined
+                ? app.chance
+                : app.chanceOf(draw.wounded ? state.flags & ~step.wounds : state.flags);
+            if (app.countOnly) {
+              // Nothing reads it, so it splits nothing: only the try is counted.
+              if (tally !== undefined) {
+                for (const part of parts ?? [{ share: 1 }]) tally.attempt(stepIndex, app.condition, contribution * part.share, chance);
+              }
+              continue;
+            }
+            const split: NonNullable<typeof parts> = [];
+            for (const part of parts ?? [{ flags, share: 1, applied: [] }]) {
+              if (app.inForce !== 0 && (part.flags & app.inForce) === app.inForce) {
+                if (app.counted && app.countedInForce) tally?.attempt(stepIndex, app.condition, contribution * part.share, chance);
+                split.push(part);
+                continue;
+              }
+              if (app.counted) tally?.attempt(stepIndex, app.condition, contribution * part.share, chance);
+              const applied = app.effective ? [...part.applied, app.condition] : part.applied;
+              // A once-per-turn try is spent on both branches of its save.
+              const tried = app.tried > 0 ? app.tried : 0;
+              const taken = part.share * chance;
+              const saved = part.share * (1 - chance);
+              if (taken > 0) split.push({ flags: part.flags | app.grants | tried, share: taken, applied });
+              if (saved > 0) split.push({ flags: part.flags | app.onSave | tried, share: saved, applied: part.applied });
+            }
+            parts = split;
+          }
+          if (parts === undefined) {
             merge({
               codes,
               damage,
@@ -1176,23 +1701,6 @@ export class Turn {
             });
             continue;
           }
-
-          // Each qualifying condition splits the draw by its chance: its grants on
-          // one part, its onSave grants on the other. Splits compose, since each
-          // condition rolls its own save.
-          let parts: { flags: number; share: number; applied: number[] }[] = [
-            { flags, share: 1, applied: [] },
-          ];
-          for (const app of step.grants) {
-            if (!grantApplies(app, outcome, state.codes)) continue;
-            parts = parts.flatMap((part) => {
-              if (app.inForce !== 0 && (part.flags & app.inForce) === app.inForce) return [part];
-              const applied = app.effective ? [...part.applied, app.condition] : part.applied;
-              const taken = { flags: part.flags | app.grants, share: part.share * app.chance, applied };
-              const saved = { ...part, flags: part.flags | app.onSave, share: part.share * (1 - app.chance) };
-              return [taken, saved].filter((each) => each.share > 0);
-            });
-          }
           for (const part of parts) {
             const scale = sliceMass * part.share;
             merge({
@@ -1201,9 +1709,9 @@ export class Turn {
               fired: drawFired,
               flags: part.flags,
               counts,
-              applied: state.applied.map((mass, c) =>
-                part.applied.includes(c) ? stateMass * scale : mass * scale
-              ),
+              applied: conditionCount
+                ? state.applied.map((mass, c) => (part.applied.includes(c) ? stateMass * scale : mass * scale))
+                : state.applied,
             });
           }
         }
@@ -1211,6 +1719,13 @@ export class Turn {
 
       states = next;
       stateCounts.push(next.size);
+      if (next.size > plan.stateLimit) {
+        throw new TurnSpecError(
+          "too-many-states",
+          step.id,
+          `The walk holds ${next.size} states after "${step.id}", more than the turn's stateLimit of ${plan.stateLimit}.`
+        );
+      }
     });
 
     return {
@@ -1265,7 +1780,7 @@ export function turn(
  * are live at once and any `max` fits {@link MAX_TRIGGER_GROUPS}: the walk grows with `max`,
  * not against the group cap.
  */
-export function bounce({ source, max }: { source: Source; max: number }): Turn {
+export function bounce({ source, max }: { source: Damage; max: number }): Turn {
   if (!Number.isInteger(max) || max < 0) {
     throw new RangeError(`bounce({ max }) needs a non-negative integer, got ${max}.`);
   }

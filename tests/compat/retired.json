@@ -1,0 +1,10 @@
+[
+  {
+    "key": "src/turn/conditions.test.ts > guards > more than 8 live flags is too-many-flags, naming every live flag",
+    "reason": "8-flag cap removed in 0.17"
+  },
+  {
+    "key": "src/turn/probes.test.ts > a probe is read from a walk that carries no damage > reading a probe does no damage arithmetic; reading anything else still does",
+    "reason": "0.17: every probability reader reads the mass walk, so reading a rider no longer convolves; the reworded test is in tests/turn-port-readers.test.ts"
+  }
+]

@@ -4,9 +4,11 @@ import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { pmfFromRollBuilder } from "./ast";
+import type { AttachedCondition } from "./attack";
 import type { DCBuilder } from "./dc";
-import { ParsedRollBuilder, RollBuilder } from "./roll";
-import type { CheckBuilder, SaveResolution } from "./types";
+import { naturalRollIndex, ParsedRollBuilder, RollBuilder } from "./roll";
+import type { AbilityName, CheckBuilder, SaveResolution } from "./types";
+import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
 
 export type SaveOutcome = "normal" | "half";
 
@@ -28,17 +30,19 @@ function payloadPMF(effect: RollBuilder, eps: number): PMF {
   return effect instanceof ParsedRollBuilder ? effect.toPMF(eps) : pmfFromRollBuilder(effect);
 }
 
-export class SaveBuilder implements CheckBuilder {
+export class SaveBuilder implements CheckBuilder, ContextualSource {
   /**
    * @param check the DC check
    * @param failureEffect what a failed save deals; none means a failure deals 0
    * @param saveOutcome what a success deals: nothing (`"normal"`), the failure payload halved and floored
    *   (`"half"`), or a payload of its own (a {@link RollBuilder}, see {@link onSaveSuccess}); never both
+   * @param attached conditions a failed save applies in a turn (see {@link DCBuilder.onSaveFailure})
    */
   constructor(
     readonly check: DCBuilder,
     private readonly failureEffect?: RollBuilder,
-    private readonly saveOutcome: SaveOutcome | RollBuilder = "normal"
+    private readonly saveOutcome: SaveOutcome | RollBuilder = "normal",
+    readonly attached: readonly AttachedCondition[] = []
   ) {}
 
   /**
@@ -51,7 +55,7 @@ export class SaveBuilder implements CheckBuilder {
         "saveHalf() cannot be combined with onSaveSuccess(): the success branch can only be one or the other."
       );
     }
-    return new SaveBuilder(this.check, this.failureEffect, "half");
+    return new SaveBuilder(this.check, this.failureEffect, "half", this.attached);
   }
 
   /**
@@ -80,7 +84,72 @@ export class SaveBuilder implements CheckBuilder {
         "onSaveSuccess() cannot be combined with saveHalf(): the success branch can only be one or the other."
       );
     }
-    return new SaveBuilder(this.check, this.failureEffect, RollBuilder.fromArgs(...args));
+    return new SaveBuilder(this.check, this.failureEffect, RollBuilder.fromArgs(...args), this.attached);
+  }
+
+  /** The save's ability (`"con"` or `"constitution"`): see {@link DCBuilder.ability}. */
+  ability(name: AbilityName): SaveBuilder {
+    return new SaveBuilder(this.check.ability(name), this.failureEffect, this.saveOutcome);
+  }
+
+  /** The save fails without rolling: see {@link DCBuilder.alwaysFails}. */
+  alwaysFails(): SaveBuilder {
+    return new SaveBuilder(this.check.alwaysFails(), this.failureEffect, this.saveOutcome);
+  }
+
+  /** No grant or condition in a turn changes this save's roll type: see {@link RollBuilder.pinned}. */
+  pinned(): SaveBuilder {
+    return new SaveBuilder(this.check.pinned(), this.failureEffect, this.saveOutcome);
+  }
+
+  /**
+   * What this save declares to a turn ({@link ContextualSource}): its ability (when
+   * {@link ability} set one), its own roll type, `pinned` and `alwaysFails()`.
+   */
+  get rowCheck(): RowCheck {
+    const check = this.check;
+    const rollType = check.rollType;
+    return {
+      kind: "save",
+      ...(check.saveAbility === undefined ? {} : { ability: check.saveAbility }),
+      rollType,
+      advantageDice: rollType === "elven accuracy" ? 3 : 2,
+      pinned: check.getRootDieConfig()?.pinned === true,
+      autoHit: false,
+      autoCrit: false,
+      autoFail: check.autoFail,
+    };
+  }
+
+  /**
+   * This save's outcome-labelled PMF (as {@link toPMF}, at `eps`) re-derived in a turn's `context`.
+   * `context.rollType` is the target's roll, taken literally unless the save is {@link pinned};
+   * `autoFail` makes it fail without rolling (on top of its own `alwaysFails()`); each of
+   * `penaltyDice` is subtracted from the roll (`d20.plus(5).minus(1, d4)`); `vulnerable` doubles the
+   * failure damage as a whole roll, the success unchanged. `autoHit` and `critOnHit` are attack
+   * facts, and `joined` is ignored: a builder does not pool rider dice into its own roll.
+   */
+  under(context: RowContext, eps: number = 0): PMF {
+    const own = this.rowCheck;
+    const rollType = own.pinned ? own.rollType : context.rollType;
+    const autoFail = own.autoFail || context.autoFail;
+    let save: SaveBuilder = this;
+    if (rollType !== own.rollType || autoFail !== own.autoFail || context.penaltyDice.length > 0) {
+      if (rollType === "elven accuracy") {
+        throw new RangeError("A save cannot roll with Elven Accuracy: it is only valid for attack rolls.");
+      }
+      const configs = this.check.getSubRollConfigs();
+      const root = naturalRollIndex(configs);
+      if (root !== -1) configs[root].rollType = rollType;
+      let roll = new RollBuilder(configs);
+      for (const { count, sides } of context.penaltyDice) roll = roll.minus(count, new RollBuilder(1).d(sides));
+      let check = roll.dc(this.check.saveDC);
+      const ability = this.check.saveAbility;
+      if (ability !== undefined) check = check.ability(ability);
+      if (autoFail) check = check.alwaysFails();
+      save = new SaveBuilder(check, this.failureEffect, this.saveOutcome);
+    }
+    return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);
   }
 
   /**
@@ -107,6 +176,14 @@ export class SaveBuilder implements CheckBuilder {
    * `onSaveSuccess()`; else 0).
    */
   resolve(eps: number = EPS): SaveResolution {
+    return this.resolveScaled(eps, 1);
+  }
+
+  /**
+   * {@link resolve}, with the failure damage of `pmf` multiplied by `failScale` as a whole roll (2: a
+   * vulnerable target, see {@link under}). The success and every other field are unscaled.
+   */
+  private resolveScaled(eps: number, failScale: 1 | 2): SaveResolution {
     const { pSuccess: psuccess, pFail: pfail } = this.check.saveProbabilities();
     const failPMF = this.failureEffect ? payloadPMF(this.failureEffect, eps) : PMF.delta(0);
     const onSuccess = this.saveOutcome ?? "half";
@@ -121,7 +198,7 @@ export class SaveBuilder implements CheckBuilder {
     const baseMix = new Mixture<OutcomeType>(eps);
     const mixture = baseMix
       .add(successLabel, successPMF, psuccess)
-      .add(failLabel, failPMF, pfail);
+      .add(failLabel, failScale === 1 ? failPMF : failPMF.scaleDamage(failScale, "floor"), pfail);
 
     return {
       pmf: mixture.buildPMF(eps) ?? PMF.delta(0, eps),

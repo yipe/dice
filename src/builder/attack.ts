@@ -20,8 +20,9 @@ import {
   RollBuilder,
   type RerollUpToOptions,
 } from "./roll";
-import type { AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
-import type { ConditionOptions, Grant } from "../turn/effects";
+import type { AttackRange, AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
+import type { ConditionOptions, Lasting } from "../turn/effects";
+import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
 
 type ActionEffect = RollBuilder;
 
@@ -34,17 +35,20 @@ interface RerollPoolSpec {
 /**
  * A condition a builder carries into a turn: when this attack's outcome fires,
  * the grants apply to later attack rolls. Attached by {@link AttackBuilder.onEveryHit}
- * / {@link AttackBuilder.onAnyCrit}; `Turn` reads each entry into one
+ * / {@link AttackBuilder.onAnyCrit} / {@link AttackBuilder.onFirstCrit}; `Turn` reads each entry into one
  * `ConditionSpec` with `of` = this attack's id.
  */
 export interface AttachedCondition {
-  on: "every-hit" | "any-crit";
-  grants: Grant | readonly Grant[];
+  on: "every-hit" | "any-crit" | "first-crit";
+  grants: Lasting | readonly Lasting[];
   gate?: ConditionGate;
 }
 
 /** What gates an attached condition's grants: the same fields `Turn`'s trigger verbs accept. */
-export type ConditionGate = Pick<ConditionOptions, "save" | "chance" | "onSave">;
+export type ConditionGate = Pick<
+  ConditionOptions,
+  "save" | "chance" | "onSave" | "landing" | "dealing" | "target" | "optional"
+>;
 
 /**
  * Resolved-attack PMF cache. `resolve()`/`toPMF()` re-runs the damage convolution + hit/crit/miss mixture
@@ -62,7 +66,13 @@ export function clearAttackCache(): void {
   clearMatchCache();
 }
 
-export class AttackBuilder implements CheckBuilder {
+/** `check` declared `range` again: a rebuilt check (`withCheck`, `under`) keeps the attack's range. */
+function withRange<C extends ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder>(check: C, range: AttackRange | undefined): C {
+  if (range === undefined) return check;
+  return (range === "ranged" ? check.ranged() : check.melee()) as C;
+}
+
+export class AttackBuilder implements CheckBuilder, ContextualSource {
   constructor(
     readonly check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     private readonly hitEffect?: ActionEffect,
@@ -82,8 +92,62 @@ export class AttackBuilder implements CheckBuilder {
     readonly attached: readonly AttachedCondition[] = [],
     // The `rerollDamageUpTo()` budget, applied last to the base payload's dice (hit, and the crit
     // branch, whose dice double while the budget does not), so it never depends on call order.
-    private readonly rerollPool?: RerollPoolSpec
-  ) {}
+    private readonly rerollPool?: RerollPoolSpec,
+    /** The one damage type of the whole row, set by {@link typed}. */
+    readonly damageType?: string
+  ) {
+    if (damageType !== undefined) this.dealt = this.dealtOdds.bind(this);
+  }
+
+  /**
+   * Present only on a {@link typed} attack, so an untyped row cannot say what type it deals
+   * (a `dealing` condition that reads one is `not-an-attack`). See {@link ContextualSource.dealt}.
+   */
+  declare readonly dealt?: (type: string, context: RowContext) => { hit: number; crit: number };
+
+  /**
+   * Declares the row's whole damage — hit, crit, miss and every separate channel — as one
+   * `damageType`, so a turn condition with `dealing` can read it: `dealt(type, context)` is
+   * P(damage > 0) given a hit and given a crit in `context` when `type` matches, else 0. Exact
+   * for a single-typed row only; a row that deals several types needs a hand-written
+   * {@link ContextualSource} whose `dealt` knows its split. Changes no number the attack resolves.
+   * The receiver is unchanged.
+   *
+   * ```ts
+   * const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold");
+   * ```
+   */
+  typed(damageType: string): AttackBuilder {
+    if (typeof damageType !== "string" || damageType.length === 0) {
+      throw new TypeError("typed() takes a damage type name, such as \"cold\".");
+    }
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      this.attached,
+      this.rerollPool,
+      damageType
+    );
+  }
+
+  private dealtOdds(type: string, context: RowContext): { hit: number; crit: number } {
+    if (type !== this.damageType) return { hit: 0, crit: 0 };
+    const pmf = this.under(context);
+    // A modifier can take a roll to 0 or below: none of that deals damage.
+    const nothing = pmf.support().filter((value) => value <= 0);
+    const odds = (outcome: "hit" | "crit"): number => {
+      const landed = pmf.outcomeProbability(outcome);
+      const none = nothing.reduce((sum, value) => sum + pmf.outcomeAt(value, outcome), 0);
+      return landed > 0 ? (landed - none) / landed : 0;
+    };
+    return { hit: odds("hit"), crit: odds("crit") };
+  }
 
   onCrit(val: number): AttackBuilder;
   onCrit(val: string): AttackBuilder;
@@ -107,7 +171,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -135,7 +200,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -150,7 +216,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -171,7 +238,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -210,7 +278,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -244,7 +313,8 @@ export class AttackBuilder implements CheckBuilder {
       minimum,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -286,7 +356,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      spec
+      spec,
+      this.damageType
     );
   }
 
@@ -313,7 +384,8 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       true,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -324,8 +396,13 @@ export class AttackBuilder implements CheckBuilder {
    */
   withCheck(fn: (check: Check) => Check): AttackBuilder {
     const next = fn(this.toCheck());
+    return this.rebuilt(withRange(AttackBuilder.buildCheck(next), this.check.attackConfig.range));
+  }
+
+  /** This attack with another check and every other part unchanged. */
+  private rebuilt(check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder): AttackBuilder {
     return new AttackBuilder(
-      AttackBuilder.buildCheck(next),
+      check,
       this.hitEffect,
       this.critEffect,
       this.missEffect,
@@ -334,8 +411,92 @@ export class AttackBuilder implements CheckBuilder {
       this.minimumDieValue,
       this.halfOnMissFlag,
       this.attached,
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
+  }
+
+  /** A ranged attack, for a turn's condition rules keyed by range (Prone). A row fact; the PMF does not change. */
+  ranged(): AttackBuilder {
+    return this.rebuilt(this.check.ranged());
+  }
+
+  /** A melee attack, for a turn's condition rules keyed by range. A row fact; the PMF does not change. */
+  melee(): AttackBuilder {
+    return this.rebuilt(this.check.melee());
+  }
+
+  /** No grant or condition in a turn changes this attack's roll type: see {@link RollBuilder.pinned}. */
+  pinned(): AttackBuilder {
+    return this.rebuilt(this.check.pinned());
+  }
+
+  /**
+   * What this attack declares to a turn ({@link ContextualSource}). `rollType` is the attack's own
+   * final roll: `elven accuracy` when it rolls three dice itself (`withAdvantage()` and
+   * `threeDiceAdvantage()`). `advantageDice` is 3 under `threeDiceAdvantage()` or an own Elven
+   * Accuracy roll: a turn upgrades an advantage it grants to three dice. `autoHit` is
+   * `alwaysHits()`, `autoCrit` is `alwaysCrits()` (both, for `alwaysHits().alwaysCrits()`).
+   * Builders never declare `kind: "auto"`.
+   */
+  get rowCheck(): RowCheck {
+    const check = this.check;
+    const config = check.attackConfig;
+    const rollType = check.rollType;
+    const autoCrit = check instanceof AlwaysCritBuilder;
+    return {
+      kind: "attack",
+      ...(config.range === undefined ? {} : { range: config.range }),
+      rollType,
+      advantageDice:
+        rollType === "elven accuracy" || ("advantageDice" in config && config.advantageDice === 3) ? 3 : 2,
+      pinned: check.getRootDieConfig()?.pinned === true,
+      autoHit: check instanceof AlwaysHitBuilder || (autoCrit && check.fromAlwaysHit),
+      autoCrit,
+      autoFail: false,
+    };
+  }
+
+  /**
+   * This attack's outcome-labelled PMF (as {@link toPMF}, at `eps`) re-derived in a turn's
+   * `context`. `context.rollType` is taken literally — `advantage` rolls two dice, `elven
+   * accuracy` three — unless the attack is {@link pinned}, which keeps its own roll. `autoHit`
+   * makes it `alwaysHits()`, `critOnHit` makes every hit a crit (`alwaysCrits()`: a natural 1
+   * still misses), each on top of the attack's own. `vulnerable` doubles the hit and crit damage
+   * as a whole roll; a miss (`onMiss`, `halfOnMiss`) is unchanged. `autoFail` and `penaltyDice`
+   * are save facts, and `joined` is ignored: a builder does not pool rider dice into its own roll,
+   * so a turn that joins riders resolves them itself. No `chance` is applied.
+   *
+   * In a context that changes nothing this is `toPMF(eps)`; for a granted advantage,
+   * disadvantage or crit-on-hit it is bit-exact with the 0.16 `withCheck` re-derivation.
+   */
+  under(context: RowContext, eps: number = 0): PMF {
+    const own = this.rowCheck;
+    const rollType = own.pinned ? own.rollType : context.rollType;
+    const autoHit = own.autoHit || context.autoHit;
+    const critOnHit = own.autoCrit || context.critOnHit;
+    let attack: AttackBuilder = this;
+    if (rollType !== own.rollType || autoHit !== own.autoHit || critOnHit !== own.autoCrit) {
+      const range = this.check.attackConfig.range;
+      if (autoHit) {
+        const configs = this.check.getSubRollConfigs();
+        const root = naturalRollIndex(configs);
+        if (root !== -1) configs[root].rollType = rollType;
+        const always = new AlwaysHitBuilder(new RollBuilder(configs), { critThreshold: this.check.critThreshold, range });
+        attack = this.rebuilt(critOnHit ? always.alwaysCrits() : always);
+      } else {
+        // The same re-derivation as `withCheck`, so a granted modifier matches 0.16 bit for bit.
+        const base = this.toCheck();
+        const literal: Pick<Check, "rollType" | "advantageDice"> =
+          rollType === "elven accuracy"
+            ? { rollType: "advantage", advantageDice: 3 }
+            : rollType === "advantage"
+              ? { rollType, advantageDice: 2 }
+              : { rollType, advantageDice: base.advantageDice };
+        attack = this.rebuilt(withRange(AttackBuilder.buildCheck({ ...base, ...literal, critOnHit }), range));
+      }
+    }
+    return context.vulnerable ? attack.resolveScaled(eps, 2).pmf : attack.toPMF(eps);
   }
 
   /**
@@ -349,7 +510,7 @@ export class AttackBuilder implements CheckBuilder {
    * turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean();
    * ```
    */
-  onEveryHit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
+  onEveryHit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
     return this.attach("every-hit", grants, gate);
   }
 
@@ -357,8 +518,16 @@ export class AttackBuilder implements CheckBuilder {
    * Carries a condition into a turn: every time this attack crits, the grants apply
    * to later attack rolls. The receiver is unchanged; the result is a new builder.
    */
-  onAnyCrit(grants: Grant | readonly Grant[], gate?: ConditionGate): AttackBuilder {
+  onAnyCrit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
     return this.attach("any-crit", grants, gate);
+  }
+
+  /**
+   * Carries a condition into a turn: the first time this attack crits, the effects apply.
+   * The receiver is unchanged; the result is a new builder.
+   */
+  onFirstCrit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
+    return this.attach("first-crit", grants, gate);
   }
 
   /**
@@ -368,8 +537,8 @@ export class AttackBuilder implements CheckBuilder {
    * before `Turn` reads the attachment.
    */
   private attach(
-    on: "every-hit" | "any-crit",
-    grants: Grant | readonly Grant[],
+    on: AttachedCondition["on"],
+    grants: Lasting | readonly Lasting[],
     gate?: ConditionGate
   ): AttackBuilder {
     return new AttackBuilder(
@@ -385,7 +554,7 @@ export class AttackBuilder implements CheckBuilder {
         ...this.attached,
         {
           on,
-          grants: Array.isArray(grants) ? [...grants] : grants,
+          grants: Array.isArray(grants) ? [...grants] : (grants as Lasting),
           gate:
             gate === undefined
               ? undefined
@@ -395,7 +564,8 @@ export class AttackBuilder implements CheckBuilder {
                 },
         },
       ],
-      this.rerollPool
+      this.rerollPool,
+      this.damageType
     );
   }
 
@@ -670,6 +840,14 @@ export class AttackBuilder implements CheckBuilder {
 
   /** Resolves the attack into its weighted slices. `eps` defaults to 0, as for {@link toPMF}: no reachable damage value is pruned. */
   resolve(eps: number = 0): AttackResolution {
+    return this.resolveScaled(eps, 1);
+  }
+
+  /**
+   * {@link resolve}, with the hit and crit damage of `pmf` multiplied by `landingScale` as a whole
+   * roll (2: a vulnerable target, see {@link under}). The miss and every other field are unscaled.
+   */
+  private resolveScaled(eps: number, landingScale: 1 | 2): AttackResolution {
     const {
       pHit,
       pCrit,
@@ -749,8 +927,10 @@ export class AttackBuilder implements CheckBuilder {
 
     // Weight the hit/crit/miss PMFs into the final mixture.
     const mix = new Mixture<OutcomeType>(eps);
-    if (phit > 0) mix.add("hit", hitPMF, phit);
-    if (critPMF && pcrit > 0) mix.add("crit", critPMF, pcrit);
+    if (phit > 0) mix.add("hit", landingScale === 1 ? hitPMF : hitPMF.scaleDamage(landingScale, "floor"), phit);
+    if (critPMF && pcrit > 0) {
+      mix.add("crit", landingScale === 1 ? critPMF : critPMF.scaleDamage(landingScale, "floor"), pcrit);
+    }
     if (pmiss > 0) mix.add(missIsDamage ? "missDamage" : "missNone", missPMF, pmiss);
 
     return {
