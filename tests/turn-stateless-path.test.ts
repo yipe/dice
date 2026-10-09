@@ -192,6 +192,7 @@ describe("the stateless path reads what the full walk reads", () => {
 
 describe("a malformed stateless spec fails the same way on both paths", () => {
   const sword = d20.plus(5).ac(15).onHit(d8);
+  const breath = d20.plus(3).dc(14).ability("dex").onSaveFailure(d8);
   const malformed: Record<string, TurnSpec> = {
     "unknown key": { attacks: [{ source: sword, bogus: 1 } as unknown as Attack] },
     "non-string id": { attacks: [{ source: sword, id: 3 } as unknown as Attack] },
@@ -207,6 +208,15 @@ describe("a malformed stateless spec fails the same way on both paths", () => {
     "under returns no PMF": { attacks: [{ rowCheck: sword.rowCheck, under: () => 7 } as unknown as Source] },
     "stateLimit 0": { attacks: [sword], stateLimit: 0 },
     "stateLimit fractional": { attacks: [sword], stateLimit: 1.5 },
+    "a save with an unknown ability": {
+      attacks: [{ id: "breath", source: { rowCheck: { ...breath.rowCheck, ability: "luck" }, under: (context: RowContext) => breath.under(context) } }],
+    },
+    "an unknown ability after a duplicate id": {
+      attacks: [
+        { id: "a", source: { rowCheck: { ...breath.rowCheck, ability: "luck" }, under: (context: RowContext) => breath.under(context) } },
+        { id: "a", source: sword },
+      ],
+    },
     "second error after a valid row": { attacks: [sword, { source: sword, chance: -1 }, { source: sword, id: 3 } as unknown as Attack] },
   };
 

@@ -7,7 +7,7 @@ import { effectSpec, gateFields, isGrant, isTransform, lastingForTurn, substitut
 import type { Draw, EffectSource, FireMode, Step, TurnPlan } from "./plan";
 import { ReaderTally, canonicalCodes, cappedPmf, codeNeeds, readerLedger, EFFECT_NAMES } from "./readers";
 import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./readers";
-import { buildPlan, checkDuplicateIds, checkStateLimit, declaredAttacks, fireMode, grantApplies, isStateless, released } from "./plan";
+import { buildPlan, checkDuplicateIds, checkSaveRowAbility, checkStateLimit, declaredAttacks, fireMode, grantApplies, isStateless, released } from "./plan";
 import { contextOf, rowCheckOf } from "./context";
 import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
 import type {
@@ -179,12 +179,16 @@ interface StatelessRow {
 
 /**
  * The rows of a stateless turn (`isStateless`), validated as `buildPlan` validates them and in
- * the same order: the state limit, each attack in turn, then duplicate ids. A row's d20 is its
- * own (no effect is ever in force): what its source declares, or `flat` for one that declares none.
+ * the same order: the state limit, each attack in turn, duplicate ids, then each save row's
+ * ability. A row's d20 is its own (no effect is ever in force): what its source declares, or
+ * `flat` for one that declares none.
  */
 function statelessRows(spec: TurnSpec, eps: number): StatelessRow[] {
   checkStateLimit(spec.stateLimit);
-  const rows = declaredAttacks(spec, eps).map(({ id, source, chance, pmf, slices }) => {
+  const declared = declaredAttacks(spec, eps);
+  checkDuplicateIds(declared.map((row) => row.id));
+  for (const row of declared) checkSaveRowAbility(row, eps);
+  return declared.map(({ id, source, chance, pmf, slices }) => {
     const check = rowCheckOf(source);
     return {
       id,
@@ -195,8 +199,6 @@ function statelessRows(spec: TurnSpec, eps: number): StatelessRow[] {
       crit: slices === null ? 0 : slices.crit.mass(),
     };
   });
-  checkDuplicateIds(rows.map((row) => row.id));
-  return rows;
 }
 
 /** What a stateless turn's readers list for what it has none of: ids, attempts. */
