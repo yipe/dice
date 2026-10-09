@@ -13,7 +13,7 @@
  *   call fails its test; a fixture call never reached fails the file. A test file with
  *   no entries in the fixture is not a 0.16 test (or never read a `Turn` under 0.16)
  *   and is skipped entirely: nothing is wrapped, recorded or failed. A test listed in
- *   `tests/compat/retired.json` is no longer required (see `loadRetired`).
+ *   `tests/compat/retired.json` is neither required nor compared (see `loadRetired`).
  */
 import { writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -45,6 +45,7 @@ async function install(): Promise<void> {
   const file = relative(ROOT, testPath).split(sep).join("/");
 
   let expected: Record<string, readonly Entry[]> = {};
+  const retired = new Set<string>();
   let sameRuntime = true;
   if (MODE === "check") {
     const { capturedOn, files: fixture } = readFixture();
@@ -52,7 +53,11 @@ async function install(): Promise<void> {
     const inFixture = fixture[file];
     if (inFixture === undefined) return;
     expected = { ...inFixture };
-    for (const [retiredFile, test] of loadRetired(fixture)) if (retiredFile === file) delete expected[test];
+    for (const [retiredFile, test] of loadRetired(fixture)) {
+      if (retiredFile !== file) continue;
+      delete expected[test];
+      retired.add(test);
+    }
   }
 
   // Loaded only when active, so an ordinary `vitest run` evaluates nothing extra.
@@ -66,6 +71,7 @@ async function install(): Promise<void> {
     `${file} > ${JSON.stringify(test)} #${ordinal} ${reader}`;
 
   const compare = (test: string, entry: Entry): void => {
+    if (retired.has(test)) return;
     const want = expected[test]?.[entry.ordinal];
     if (want === undefined) {
       const message = `${where(test, entry.ordinal, entry.reader)}: no fixture entry`;

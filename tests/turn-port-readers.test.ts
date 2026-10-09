@@ -249,6 +249,7 @@ describe("probability readers never walk the joint distribution", () => {
       .onEveryHit(d6, { max: 2, id: "capped" });
     // The joint walk convolves damage in every state; the mass walks never do.
     const convolve = vi.spyOn(PMF.prototype, "convolve");
+    const convolveRaw = vi.spyOn(PMF.prototype, "convolveRaw");
     try {
       for (const id of t.attackIds) {
         t.stepStats(id);
@@ -265,10 +266,12 @@ describe("probability readers never walk the joint distribution", () => {
       }
       expect(t.peakStates).toBeGreaterThan(0);
       expect(convolve).not.toHaveBeenCalled();
+      expect(convolveRaw).not.toHaveBeenCalled();
       t.mean();
-      expect(convolve).toHaveBeenCalled();
+      expect(convolveRaw).toHaveBeenCalled();
     } finally {
       convolve.mockRestore();
+      convolveRaw.mockRestore();
     }
   });
 });
@@ -280,17 +283,20 @@ describe("a probe or a rider is read without damage arithmetic (moved from probe
       .onEveryHit(critOnHit().untilNextAttack(), { chance: 0.5 })
       .observeAnyCrit("crit");
     const convolve = vi.spyOn(PMF.prototype, "convolve");
+    const convolveRaw = vi.spyOn(PMF.prototype, "convolveRaw");
     const add = vi.spyOn(PMF.prototype, "add");
     try {
       const crit = t.fireProbability("crit");
       expect(t.fireProbability("crit")).toBe(crit);
       t.fireProbability("sneak");
       expect(convolve).not.toHaveBeenCalled();
+      expect(convolveRaw).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
       t.mean();
-      expect(convolve).toHaveBeenCalled();
+      expect(convolveRaw).toHaveBeenCalled();
     } finally {
       convolve.mockRestore();
+      convolveRaw.mockRestore();
       add.mockRestore();
     }
   });

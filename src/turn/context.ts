@@ -89,7 +89,11 @@ export function contextOf(check: RowCheck, key: number, penaltyDice: readonly Pe
   };
 }
 
-/** A context as a string: two contexts with the same key roll the same PMF. */
+/**
+ * A context as a string: two contexts with the same key roll the same PMF. `joined` holds
+ * consumer-supplied rider ids, so it is JSON-encoded: a delimiter join would let `["a,b"]` and
+ * `["a", "b"]` share a key.
+ */
 export function contextKey(context: RowContext): string {
   const dice = context.penaltyDice.map((die) => `${die.count}d${die.sides}`).join("+");
   return [
@@ -99,6 +103,6 @@ export function contextKey(context: RowContext): string {
     +context.autoFail,
     +context.vulnerable,
     dice,
-    context.joined.join(","),
+    JSON.stringify(context.joined),
   ].join("|");
 }

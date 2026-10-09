@@ -1230,7 +1230,7 @@ export function buildPlan(
     ...substitutes.flatMap((substitute) => substitute.of ?? []),
   ]);
   const watchedByConditions = new Set((spec.conditions ?? []).flatMap((condition) => condition.of ?? []));
-  const riders: readonly EvaluatedRider[] = placed.map((rider) =>
+  const stepped: readonly EvaluatedRider[] = placed.map((rider) =>
     rider.on === "first-hit" &&
     perSourceOf(rider) === undefined &&
     (wakes ||
@@ -1243,6 +1243,33 @@ export function buildPlan(
       ? { ...rider, perSource: {} }
       : rider
   );
+  // A first-hit rider whose `of` names a folded first-hit rider lands alongside it (a partner,
+  // see `partnersOf` below), on the partner's rows where the partner lands. Only a fold gates a
+  // landing on another payload in the same draw, so such a rider is folded too; a fold deals a
+  // payload, so one whose damage rolls an attack is refused here rather than mis-folded.
+  // Iterated: a rider folded here can be the partner of a later one.
+  const riders: EvaluatedRider[] = [...stepped];
+  const idOf = (rider: EvaluatedRider, index: number): string =>
+    typeof rider.id === "string" ? rider.id : `rider ${index + 1}`;
+  for (let changed = true; changed; ) {
+    changed = false;
+    const folded = new Set(riders.flatMap((rider, index) => (isFirstHitFold(rider) ? [idOf(rider, index)] : [])));
+    riders.forEach((rider, index) => {
+      if (rider.on !== "first-hit" || perSourceOf(rider) !== undefined || !Array.isArray(rider.of)) return;
+      const id = idOf(rider, index);
+      const partner = rider.of.find((entry) => entry !== id && folded.has(entry));
+      if (partner === undefined) return;
+      if (Array.isArray(rider.damage) || sliceSource(toPMF(rider.damage as Damage, eps), rider.damage as Damage, eps) !== null) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" lands alongside "${partner}", so it is dealt with that rider's landing and cannot roll an attack of its own. Give it damage, or watch the attacks directly.`
+        );
+      }
+      riders[index] = { ...rider, perSource: {} };
+      changed = true;
+    });
+  }
 
   // --- attacks -------------------------------------------------------------
   const attackIds: string[] = [];
@@ -1803,13 +1830,14 @@ export function buildPlan(
   // node's id. Per substitute: the source ids it watches.
   // A folded rider named in another rider's `of` is a partner: that rider lands on the partner's
   // rows (those in `where`) only where the partner lands too (Spellfire Adept on a smite).
-  const partnersOf = riders.map((rider) =>
+  const partnersOf = riders.map((rider, self) =>
     !Array.isArray(rider.of)
       ? []
       : (rider.of as readonly string[]).filter((entry) => {
           const index = riderIndexById.get(entry);
-          // A partner lands once: a first-hit rider folded into its sources (a smite).
-          return index !== undefined && isFirstHitFold(riders[index]);
+          // A partner lands once: a first-hit rider folded into its sources (a smite). A rider
+          // naming itself is left to `resolveSources`, which refuses the self-reference.
+          return index !== undefined && index !== self && isFirstHitFold(riders[index]);
         })
   );
   const ownSourcesOf = (rider: EvaluatedRider, index: number): string[] => {
@@ -1840,6 +1868,16 @@ export function buildPlan(
     }
     if (partnersOf[index].length > 0 && rider.on !== "first-hit") {
       fail("unsupported-trigger", riderIds[index], `Rider "${riderIds[index]}" lands alongside a partner, so it lands once: use first-hit.`);
+    }
+    // A fold gates a payload on a partner that lands on its own: a partner that is itself gated
+    // never counts as landed there, so a chain of partners is refused rather than silently never landing.
+    const gated = partnersOf[index].find((partner) => partnersOf[riderIndexById.get(partner) as number].length > 0);
+    if (gated !== undefined) {
+      fail(
+        "unsupported-trigger",
+        riderIds[index],
+        `Rider "${riderIds[index]}" lands alongside "${gated}", which itself lands alongside a partner; name a rider that lands on its own.`
+      );
     }
   });
   const sourceIdsByNode: string[][] = [
@@ -2914,9 +2952,15 @@ export function buildPlan(
     }
   }
   /**
-   * `slice` with the every-hit riders of variant `mask` folded in: every uncapped one, and each
-   * capped one whose bit is set; with the own part and the riders' payloads when any is folded.
+   * `lands` without the payloads a partner opens the row to whose partner is not among them: on a
+   * row a partner opens, a payload lands only where that partner lands too (in the same draw).
    */
+  const alongsidePartners = (lands: HitPayload[]): HitPayload[] => {
+    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
+    return lands.filter(
+      (payload) => payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))
+    );
+  };
   /**
    * The payloads of `sourceId` that land on a draw of `outcome` from variant `mask`: within their
    * cap, on a crit for a crit-only rider, where damage was dealt for a `damage` rider, on a miss only
@@ -2938,23 +2982,20 @@ export function buildPlan(
         !(dealt === false && payload.landing === "damage") &&
         (outcome !== "miss" || (payload.landing === "any" && !payload.critOnly))
     );
-    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
-    return lands.filter(
-      (payload) =>
-        (payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))) &&
-        (!coins || payload.coinBit === 0 || (mask & payload.coinBit) !== 0)
+    return alongsidePartners(lands).filter(
+      (payload) => !coins || payload.coinBit === 0 || (mask & payload.coinBit) !== 0
     );
   };
-  /**
-   * `slice` with the riders that land on it folded in (see {@link activeAt}); with the own part and
-   * the riders' payloads when any is folded.
-   */
   /** Per builder, its re-derivation under each modifier key (see the step's `rederive`). */
   const rederivedBuilders = new Map<unknown, Map<number, { pmf: () => PMF; signature: string }>>();
   /** Per source, its PMF under each context signature (see the step's `rederive`). */
   const pmfsUnder = new Map<unknown, Map<string, PMF>>();
   /** Folds already made: several rows fold the same payload into the same slice. */
   const foldsMade = new WeakMap<PMF, WeakMap<PMF, PMF>>();
+  /**
+   * `slice` with the riders that land on it folded in (see {@link activeAt}); with the own part and
+   * the riders' payloads when any is folded.
+   */
   const fold = (
     sourceId: string,
     outcome: "hit" | "crit" | "miss",
@@ -3222,7 +3263,8 @@ export function buildPlan(
    * `fired` after `sourceId` lands: a first-hit rider with a payload per source is folded into its
    * sources' draws, so it is not a step and marks its fire slot only there. The look-ahead reads
    * the plain variant, which does not carry it, so it applies the slots itself: one that is still
-   * empty is the first landing among that rider's sources.
+   * empty is the first landing among that rider's sources; one a partner opens the row to marks
+   * only where that partner marks too.
    */
   const withFolded = (fired: readonly FireMode[], sourceId: string, draw?: Draw): readonly FireMode[] => {
     // A draw that is no landing marks nothing. A save row's draws are all "hit" and say whether they
@@ -3231,9 +3273,16 @@ export function buildPlan(
       return fired;
     }
     let marked: FireMode[] | null = null;
-    for (const payload of perHitBySource.get(sourceId) ?? []) {
-      if (payload.slot === -1 || (marked ?? fired)[payload.slot] !== null) continue;
-      if (draw?.byKind !== undefined && payload.landing !== "any" && draw.byKind[payload.landing ?? "fail"] !== "hit") continue;
+    const lands = alongsidePartners(
+      (perHitBySource.get(sourceId) ?? []).filter(
+        (payload) =>
+          payload.slot !== -1 &&
+          fired[payload.slot] === null &&
+          (draw?.byKind === undefined || payload.landing === "any" || draw.byKind[payload.landing ?? "fail"] === "hit")
+      )
+    );
+    for (const payload of lands) {
+      if ((marked ?? fired)[payload.slot] !== null) continue;
       marked ??= [...fired];
       marked[payload.slot] = "hit";
     }
@@ -3248,13 +3297,16 @@ export function buildPlan(
   const saveRowDraws = (sourceId: string, mask: number, classes: SaveClasses = classesOf(sourceId)): Draw[] =>
     classes.map((slice, index) => {
       // The riders that apply on this class: every uncapped one, and each capped one whose bit is
-      // set in `mask`, and only where the class lands under the rider's own kind.
-      const active = (perHitBySource.get(sourceId) ?? []).filter(
-        (payload) =>
-          (payload.bit === 0 || (mask & payload.bit) !== 0) &&
-          (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
-          !payload.critOnly &&
-          (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
+      // set in `mask`, only where the class lands under the rider's own kind, and a rider a partner
+      // opens the row to only where that partner lands too (as {@link activeAt} gates it).
+      const active = alongsidePartners(
+        (perHitBySource.get(sourceId) ?? []).filter(
+          (payload) =>
+            (payload.bit === 0 || (mask & payload.bit) !== 0) &&
+            (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
+            !payload.critOnly &&
+            (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
+        )
       );
       let folded = slice;
       const parts: [string, PMF][] = active.map((payload) => [payload.id, payload.hit]);
@@ -3269,7 +3321,9 @@ export function buildPlan(
           (counter, local) =>
             (mask & (1 << local)) !== 0 &&
             !counterCritOnly[counter] &&
-            (counterLanding[counter] === "any" || CLASS_LANDS[index][(counterLanding[counter] as SaveLanding | undefined) ?? "fail"])
+            (counterLanding[counter] === "any" || CLASS_LANDS[index][(counterLanding[counter] as SaveLanding | undefined) ?? "fail"]) &&
+            // A counter of a rider a partner gates here counts only where it landed.
+            (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local))
         ),
         fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
         slice: folded,
