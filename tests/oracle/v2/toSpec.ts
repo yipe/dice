@@ -324,7 +324,12 @@ function saveOf(grant: GrantSpec): { save?: V2Save | readonly V2Save[]; chance?:
   if (grant.chance !== undefined) return { chance: grant.chance }
   const save = grant.save
   if (!save) return {}
-  if (save.contest !== undefined) return { chance: contestLossChance({ attacker: save.contest, defender: save.saveBonus }) }
+  // A contest: the target takes the option it loses least with, as the oracle rolls it.
+  const contest = save.contest
+  if (contest !== undefined) {
+    const losses = [save, ...(save.alternatives ?? [])].map((o) => contestLossChance({ attacker: contest, defender: o.saveBonus }))
+    return { chance: Math.min(...losses) }
+  }
   const options: V2Save[] = [
     { ...(save.ability ? { ability: save.ability } : {}), dc: save.dc, bonus: save.saveBonus },
     ...(save.alternatives ?? []).map((alt) => ({ ability: alt.ability, dc: save.dc, bonus: alt.saveBonus }))

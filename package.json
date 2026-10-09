@@ -72,7 +72,7 @@
   "scripts": {
     "format": "node -r ./config/eslint-ts6-alias.cjs ./node_modules/eslint/bin/eslint.js . --fix",
     "lint": "node -r ./config/eslint-ts6-alias.cjs ./node_modules/eslint/bin/eslint.js .",
-    "typecheck": "tsc -p config/tsconfig.build.json --noEmit",
+    "typecheck": "tsc -p config/tsconfig.build.json --noEmit && tsc -p config/tsconfig.json --noEmit",
     "build": "tsup --config config/tsup.config.ts && yarn types",
     "types": "tsc -p config/tsconfig.build.json --emitDeclarationOnly && node config/postbuild-dts.mjs",
     "test": "vitest run",
@@ -81,7 +81,7 @@
     "compat:check": "COMPAT=check vitest run",
     "oracle:expected": "tsx tests/oracle/v2/expected.ts",
     "prepare": "yarn build",
-    "prepublishOnly": "yarn typecheck && yarn test && yarn build",
+    "prepublishOnly": "yarn typecheck && yarn test && yarn compat:check && yarn build",
     "example": "tsx examples/run.ts",
     "bench": "vitest bench --run"
   },

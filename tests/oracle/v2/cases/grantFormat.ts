@@ -350,6 +350,21 @@ export const shapes: Array<[string, SyntheticTurn]> = [
     }
   ],
   [
+    '2014 grapple: a contest, Athletics or Acrobatics, the target picks the one it loses least with',
+    {
+      attacks: [attack(), attack(), attack()],
+      grants: [
+        {
+          of: [0, 1],
+          trigger: 'hit',
+          save: { ...STRENGTH, contest: 4, alternatives: [{ ability: 'dexterity', saveBonus: 5 }] },
+          cap: 'once',
+          effects: [{ kind: 'advantage', lifetime: 'turn' }]
+        }
+      ]
+    }
+  ],
+  [
     'a choice of abilities under Restrained and Stunned: the target picks the one the state leaves it',
     {
       attacks: [attack(), attack(), attack(), attack()],

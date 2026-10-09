@@ -107,7 +107,19 @@ describe("flags: limits", () => {
       of: [`a${i}`],
       grants: [{ advantage: true as const, until: "next-attack" as const, to: [`a${i + 1}`] }],
     }));
-    expect(Turn.from({ attacks, conditions }).mean()).toBeGreaterThan(41 * sword.mean());
+    // A Markov chain on "the previous attack landed": attack i+1 has advantage with probability q_i, where
+    // q_0 = 0 and q_{i+1} = q_i * L_adv + (1 - q_i) * L_flat (d20 + 5 vs AC 12 lands on 7..20).
+    const landFlat = 0.7;
+    const landAdv = 1 - 0.3 ** 2;
+    const flatMean = sword.mean();
+    const advMean = d20.withAdvantage().plus(5).ac(12).onHit(roll(1, d8).plus(3)).mean();
+    let q = 0;
+    let expected = 0;
+    for (let i = 0; i < 41; i++) {
+      expected += q * advMean + (1 - q) * flatMean;
+      q = q * landAdv + (1 - q) * landFlat;
+    }
+    expect(Turn.from({ attacks, conditions }).mean()).toBeCloseTo(expected, 10);
   });
 
   it("a walk past the turn's stateLimit is too-many-states", () => {
@@ -116,7 +128,12 @@ describe("flags: limits", () => {
       conditions: [{ on: "every-hit" as const, of: ["attack 1"], grants: [{ advantage: true as const, until: "end-of-turn" as const }] }],
       riders: [{ on: "first-hit" as const, damage: roll(1, d4) }],
     };
-    expect(() => Turn.from(spec).mean()).not.toThrow();
+    // Attack 1 lands (0.7) and gives attacks 2 and 3 advantage; the d4 (doubled on a crit) rides the first landing,
+    // which is attack 1, 2 or 3 after 0, 1 or 2 flat misses (no advantage without a landing).
+    const advMean = d20.withAdvantage().plus(5).ac(12).onHit(roll(1, d8).plus(3)).mean();
+    const attacksMean = sword.mean() + 0.7 * 2 * advMean + 0.3 * 2 * sword.mean();
+    const riderMean = (0.05 * 5 + 0.65 * 2.5) * (1 + 0.3 + 0.3 ** 2);
+    expect(Turn.from(spec).mean()).toBeCloseTo(attacksMean + riderMean, 12);
     expect(codeOf(() => Turn.from({ ...spec, stateLimit: 1 }).mean())).toBe("too-many-states");
     expect(() => Turn.from({ ...spec, stateLimit: 0 })).toThrow(RangeError);
   });

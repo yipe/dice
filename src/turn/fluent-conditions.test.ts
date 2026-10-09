@@ -153,7 +153,7 @@ describe("effects", () => {
 
   it("types: a lifetime is required, untilDamaged is a condition's, vulnerability ends on the next hit", () => {
     // Compiled, never run: the checks are the `@ts-expect-error`s.
-    const unrun = () => {
+    void (() => {
       // @ts-expect-error — a condition without a lifetime is not an effect a trigger takes.
       turn([sword]).onFirstHit(prone()).mean();
       // @ts-expect-error — nor is a save modifier without one.
@@ -168,8 +168,7 @@ describe("effects", () => {
       prone().untilEndOfTurn().to("attack 2");
       // @ts-expect-error — atStart takes no damage.
       turn([sword]).atStart(d6).mean();
-    };
-    expect(unrun).toBeTypeOf("function");
+    });
     expectTypeOf(prone().untilDamaged()).toEqualTypeOf<Lasting>();
   });
 });

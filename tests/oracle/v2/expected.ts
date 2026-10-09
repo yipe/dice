@@ -3,10 +3,11 @@
  * `tests/oracle/v2/expected/<family>.json`. Deterministic: keys in a fixed order, PMFs sorted by value, every
  * probability as the 16 hex digits of its float64 bits (`bitsOf`), so a second run is byte-identical.
  *
- * Per case: the turn's `mean` (the joint PMF is left out: the readers under test are marginals); per row id (`row:<source>`) its marginal `pmf`, its d20 roll type odds
+ * Per case: `synthetic`, a hash of the oracle turn it was computed from (so a stale file fails the gate), the turn's `mean` (the joint PMF is left out: the readers under test are marginals); per row id (`row:<source>`) its marginal `pmf`, its d20 roll type odds
  * and every effect's odds with their sources (the oracle's `starting` / `grant:<i>` keys); per rider id its `pmf` and
  * `landing` (P(at least one landing)).
  */
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,6 +40,7 @@ export interface ExpectedRow {
 }
 
 export interface ExpectedCase {
+  synthetic: string
   mean: string
   rows: Record<string, ExpectedRow>
   riders: Record<string, { pmf: ExpectedPmf; landing: string }>
@@ -66,6 +68,20 @@ function keptGrants(turn: SyntheticTurn): number[] {
   return best!.kept
 }
 
+/**
+ * SHA-1 of the oracle turn's JSON: ties an expected entry to the exact turn it was computed from. A per-row
+ * payload function (a rider's `damage`) is recorded as its value on every row.
+ */
+export function syntheticHash(turn: SyntheticTurn): string {
+  const rows = turn.attacks.length + (turn.saves?.length ?? 0)
+  const json = JSON.stringify(turn, (_key, value: unknown) => {
+    if (typeof value === 'function') return Array.from({ length: rows }, (_, row) => (value as (row: number) => unknown)(row))
+    if (value instanceof Map || value instanceof Set) throw new TypeError('oracle:expected: a synthetic turn must be plain data')
+    return value
+  })
+  return createHash('sha1').update(json).digest('hex')
+}
+
 export function expectedOf(turn: SyntheticTurn): ExpectedCase {
   const result = enumerateSyntheticTurn(turn, { detail: true })
   const detail = result.detail!
@@ -73,6 +89,7 @@ export function expectedOf(turn: SyntheticTurn): ExpectedCase {
   const kept = keptGrants(turn)
   const sourceKey = (key: string): string => (key.startsWith('grant:') ? `grant:${kept[Number(key.slice(6))]}` : key)
   return {
+    synthetic: syntheticHash(turn),
     mean: bitsOf(result.mean),
     rows: sortedRecord(
       result.sources.map((pmf, k): [string, ExpectedRow] => {

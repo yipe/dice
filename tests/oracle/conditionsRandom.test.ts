@@ -4,7 +4,8 @@
  * rebuild the same turn on another run or machine.
  */
 import { describe, expect, it } from 'vitest'
-import { generator, randomFormatTurn, randomTurn } from './conditionsRandom'
+import { generator, randomCurseTurn, randomFormatTurn, randomTurn } from './conditionsRandom'
+import { syntheticHash } from './v2/expected'
 
 describe('the seeded generators', () => {
   it('two generators with the same seed give the same sequence, and another seed gives another', () => {
@@ -18,8 +19,12 @@ describe('the seeded generators', () => {
 
   it.each([
     ['randomTurn', randomTurn],
-    ['randomFormatTurn', randomFormatTurn]
-  ])('%s rebuilds the same turn from a seed', (_name, build) => {
-    for (const seed of [1000, 7000, 7050]) expect(build(seed)).toEqual(build(seed))
+    ['randomFormatTurn', randomFormatTurn],
+    ['randomCurseTurn', randomCurseTurn]
+  ])('%s rebuilds the same turn from a seed, and another seed gives another', (_name, build) => {
+    // Hashed: a per-row payload function compares by its value on every row, not by identity.
+    const turnOf = (seed: number): string => syntheticHash(build(seed))
+    for (const seed of [1000, 7000, 7050]) expect(turnOf(seed)).toBe(turnOf(seed))
+    expect(turnOf(1000)).not.toBe(turnOf(1001))
   })
 })

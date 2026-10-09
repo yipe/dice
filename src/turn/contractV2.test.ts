@@ -142,12 +142,11 @@ describe("TurnSpec v2 types", () => {
 
   it("requires a lifetime on every effect", () => {
     // @ts-expect-error: a condition effect without `until`
-    const condition: EffectSpec = { condition: "prone", rule: RULES.prone };
+    void ({ condition: "prone", rule: RULES.prone } satisfies EffectSpec);
     // @ts-expect-error: a vulnerability without `until`
-    const vulnerability: EffectSpec = { vulnerability: true };
+    void ({ vulnerability: true } satisfies EffectSpec);
     // @ts-expect-error: `until-damaged` is for conditions only
-    const savePenalty: EffectSpec = { savePenalty: { count: 1, sides: 4 }, until: "until-damaged" };
-    expect([condition, vulnerability, savePenalty]).toHaveLength(3);
+    void ({ savePenalty: { count: 1, sides: 4 }, until: "until-damaged" } satisfies EffectSpec);
   });
 
 });
