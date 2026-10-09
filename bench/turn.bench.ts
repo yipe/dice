@@ -6,7 +6,8 @@
 import { bench, describe } from "vitest";
 import { advantage, d20, d4, d6, d8, roll, savePenalty, turn, vulnerability, type Turn } from "../src/builder";
 import { contestLossChance, prone, restrained, stunned, unconscious } from "../src/dnd5e";
-import { Turn as TurnClass } from "../src/turn/index";
+import { Turn as TurnClass, type RowCheck, type RowContext, type Source, type TurnSpec } from "../src/turn/index";
+import type { PMF } from "../src/pmf/pmf";
 import { FAMILIES } from "../tests/oracle/v2/cases/index";
 
 const ids = (t: Turn): string[] => [...t.attackIds, ...t.riderIds];
@@ -108,6 +109,38 @@ describe("12-row sweep (21 ACs)", () => {
   });
   bench("12-row pmf ×21 AC", () => {
     for (const ac of ACS) readPmf(() => base.vsAC(ac));
+  });
+});
+
+// (d) dpr's hot loop: a turn with no conditions and no riders, built from a fresh spec per AC
+// (as a consumer does) and read like dpr reads it: every marginal, every attack's stepStats.
+// Five attacks, two with a `chance` below 1; the same rows as a bare `ContextualSource` too,
+// since that is how dpr hands its rows over.
+const statelessRows = (ac: number): { source: Source; chance?: number }[] => {
+  const hit = d20.plus(8).ac(ac).onHit(d8.plus(4));
+  const off = d20.plus(8).ac(ac).onHit(d6.plus(2));
+  return [{ source: hit }, { source: hit }, { source: off, chance: 0.6 }, { source: hit, chance: 0.5 }, { source: off }];
+};
+const contextual = (row: { source: Source; chance?: number }): { source: Source; chance?: number } => {
+  const builder = row.source as { rowCheck: RowCheck; under(context: RowContext, eps?: number): PMF };
+  return { ...row, source: { rowCheck: builder.rowCheck, under: (context) => builder.under(context) } };
+};
+const statelessSpecs = ACS.map((ac) => ({ attacks: statelessRows(ac).map((row, i) => ({ id: `r${i}`, ...row })) }));
+const contextualSpecs = statelessSpecs.map((spec) => ({ attacks: spec.attacks.map(contextual) }));
+const readLikeDpr = (spec: TurnSpec): void => {
+  const t = TurnClass.from(spec);
+  for (const id of t.attackIds) {
+    t.marginal(id);
+    t.stepStats(id);
+  }
+};
+
+describe("stateless 5-row sweep (21 ACs)", () => {
+  bench("stateless builders: Turn.from + marginal + stepStats ×21 AC", () => {
+    for (const spec of statelessSpecs) readLikeDpr(spec);
+  });
+  bench("stateless ContextualSource: Turn.from + marginal + stepStats ×21 AC", () => {
+    for (const spec of contextualSpecs) readLikeDpr(spec);
   });
 });
 
