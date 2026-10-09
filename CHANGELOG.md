@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A partner lands only where its partner lands.** A plain first-hit rider whose `of` named a
+  folded first-hit rider (a partner) was a step of its own and fired on the first landing among the
+  partner's rows, ignoring the partner: with `where` on a subset of the partner's rows it fired on
+  every hit of that subset, and over a save row it fired on a passed save too. Such a rider is now
+  folded alongside its partner, so each draw gates it on the partner landing there, on attack rows
+  and save rows alike. A partner that rolls an attack of its own, or a partner of a partner, is
+  `unsupported-trigger` instead of silently wrong; a fold naming itself is `self-reference`.
+- `onFirstHit(transform, { where, joins })` is `unsupported-trigger`, like the other options a
+  transform does not take; they were silently dropped.
+- `parse()` ignores every whitespace character (a tab or newline threw).
+- `DiceQuery.toCDFSeries()`/`toCCDFSeries()` and `PMF.denseSupport()` no longer spread the support
+  into `Math.min`/`Math.max`, which overflows the stack on a wide distribution.
+- A row context's cache key JSON-encodes the rider ids it joins, so `["a,b"]` and `["a", "b"]`
+  cannot share a key.
+
+### Changed
+
+- **Faster convolution.** `PMF.convolve` accumulates integer-valued operands in flat typed arrays,
+  the fingerprint is built in one pass with memoized label quoting, and `add()` merges an unscaled
+  branch without copying it first. Every sum is added in the same order as before, so every result
+  is bit for bit the same (`tests/convolve-determinism.test.ts` pins the dense path to the map
+  walk). `power()` and `convolveMany()` run about twice as fast.
+- **The joint walk reads no cache.** `Turn.pmf` convolves each running total through the new
+  `PMF.convolveRaw` (raw, uncached: no fingerprint, nothing stored or frozen), which is about 2.5×
+  faster on a 12-attack turn. A cache hit could hand the walk a result an equal-content operand in
+  another map order had computed, a few ulps apart, so `mean()` of a turn no longer depends on what
+  was convolved before it; two 0.16 fixture tests whose last bits came from such hits are retired
+  (`tests/compat/retired.json`).
+- `yarn bench:scenarios` runs a cold-cache scenario benchmark (`bench/scenarios.ts`) that prints a
+  content fingerprint per scenario, so a performance change can be checked bit for bit.
+- Dead code removed: the parser's unused `Dice.ge`/`divide`/`and` and the write-only
+  `privateData.except`; `DiceQuery`'s two Poisson-binomial DPs are one helper.
+
 ## [0.17.0] - 2026-10-08
 
 ### Added

@@ -6,5 +6,13 @@
   {
     "key": "src/turn/probes.test.ts > a probe is read from a walk that carries no damage > reading a probe does no damage arithmetic; reading anything else still does",
     "reason": "0.17: every probability reader reads the mass walk, so reading a rider no longer convolves; the reworded test is in tests/turn-port-readers.test.ts"
+  },
+  {
+    "key": "src/turn/save-landing.test.ts > a rider over a save row, by landing kind > the first landing decides the mode: an attack's crit doubles the rider's dice, a save's landing does not",
+    "reason": "After 0.17.0: the joint walk no longer reads the convolution cache (PMF.convolveRaw). The 0.16 value of its second mean() was a cache hit on an entry an earlier test had stored from equal-content operands in another map order, whose mass() differs in the last bit (a cold cache gives the new value on 0.16 too); the walk now computes from its own operands and the mean moves by 4 ulps."
+  },
+  {
+    "key": "src/turn/substitute.test.ts > keepBestDamage().ifBelow() — hold semantics (R25, O27) > ifBelow(1 (only attack 2, the last opportunity, spends))",
+    "reason": "After 0.17.0: as above; its mean() moves by 3 ulps once the joint walk stops reading the convolution cache."
   }
 ]

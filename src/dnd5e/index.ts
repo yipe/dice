@@ -33,6 +33,7 @@ export const RULES: Readonly<
     save: { strength: ["autoFail"], dexterity: ["autoFail"] },
   },
   unconscious: {
+    // An unconscious creature drops prone: a ranged attack's advantage and prone's disadvantage cancel.
     attack: { melee: ["advantage", "critOnHit"], ranged: ["advantage", "disadvantage"] },
     save: { strength: ["autoFail"], dexterity: ["autoFail"] },
     onEnd: { condition: "prone", rule: proneRule },

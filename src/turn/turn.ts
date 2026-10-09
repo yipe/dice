@@ -182,7 +182,8 @@ function pmfLedger(eps: number): Ledger<PMF> {
     mass: (damage) => damage.mass(),
     add: (a, b) => a.add(b),
     scale: (damage, factor) => damage.scaleMass(factor),
-    convolve: (damage, slice) => damage.convolve(slice, eps, true),
+    // Uncached: a running total is convolved once and never seen again.
+    convolve: (damage, slice) => damage.convolveRaw(slice, eps),
   };
 }
 
@@ -202,11 +203,11 @@ function marginalLedger(id: string, eps: number): Ledger<PMF> {
   return {
     ...pmfLedger(eps),
     convolve: (damage, slice, step, draw) => {
-      if (draw === undefined) return step.id === id ? damage.convolve(slice, eps, true) : damage;
-      if (step.id === id) return damage.convolve(draw.own ?? slice, eps, true);
+      if (draw === undefined) return step.id === id ? damage.convolveRaw(slice, eps) : damage;
+      if (step.id === id) return damage.convolveRaw(draw.own ?? slice, eps);
       const payload = draw.riders?.find(([rider]) => rider === id)?.[1];
       const scaled = damage.scaleMass(slice.mass());
-      return payload === undefined ? scaled : scaled.convolve(payload, eps, true);
+      return payload === undefined ? scaled : scaled.convolveRaw(payload, eps);
     },
   };
 }
@@ -642,7 +643,7 @@ export class Turn {
     if (options.perSource !== undefined) {
       throw new Error("A transform rewrites the attack's own payload, so it has no payload per source.");
     }
-    const ignored = (["happens", "dealing", "optional"] as const).find((field) => options[field] !== undefined);
+    const ignored = (["happens", "dealing", "optional", "where", "joins"] as const).find((field) => options[field] !== undefined);
     if (ignored !== undefined) {
       throw new TurnSpecError(
         "unsupported-trigger",

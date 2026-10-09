@@ -38,11 +38,11 @@ export function clearParserCache(): void {
 /**
  * Parse a dice expression into a PMF.
  *
- * - Expression is case-insensitive and ignores spaces.
+ * - Expression is case-insensitive and ignores whitespace.
  */
 export function parse(expression: string, n: number = 0): PMF {
   // Check cache first if enabled
-  const cleaned = expression.replace(/ /g, "").toLowerCase();
+  const cleaned = expression.replace(/\s/g, "").toLowerCase();
 
   if (getCachingEnabled()) {
     const cacheKey = `${cleaned}:${n}`;
@@ -843,7 +843,6 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
     result.combineInPlace(face.normalize(((exact ? common : 1) * count) / face.total()));
   }
 
-  result.privateData.except = {};
   // `1d20` is the die itself, and a keep of one of N rolls of it (`2kh1d20` advantage, `2kl1(1d20)`
   // disadvantage, `3kh1(1d20)` elven accuracy) is one kept natural roll, like `d20 > d20`: a crit
   // is read from either. Any other count or keep has no single natural roll.
@@ -863,7 +862,7 @@ function multiplyDiceByDice(d1: Dice | number, d2: Dice | number): Dice {
 /** A repeat count is a whole number of copies, 0 included (no dice: the point mass at 0). */
 function assertRepeatCount(n: number): void {
   if (!Number.isInteger(n) || n < 0) {
-    throw new DiceParseError(`A repeat count must be a whole number of 0 or more; this one can be ${n}`);
+    throw new DiceParseError(`A repeat count must be a whole number of 0 or more; this one is ${n}`);
   }
   if (n > MAX_DICE_COUNT) {
     throw new DiceParseError(

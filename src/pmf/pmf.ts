@@ -24,6 +24,32 @@ export const pmfCache = new LRUCache<string, PMF>(1000, sharedPMFCacheOptions);
 const QUANTILE_RELATIVE_SLACK = 1e-12;
 
 /**
+ * Widest integer support a convolution accumulates in flat arrays, and the most cells (one per
+ * damage value per label, `p` included) those arrays may hold; past either, it takes the map
+ * walk. 2^22 cells is 32 MB of floats plus the order and touched arrays beside them.
+ */
+const MAX_DENSE_WIDTH = 1 << 20;
+const MAX_DENSE_CELLS = 1 << 22;
+
+/** A PMF's bins as flat arrays, for {@link PMF.convolve}; see `PMF.binTable`. */
+interface BinTable {
+  /** Per bin, in `support()` order. */
+  p: Float64Array;
+  hasAttr: Uint8Array;
+  /** Bin `i`'s labels are entries `countStart[i]` up to `countStart[i + 1]` of `countLabel`/`countValue`. */
+  countStart: Int32Array;
+  /** Indexes into `countLabels`. */
+  countLabel: Int32Array;
+  countValue: Float64Array;
+  attrStart: Int32Array;
+  attrLabel: Int32Array;
+  attrValue: Float64Array;
+  /** The distinct labels, in order of first appearance. */
+  countLabels: readonly string[];
+  attrLabels: readonly string[];
+}
+
+/**
  * The map of a frozen PMF: a copy of the map it was built with that reads like any `Map` but whose
  * `set`, `delete` and `clear` throw a `TypeError`, so a PMF shared through a cache cannot be
  * changed through it. Only frozen PMFs pay for the copy; the unfrozen hot paths keep their own map.
@@ -63,6 +89,30 @@ function hashText(text: string): string {
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+
+/** JSON-quoted label keys, memoized: a fingerprint quotes the same few labels on every bin. */
+const quotedLabels = new Map<string, string>();
+
+/**
+ * A bin's label map as fingerprint text: `"label":value` per label, sorted by label, comma
+ * separated; `""` for an absent map.
+ */
+function labelText(m: OutcomeLabelMap | undefined): string {
+  if (m === undefined) return "";
+  const keys = Object.keys(m);
+  if (keys.length > 1) keys.sort();
+  let text = "";
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    let quoted = quotedLabels.get(key);
+    if (quoted === undefined) {
+      quoted = JSON.stringify(key);
+      if (quotedLabels.size < 1024) quotedLabels.set(key, quoted);
+    }
+    text += `${i === 0 ? "" : ","}${quoted}:${m[key]}`;
+  }
+  return text;
 }
 
 /**
@@ -107,6 +157,7 @@ export class PMF {
   private _variance?: number;
   private _stdev?: number;
   private _fingerprint?: string;
+  private _binTable?: BinTable;
   private _contentId?: string;
   private readonly _identifier?: string;
   private _cumulative?: { values: number[]; below: number[]; above: number[] };
@@ -844,11 +895,8 @@ export class PMF {
     }
 
     for (const [damageValue, probabilityBin] of branch.map) {
-      PMF.mergeInto(
-        resultMap,
-        damageValue,
-        PMF.scaleBin(probabilityBin, probability)
-      );
+      // `x * 1` is `x`: an unscaled branch merges its bins as they are (`mergeInto` copies a new one).
+      PMF.mergeInto(resultMap, damageValue, probability === 1 ? probabilityBin : PMF.scaleBin(probabilityBin, probability));
     }
 
     return new PMF(resultMap, this.epsilon, false);
@@ -1049,31 +1097,55 @@ export class PMF {
    */
   fingerprint(): string {
     if (this._fingerprint === undefined) {
-      const labels = (m: OutcomeLabelMap | undefined): string =>
-        m === undefined
-          ? ""
-          : Object.keys(m)
-              .sort()
-              .map((k) => `${JSON.stringify(k)}:${m[k]}`)
-              .join(",");
-      const bins = [...this.map.entries()].sort((a, b) => a[0] - b[0]);
-      const parts: string[] = [];
-      for (const [damageValue, bin] of bins) {
-        parts.push(`${damageValue}:${bin.p}[${labels(bin.count)}]{${labels(bin.attr)}}`);
+      const damages = this.support();
+      let text = this.normalized ? "1|" : "0|";
+      for (let i = 0; i < damages.length; i++) {
+        if (i > 0) text += ";";
+        text += PMF.binSegment(damages[i], this.map.get(damages[i]) as Bin);
       }
-      this._fingerprint = `${this.normalized ? 1 : 0}|${parts.join(";")}`;
+      this._fingerprint = text;
     }
     return this._fingerprint;
+  }
+
+  /** One bin's part of the {@link fingerprint}: `damage:p[count labels]{attr labels}`. */
+  private static binSegment(damage: number, bin: Bin): string {
+    return `${damage}:${bin.p}[${labelText(bin.count)}]{${labelText(bin.attr)}}`;
+  }
+
+  /**
+   * Whether `A`'s {@link fingerprint} sorts at or before `B`'s, as `A.fingerprint() <=
+   * B.fingerprint()` would say, reading no further than the first bin that differs: the operand
+   * order of a convolve whose operands are one-off, so no fingerprint is built for them.
+   */
+  private static contentAtOrBefore(A: PMF, B: PMF): boolean {
+    if (A._fingerprint !== undefined && B._fingerprint !== undefined) return A._fingerprint <= B._fingerprint;
+    if (A.normalized !== B.normalized) return !A.normalized;
+    const a = A.support();
+    const b = B.support();
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      const x = PMF.binSegment(a[i], A.map.get(a[i]) as Bin);
+      const y = PMF.binSegment(b[i], B.map.get(b[i]) as Bin);
+      if (x === y) continue;
+      // The full strings go on with ";" and the next bin, or end here; comparing the segments
+      // with that next character appended is comparing the full strings.
+      return x + (i + 1 < a.length ? ";" : "") <= y + (i + 1 < b.length ? ";" : "");
+    }
+    return a.length <= b.length;
   }
 
   /**
    * The distribution of the sum of this PMF and `other`. The operands are ordered by
    * {@link fingerprint} (their content) and each is walked in ascending damage order, so the
-   * result does not depend on which PMF was created first, on which operand is `this`, on how
-   * either map was built, or on what the cache holds: a float sum depends on the order its terms
-   * are added in, and `a.convolve(b)` and `b.convolve(a)` add the same terms in the same order.
-   * The one map-order dependence left is upstream of the walk: a non-raw convolve first
-   * normalizes an operand whose mass is not 1, and `mass()` adds in map order.
+   * result does not depend on which PMF was created first, on which operand is `this` or on how
+   * either map was built: a float sum depends on the order its terms are added in, and
+   * `a.convolve(b)` and `b.convolve(a)` add the same terms in the same order. The map-order
+   * dependence left is in `mass()`, which adds in map order: a non-raw convolve first normalizes
+   * an operand whose mass is not 1, and the mass invariant below rescales the result when the
+   * operands' masses do not multiply out. So a cache hit, keyed on content alone, can hand back
+   * a result an equal-content operand in another map order computed, a few ulps apart; a walk
+   * that wants its own operands' bits every time uses {@link convolveRaw}.
    */
   convolve(other: PMF, eps?: number, raw = false): PMF {
     const epsilon = eps ?? this.epsilon;
@@ -1089,17 +1161,246 @@ export class PMF {
     const cached = pmfCache.get(cacheKey);
     if (cached) return cached;
 
-    // Both operands are walked in ascending damage order (`support()`, memoized): the terms of a
-    // float sum are added in an order that depends on content alone, not on how a map was built.
-    // Accumulate directly into each destination bin instead of building a
-    // temporary Bin per (a,b) pair and merging it. The probability channel
-    // (`dest.p += ap*bp`) accumulates in the same order as before, so it is
-    // bit-identical; only the per-label `count`/`attr` sums re-associate, which
-    // shifts them by at most a few ULP (far below the eps pruning threshold).
-    // A bin's labels are listed once, outside the pair loop, as a key array and a value array:
-    // enumerating the keys of a (frozen, cached) bin per pair costs more than the arithmetic, and
-    // an indexed loop over two arrays costs less than destructuring an entry per label. The sums
-    // are the same, in the same order.
+    const result = PMF.convolveOrdered(A, B, epsilon, raw);
+    pmfCache.set(cacheKey, result);
+    return result;
+  }
+
+  /**
+   * `this ⊛ other` without renormalizing (`convolve` with `raw`), bypassing the shared cache:
+   * the operands are ordered as {@link convolve} orders them and every sum is added in the same
+   * order, so the result is the same bit for bit, but no fingerprint is built and nothing is
+   * stored or frozen. For a walk whose running totals are each convolved once and never again.
+   */
+  convolveRaw(other: PMF, eps?: number): PMF {
+    const epsilon = eps ?? this.epsilon;
+    const [A, B] = PMF.contentAtOrBefore(this, other) ? [this, other] : [other, this];
+    return PMF.convolveOrdered(A, B, epsilon, true);
+  }
+
+  /** `A ⊛ B` for operands already in content order, with the mass invariant enforced. */
+  private static convolveOrdered(A: PMF, B: PMF, epsilon: number, raw: boolean): PMF {
+    let result = new PMF(PMF.convolveBins(A, B), epsilon, !raw);
+
+    // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
+    const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
+    const mGot = result.mass();
+    // Guard mGot !== 0: a zero-mass operand convolves to the zero measure
+    // (mass 0). Without this guard the non-raw path would scaleMass(mExp/0) =
+    // scaleMass(Infinity), poisoning every bin to 0*Infinity = NaN.
+    if (mExp !== 0 && mGot !== 0 && Math.abs(mGot - mExp) > epsilon) {
+      result = result.scaleMass(mExp / mGot);
+    }
+    if (!raw && mGot !== 0 && Math.abs(result.mass() - 1) > epsilon)
+      result = result.normalize();
+    return result;
+  }
+
+  /**
+   * The bins of `A ⊛ B`. Both operands are walked in ascending damage order (`support()`,
+   * memoized), so the terms of every float sum are added in an order that depends on content
+   * alone, not on how a map was built: for each A bin, each B bin; within a pair, A's labels
+   * then B's. The result map lists damage values in the order the walk first reaches them.
+   *
+   * Integer-valued operands accumulate in flat typed arrays indexed by `damage - lo` and by
+   * label slot, which is what makes a convolution cheap; any other support takes the map-and-
+   * object walk below, with the same sums in the same order.
+   */
+  private static convolveBins(A: PMF, B: PMF): Map<number, Bin> {
+    const aDamages = A.support();
+    const bDamages = B.support();
+    if (aDamages.length === 0 || bDamages.length === 0) return new Map();
+    const lo = aDamages[0] + bDamages[0];
+    const width = aDamages[aDamages.length - 1] + bDamages[bDamages.length - 1] - lo + 1;
+    // Flat arrays cost `width` cells per label; the map walk costs a pair per label. A support
+    // whose range is wide but sparse (`{0, 1000000}`) is cheaper on the map walk.
+    const dense =
+      Number.isInteger(width) &&
+      width <= MAX_DENSE_WIDTH &&
+      width <= 4 * aDamages.length * bDamages.length &&
+      aDamages.every(Number.isInteger) &&
+      bDamages.every(Number.isInteger);
+    if (!dense) return PMF.convolveBinsSparse(A, B);
+
+    // Label slots: `count` labels then `attr` labels, each in order of first appearance (A's
+    // then B's); each table's local label index maps to a slot.
+    const a = A.binTable();
+    const b = B.binTable();
+    const countLabels: string[] = [];
+    const attrLabels: string[] = [];
+    const slotOf = (labels: string[], own: readonly string[]): Int32Array =>
+      Int32Array.from(own, (label) => {
+        const known = labels.indexOf(label);
+        return known === -1 ? labels.push(label) - 1 : known;
+      });
+    const aCountSlot = slotOf(countLabels, a.countLabels);
+    const bCountSlot = slotOf(countLabels, b.countLabels);
+    const aAttrSlot = slotOf(attrLabels, a.attrLabels);
+    const bAttrSlot = slotOf(attrLabels, b.attrLabels);
+    const L = countLabels.length;
+    const M = attrLabels.length;
+    // The flat arrays hold `width` cells per label (plus `p`): a wide support with many labels
+    // is the map walk's too.
+    if (width * (L + M + 1) > MAX_DENSE_CELLS) return PMF.convolveBinsSparse(A, B);
+
+    const p = new Float64Array(width);
+    const count = new Float64Array(width * L);
+    const attr = new Float64Array(width * M);
+    // Per damage: whether reached, in which order (the map's), whether `attr` was touched, and
+    // its count/attr labels in the order a pair first carried each (a label is set, at 0 too,
+    // once a pair carries it): the key order of the bin's objects, which readers walk.
+    const seen = new Uint8Array(width);
+    const order: number[] = [];
+    const attrSeen = new Uint8Array(width);
+    const countOrder = new Int32Array(width * L);
+    const countLabelsAt = new Int32Array(width);
+    const attrOrder = new Int32Array(width * M);
+    const attrLabelsAt = new Int32Array(width);
+    const countTouched = new Uint8Array(width * L);
+    const attrTouched = new Uint8Array(width * M);
+
+    for (let i = 0; i < aDamages.length; i++) {
+      const aVal = aDamages[i];
+      const ap = a.p[i];
+      const aCountFrom = a.countStart[i];
+      const aCountTo = a.countStart[i + 1];
+      const aHasAttr = a.hasAttr[i] === 1;
+      const aAttrFrom = a.attrStart[i];
+      const aAttrTo = a.attrStart[i + 1];
+      for (let j = 0; j < bDamages.length; j++) {
+        const bp = b.p[j];
+        const slot = aVal + bDamages[j] - lo;
+        if (seen[slot] === 0) {
+          seen[slot] = 1;
+          order.push(slot);
+        }
+        p[slot] += ap * bp;
+
+        const base = slot * L;
+        for (let k = aCountFrom; k < aCountTo; k++) {
+          const label = aCountSlot[a.countLabel[k]];
+          const at = base + label;
+          if (countTouched[at] === 0) {
+            countTouched[at] = 1;
+            countOrder[base + countLabelsAt[slot]++] = label;
+          }
+          count[at] = (count[at] || 0) + a.countValue[k] * bp;
+        }
+        for (let k = b.countStart[j], to = b.countStart[j + 1]; k < to; k++) {
+          const label = bCountSlot[b.countLabel[k]];
+          const at = base + label;
+          if (countTouched[at] === 0) {
+            countTouched[at] = 1;
+            countOrder[base + countLabelsAt[slot]++] = label;
+          }
+          count[at] = (count[at] || 0) + b.countValue[k] * ap;
+        }
+
+        if (aHasAttr || b.hasAttr[j] === 1) {
+          attrSeen[slot] = 1;
+          const attrBase = slot * M;
+          for (let k = aAttrFrom; k < aAttrTo; k++) {
+            const label = aAttrSlot[a.attrLabel[k]];
+            const at = attrBase + label;
+            if (attrTouched[at] === 0) {
+              attrTouched[at] = 1;
+              attrOrder[attrBase + attrLabelsAt[slot]++] = label;
+            }
+            attr[at] = (attr[at] || 0) + a.attrValue[k] * bp;
+          }
+          for (let k = b.attrStart[j], to = b.attrStart[j + 1]; k < to; k++) {
+            const label = bAttrSlot[b.attrLabel[k]];
+            const at = attrBase + label;
+            if (attrTouched[at] === 0) {
+              attrTouched[at] = 1;
+              attrOrder[attrBase + attrLabelsAt[slot]++] = label;
+            }
+            attr[at] = (attr[at] || 0) + b.attrValue[k] * ap;
+          }
+        }
+      }
+    }
+
+    const combinedMap = new Map<number, Bin>();
+    for (const slot of order) {
+      const bin: Bin = { p: p[slot], count: {} };
+      const base = slot * L;
+      for (let k = 0; k < countLabelsAt[slot]; k++) {
+        const label = countOrder[base + k];
+        bin.count[countLabels[label]] = count[base + label];
+      }
+      if (attrSeen[slot]) {
+        const labels: OutcomeLabelMap = {};
+        const attrBase = slot * M;
+        for (let k = 0; k < attrLabelsAt[slot]; k++) {
+          const label = attrOrder[attrBase + k];
+          labels[attrLabels[label]] = attr[attrBase + label];
+        }
+        bin.attr = labels;
+      }
+      combinedMap.set(lo + slot, bin);
+    }
+    return combinedMap;
+  }
+
+  /**
+   * This PMF's bins as flat arrays, in `support()` order: bin `i`'s probability, and its
+   * `count` (`attr`) labels as local label indexes and values at `countStart[i]..countStart[i +
+   * 1]` (`attrStart`), labels in each bin's own key order. Memoized: a PMF is immutable, and a
+   * slice is convolved into many running totals.
+   */
+  private binTable(): BinTable {
+    if (this._binTable === undefined) {
+      const damages = this.support();
+      const n = damages.length;
+      const countLabels: string[] = [];
+      const attrLabels: string[] = [];
+      const p = new Float64Array(n);
+      const hasAttr = new Uint8Array(n);
+      const countStart = new Int32Array(n + 1);
+      const attrStart = new Int32Array(n + 1);
+      const countLabel: number[] = [];
+      const countValue: number[] = [];
+      const attrLabel: number[] = [];
+      const attrValue: number[] = [];
+      const list = (labels: string[], index: number[], value: number[], m: OutcomeLabelMap): void => {
+        for (const key of Object.keys(m)) {
+          const known = labels.indexOf(key);
+          index.push(known === -1 ? labels.push(key) - 1 : known);
+          value.push(m[key] as number);
+        }
+      };
+      for (let i = 0; i < n; i++) {
+        const bin = this.map.get(damages[i]) as Bin;
+        p[i] = bin.p;
+        countStart[i] = countLabel.length;
+        attrStart[i] = attrLabel.length;
+        list(countLabels, countLabel, countValue, bin.count);
+        if (bin.attr !== undefined) {
+          hasAttr[i] = 1;
+          list(attrLabels, attrLabel, attrValue, bin.attr);
+        }
+      }
+      countStart[n] = countLabel.length;
+      attrStart[n] = attrLabel.length;
+      this._binTable = {
+        p,
+        countLabels,
+        attrLabels,
+        hasAttr,
+        countStart,
+        countLabel: Int32Array.from(countLabel),
+        countValue: Float64Array.from(countValue),
+        attrStart,
+        attrLabel: Int32Array.from(attrLabel),
+        attrValue: Float64Array.from(attrValue),
+      };
+    }
+    return this._binTable;
+  }
+
+  /** {@link convolveBins} for a non-integer (or very wide) support: the same walk over a map and label objects. */
+  private static convolveBinsSparse(A: PMF, B: PMF): Map<number, Bin> {
     const keysOf = (m: OutcomeLabelMap | undefined): string[] | undefined =>
       m === undefined ? undefined : Object.keys(m);
     const valuesOf = (
@@ -1176,56 +1477,25 @@ export class PMF {
         }
       }
     }
-
-    let result = new PMF(combinedMap, epsilon, !raw);
-
-    // Enforce mass invariant: mass(out) = (raw? A.mass():1) * (raw? B.mass():1)
-    const mExp = (raw ? A.mass() : 1) * (raw ? B.mass() : 1);
-    const mGot = result.mass();
-    // Guard mGot !== 0: a zero-mass operand convolves to the zero measure
-    // (mass 0). Without this guard the non-raw path would scaleMass(mExp/0) =
-    // scaleMass(Infinity), poisoning every bin to 0*Infinity = NaN.
-    if (mExp !== 0 && mGot !== 0 && Math.abs(mGot - mExp) > epsilon) {
-      result = result.scaleMass(mExp / mGot);
-    }
-    if (!raw && mGot !== 0 && Math.abs(result.mass() - 1) > epsilon)
-      result = result.normalize();
-
-    pmfCache.set(cacheKey, result);
-    return result;
+    return combinedMap;
   }
 
-  // Convolve without renormalizing (raw = true), for callers that combine raw counts.
+  /** {@link convolve} with `raw`: through the shared cache, unlike {@link convolveRaw}. */
   combineRaw(other: PMF, eps?: number): PMF {
     return this.convolve(other, eps, true);
   }
 
-  // Reduce a list of PMFs by left-folding convolve() with the given eps
-  private static reduceConvolveLeft(pmfList: PMF[], eps: number): PMF {
+  /**
+   * Convolves multiple PMFs left to right, each step through the convolution cache: every
+   * prefix (A+B, (A+B)+C, …) is a stable cache key, so lists sharing a prefix share the work.
+   */
+  static convolveMany(pmfList: PMF[], eps = EPS): PMF {
+    if (pmfList.length === 0) return PMF.empty(eps);
     let result = pmfList[0];
     for (let i = 1; i < pmfList.length; i++) {
       result = result.convolve(pmfList[i], eps);
     }
     return result;
-  }
-
-  /**
-   * Convolves multiple PMFs using linear convolution with automatic caching.
-   * Uses a left-to-right accumulation approach for maximum cache reuse.
-   * Each convolve() call automatically uses the convolution cache for performance.
-   *
-   * This linear approach provides better cache hits than pairwise because:
-   * - Intermediate results are more predictable and stable
-   * - Similar PMF lists share common prefixes (A+B, (A+B)+C, etc.)
-   * - Order-independent cache keys work better with consistent build patterns
-   */
-  static convolveMany(pmfList: PMF[], eps = EPS): PMF {
-    if (pmfList.length === 0) return PMF.empty(eps);
-    if (pmfList.length === 1) return pmfList[0];
-
-    // Linear combination with automatic intermediate caching: each prefix
-    // (A+B, (A+B)+C, ...) is a stable cache key, maximizing reuse.
-    return PMF.reduceConvolveLeft(pmfList, eps);
   }
 
   /**
@@ -1382,17 +1652,14 @@ export class PMF {
     return this.mapDamage((d) => min + Math.floor((d - min) / binSize) * binSize);
   }
 
-  /** Dense integer support from min..max (inclusive).
-   * Useful for showing empty bars in charts.
-   */
+  /** Dense integer support from min..max (inclusive). Useful for showing empty bars in charts. */
   denseSupport(): number[] {
-    const s = this.support();
-    if (s.length === 0) return [];
-    const lo = Math.min(...s),
-      hi = Math.max(...s);
-    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).sort(
-      (a, b) => a - b
-    );
+    if (this.map.size === 0) return [];
+    // `support()` is sorted, so its ends are the range; spreading it into Math.min/max would
+    // overflow the stack on a wide distribution.
+    const lo = this.min();
+    const hi = this.max();
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
   }
 
   /** CDF at x: P(X ≤ x). */

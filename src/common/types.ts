@@ -54,7 +54,7 @@ export interface HasDiceMatchInfo {
 }
 
 export interface CritConfig {
-    critThreshold: number;
+  critThreshold: number;
 }
 
 /** Simple mapping from damage value to probability. */

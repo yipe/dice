@@ -119,6 +119,32 @@ describe("convolve is a function of content", () => {
     const second = build(9, 6, "descending").power(5);
     expect(bits(second)).toBe(bits(first));
   });
+
+  it("convolveRaw (uncached) matches the cached raw convolve bit for bit, whichever operand is this", () => {
+    const a = build(11, 14, "interleaved");
+    const b = build(12, 9, "descending");
+    PMF.clearCache();
+    const cached = a.convolve(b, undefined, true);
+    const sizeAfter = pmfCache.size;
+    expect(bits(a.convolveRaw(b))).toBe(bits(cached));
+    expect(bits(b.convolveRaw(a))).toBe(bits(cached));
+    // Map order too: `mass()` adds in it.
+    expect([...a.convolveRaw(b).map.keys()]).toEqual([...cached.map.keys()]);
+    expect([...b.convolveRaw(a).map.keys()]).toEqual([...cached.map.keys()]);
+    expect(pmfCache.size).toBe(sizeAfter);
+    // Equal content in both: the tie orders by `this`, as `<=` on equal fingerprints does.
+    expect(bits(a.convolveRaw(build(11, 14, "ascending")))).toBe(bits(a.convolve(a, undefined, true)));
+  });
+
+  it("a non-integer support takes the sparse walk and sums in the same order", () => {
+    const a = build(13, 10, "ascending");
+    const b = build(14, 10, "ascending");
+    const integer = a.convolve(b, undefined, true);
+    // Shifting every value by a half keeps the pairs, their order and every product.
+    const shifted = a.mapDamage((d) => d + 0.5).convolve(b.mapDamage((d) => d + 0.5), undefined, true);
+    expect([...shifted.map.keys()].map((d) => d - 1)).toEqual([...integer.map.keys()]);
+    expect(bits(shifted.mapDamage((d) => d - 1))).toBe(bits(integer));
+  });
 });
 
 describe("power() of an unnormalized PMF", () => {

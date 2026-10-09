@@ -347,22 +347,7 @@ export class DiceQuery {
    * re-running the DP per requested k.
    */
   private countDistribution(labels: OutcomeType[]): number[] {
-    const n = this.singles.length;
-    const successProbabilities = this.singles.map((single) =>
-      new DiceQuery([single]).probabilityOf(labels)
-    );
-
-    const dist = new Array(n + 1).fill(0);
-    dist[0] = 1;
-    for (const successProb of successProbabilities) {
-      for (let outcomeCount = n; outcomeCount >= 1; outcomeCount--) {
-        dist[outcomeCount] =
-          dist[outcomeCount] * (1 - successProb) +
-          dist[outcomeCount - 1] * successProb;
-      }
-      dist[0] *= 1 - successProb;
-    }
-    return dist;
+    return poissonBinomial(this.singles.map((single) => new DiceQuery([single]).probabilityOf(labels)));
   }
 
   probAtLeastK(labels: OutcomeType | OutcomeType[], k: number): number {
@@ -422,11 +407,8 @@ export class DiceQuery {
   }
 
   /**
-   * Computes binomial probabilities for exactly 0, 1, 2, ..., maxK occurrences of a label.
-   *
-   * Uses dynamic programming to efficiently calculate the probability distribution
-   * of how many attacks will have the specified outcome, accounting for different
-   * success probabilities across individual attacks.
+   * Probabilities of exactly 0, 1, 2, ..., maxK occurrences of a label across the singles,
+   * each with its own probability of the label.
    *
    * Example: For 3 attacks with 50% hit chance each, returns:
    * [0.125, 0.375, 0.375, 0.125] = [P(0 hits), P(1 hit), P(2 hits), P(3 hits)]
@@ -435,26 +417,11 @@ export class DiceQuery {
    * @param maxK - Maximum number of occurrences to calculate (usually number of attacks)
    * @returns Array where index K contains P(exactly K attacks have the label)
    */
-  private computeBinomialProbabilities(
-    label: OutcomeType,
-    maxK: number
-  ): number[] {
-    const individualProbabilities = this.singles.map((_, diceIndex) =>
-      this.singleProb(diceIndex, label)
+  private computeBinomialProbabilities(label: OutcomeType, maxK: number): number[] {
+    return poissonBinomial(
+      this.singles.map((_, diceIndex) => this.singleProb(diceIndex, label)),
+      maxK
     );
-    const binomialProbs = new Array(maxK + 1).fill(0);
-    binomialProbs[0] = 1;
-
-    for (const singleProbability of individualProbabilities) {
-      for (let outcomeCount = maxK; outcomeCount >= 1; outcomeCount--) {
-        binomialProbs[outcomeCount] =
-          binomialProbs[outcomeCount] * (1 - singleProbability) +
-          binomialProbs[outcomeCount - 1] * singleProbability;
-      }
-      binomialProbs[0] *= 1 - singleProbability;
-    }
-
-    return binomialProbs;
   }
 
   /**
@@ -609,6 +576,10 @@ export class DiceQuery {
    * `avg` is the size-biased conditional mean E[dmg·#label]/E[#label] rather than
    * E[dmg | the label occurs]. For a single attack both are the plain
    * conditional figures. Use {@link probAtLeastOne} for the scenario probability.
+   *
+   * Only damage-bearing totals count: a label that landed at 0 damage (a `missNone`, or a hit
+   * reduced to nothing) is left out of `min`/`max`/`avg` and of `count`, so
+   * `damageStatsFrom("missNone")` is all zeros.
    *
    * @example
    * // High-level tactical planning
@@ -866,18 +837,10 @@ export class DiceQuery {
     support: number[];
     data: number[];
   } {
-    const originalSupport = this.combined.support();
-    if (originalSupport.length === 0) {
+    const support = this.combined.denseSupport();
+    if (support.length === 0) {
       return { support: [], data: [] };
     }
-
-    // Create complete integer range from min to max
-    const minDamage = Math.min(...originalSupport);
-    const maxDamage = Math.max(...originalSupport);
-    const support = Array.from(
-      { length: maxDamage - minDamage + 1 },
-      (_, i) => minDamage + i
-    );
 
     let cumulativeProbability = 0;
     const cdfData: number[] = [];
@@ -913,18 +876,10 @@ export class DiceQuery {
     support: number[];
     data: number[];
   } {
-    const originalSupport = this.combined.support();
-    if (originalSupport.length === 0) {
+    const support = this.combined.denseSupport();
+    if (support.length === 0) {
       return { support: [], data: [] };
     }
-
-    // Create complete integer range from min to max
-    const minDamage = Math.min(...originalSupport);
-    const maxDamage = Math.max(...originalSupport);
-    const support = Array.from(
-      { length: maxDamage - minDamage + 1 },
-      (_, i) => minDamage + i
-    );
 
     // Calculate CCDF: P(X ≥ x) = 1 - P(X < x)
     let cumulativeProbability = 0;
@@ -968,7 +923,7 @@ export class DiceQuery {
       (k) => order?.includes(k as OutcomeType) ?? true
     ) as OutcomeType[];
     if (order && order.length)
-      keys.sort((a, b) => order.indexOf(a) + 999 - (order.indexOf(b) + 999));
+      keys.sort((a, b) => order.indexOf(a) - order.indexOf(b));
     return keys;
   }
 
@@ -1032,12 +987,15 @@ export class DiceQuery {
    * `damageRange` is the sum, over every single that can produce the outcome, of
    * that single's own conditional damage range: "what this outcome contributes
    * across the whole turn when every attack that can produce it does". Linear in
-   * the number of attacks by construction.
+   * the number of attacks by construction. `allProbability` is over the same
+   * singles: P(every single that can produce the outcome did), so an attack mixed
+   * with a save does not zero the save's `saveFail`.
    *
    * Prefer this over {@link DiceQuery.snapshot} for a multi-attack query.
    * `snapshot` reads `damageRange` off the combined PMF's `count`, which the
    * convolution accumulates as an expected count, so its `avg` is size-biased
-   * for N≥2 (its own doc comment says so). The two agree for a single attack.
+   * for N≥2 (its own doc comment says so), and its `allProbability` is over all
+   * singles. The two agree for a single attack.
    *
    * Only outcomes that actually occur appear in the result.
    *
@@ -1088,8 +1046,9 @@ export class DiceQuery {
    * - damageRange is conditional on the outcome occurring
    *
    * The outcome probabilities use the correct Poisson-binomial marginals
-   * (`atLeastOneProbability` = P(≥1 attack has it), `allProbability` = P(all do)),
-   * so they are always valid probabilities in [0,1].
+   * (`atLeastOneProbability` = P(≥1 attack has it), `allProbability` = P(all n
+   * singles do, so 0 for an outcome some single cannot produce; see
+   * {@link DiceQuery.outcomeStats}), so they are always valid probabilities in [0,1].
    *
    * KNOWN LIMITATION (multi-attack): `damageRange.avg` is still aggregated from
    * the combined PMF's `count`, which the convolution accumulates as an EXPECTED
@@ -1378,7 +1337,24 @@ export class DiceQuery {
     return [a, b, any, none] as const;
   }
 }
-// Make sure these types are exported in your public index, or inline them here.
+
+/**
+ * [P(0), P(1), …, P(maxK)] successes over independent events with these probabilities (the
+ * Poisson binomial), by the standard DP. Truncating at `maxK` changes nothing below it: an entry
+ * reads only itself and the one before.
+ */
+function poissonBinomial(probabilities: readonly number[], maxK: number = probabilities.length): number[] {
+  const dist = new Array<number>(maxK + 1).fill(0);
+  dist[0] = 1;
+  for (const p of probabilities) {
+    for (let count = maxK; count >= 1; count--) {
+      dist[count] = dist[count] * (1 - p) + dist[count - 1] * p;
+    }
+    dist[0] *= 1 - p;
+  }
+  return dist;
+}
+
 export type OutcomeSnapshot = {
   atLeastOneProbability: number; // P(outcome occurs at least once)
   allProbability: number; // equal to atLeastOneProbability for a single aggregated PMF

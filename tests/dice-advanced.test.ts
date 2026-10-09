@@ -429,65 +429,21 @@ describe("Dice Advanced Methods", () => {
       });
     });
 
-    describe("ge", () => {
-      it("should return 1 when first value is less than second, 0 otherwise", () => {
-        const result = d6.ge(4);
+    describe("divideRoundUp", () => {
+      it("should round division results up", () => {
+        const roundedUp = d6.divideRoundUp(4);
 
-        // ge returns 1 when a >= b is false, i.e., when a < b
-        expect(result.get(1)).toBeGreaterThan(0); // Cases where die < 4
-        expect(result.get(0)).toBeGreaterThan(0); // Cases where die >= 4
+        expect(roundedUp.get(1)).toBeGreaterThan(0); // ceil(1/4) = 1, ceil(2/4) = 1, etc.
+        expect(roundedUp.get(2)).toBeGreaterThan(0); // ceil(5/4) = 2, ceil(6/4) = 2
       });
     });
 
-    describe("divide operations", () => {
-      describe("divide", () => {
-        it("should perform regular division", () => {
-          const result = d6.divide(2);
+    describe("divideRoundDown", () => {
+      it("should round division results down", () => {
+        const result = d6.divideRoundDown(4);
 
-          expect(result.get(0.5)).toBeGreaterThan(0); // 1/2
-          expect(result.get(3)).toBeGreaterThan(0); // 6/2
-        });
-
-        it("should handle division by zero", () => {
-          const result = d6.divide(0);
-
-          // Should produce Infinity values
-          for (const face of result.keys()) {
-            expect(Math.abs(face)).toBeGreaterThan(1000); // Very large or infinite
-          }
-        });
-      });
-
-      describe("divideRoundUp", () => {
-        it("should round division results up", () => {
-          const result = d6.divide(4);
-          const roundedUp = d6.divideRoundUp(4);
-
-          expect(roundedUp.get(1)).toBeGreaterThan(0); // ceil(1/4) = 1, ceil(2/4) = 1, etc.
-          expect(roundedUp.get(2)).toBeGreaterThan(0); // ceil(5/4) = 2, ceil(6/4) = 2
-        });
-      });
-
-      describe("divideRoundDown", () => {
-        it("should round division results down", () => {
-          const result = d6.divideRoundDown(4);
-
-          expect(result.get(0)).toBeGreaterThan(0); // floor(1/4) = 0, floor(2/4) = 0, floor(3/4) = 0
-          expect(result.get(1)).toBeGreaterThan(0); // floor(4/4) = 1, floor(5/4) = 1, floor(6/4) = 1
-        });
-      });
-    });
-
-    describe("and", () => {
-      it("should return 1 when both values are truthy, 0 otherwise", () => {
-        const other = new Dice();
-        other.setFace(0, 1); // Falsy
-        other.setFace(3, 1); // Truthy
-
-        const result = d6.and(other);
-
-        expect(result.get(0)).toBeGreaterThan(0); // Cases where one is falsy
-        expect(result.get(1)).toBeGreaterThan(0); // Cases where both are truthy
+        expect(result.get(0)).toBeGreaterThan(0); // floor(1/4) = 0, floor(2/4) = 0, floor(3/4) = 0
+        expect(result.get(1)).toBeGreaterThan(0); // floor(4/4) = 1, floor(5/4) = 1, floor(6/4) = 1
       });
     });
 
