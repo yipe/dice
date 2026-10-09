@@ -7,7 +7,8 @@ import { effectSpec, gateFields, isGrant, isTransform, lastingForTurn, substitut
 import type { Draw, EffectSource, FireMode, Step, TurnPlan } from "./plan";
 import { ReaderTally, canonicalCodes, cappedPmf, codeNeeds, readerLedger, EFFECT_NAMES } from "./readers";
 import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./readers";
-import { buildPlan, fireMode, grantApplies, released } from "./plan";
+import { buildPlan, checkDuplicateIds, checkSaveRowAbility, checkStateLimit, declaredAttacks, fireMode, grantApplies, isStateless, released } from "./plan";
+import { contextOf, rowCheckOf } from "./context";
 import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
 import type {
   Attack,
@@ -138,23 +139,76 @@ interface Readers {
   peakStates: number;
 }
 
-/** Test seam: the plan and walk size of a turn. Not exported from the package. */
-const inspections = new WeakMap<Turn, { plan: TurnPlan; stateCounts?: readonly number[] }>();
+/** Test seam: the plan a turn walks and, once resolved, its walk size. Not exported from the package. */
+const inspections = new WeakMap<Turn, { plan: () => TurnPlan; stateCounts?: readonly number[] }>();
+
+/**
+ * Test seam: whether every turn walks its plan, stateless or not. Not exported from the
+ * package; `tests` set it to prove the stateless path reads what the walk reads.
+ */
+export const walkEverything = { forced: false };
+
+/** Test seam: the plan `t` walks (built on first use for a stateless turn). Not exported from the package. */
+export function inspectPlan(t: Turn): TurnPlan {
+  return (inspections.get(t) as { plan: () => TurnPlan }).plan();
+}
 
 /**
  * The number of trigger groups `t` tracks and, per step, the number of distinct
  * walk states after it. Resolves `t` if it has not been resolved yet.
  */
-/** Test seam: the plan `t` walks. Not exported from the package. */
-export function inspectPlan(t: Turn): TurnPlan {
-  return (inspections.get(t) as { plan: TurnPlan }).plan;
-}
-
 export function inspectTurn(t: Turn): { groupCount: number; stateCounts: readonly number[] } {
   t.mean();
-  const inspection = inspections.get(t) as { plan: TurnPlan; stateCounts: readonly number[] };
-  return { groupCount: inspection.plan.groupCount, stateCounts: inspection.stateCounts };
+  const inspection = inspections.get(t) as { plan: () => TurnPlan; stateCounts: readonly number[] };
+  return { groupCount: inspection.plan().groupCount, stateCounts: inspection.stateCounts };
 }
+
+/**
+ * One declared attack of a stateless turn: what its readers are closed forms of. `hit` and
+ * `crit` are the masses of its landings given it happens (`hit` crit included), as the walk draws
+ * them: a row with no hit or crit outcome (a save, a plain roll) is one "hit" draw of its whole PMF.
+ */
+interface StatelessRow {
+  id: string;
+  pmf: PMF;
+  chance: number;
+  rollType: RollType;
+  hit: number;
+  crit: number;
+}
+
+/**
+ * The rows of a stateless turn (`isStateless`), validated as `buildPlan` validates them and in
+ * the same order: the state limit, each attack in turn, duplicate ids, then each save row's
+ * ability. A row's d20 is its own (no effect is ever in force): what its source declares, or
+ * `flat` for one that declares none.
+ */
+function statelessRows(spec: TurnSpec, eps: number): StatelessRow[] {
+  checkStateLimit(spec.stateLimit);
+  const declared = declaredAttacks(spec, eps);
+  checkDuplicateIds(declared.map((row) => row.id));
+  for (const row of declared) checkSaveRowAbility(row, eps);
+  return declared.map(({ id, source, chance, pmf, slices }) => {
+    const check = rowCheckOf(source);
+    return {
+      id,
+      pmf,
+      chance,
+      rollType: check === undefined ? "flat" : contextOf(check, 0).rollType,
+      hit: slices === null ? pmf.mass() : slices.hit.mass() + slices.crit.mass(),
+      crit: slices === null ? 0 : slices.crit.mass(),
+    };
+  });
+}
+
+/** What a stateless turn's readers list for what it has none of: ids, attempts. */
+const NONE: readonly never[] = Object.freeze([]);
+
+/** The effects in force on a stateless turn's rows: none, from no source. */
+const NO_LIVE: LiveOdds = Object.freeze({
+  ...(Object.fromEntries(EFFECT_NAMES.map((name) => [name, 0])) as Record<EffectName, number>),
+  sources: Object.freeze(Object.fromEntries(EFFECT_NAMES.map((name) => [name, NONE])) as Record<EffectName, readonly never[]>),
+});
 
 /** How many optional conditions a turn searches over (the engine's `MAX_SEARCHED_OPTIONAL_GRANTS`). */
 const MAX_SEARCHED_OPTIONAL = 3;
@@ -319,7 +373,15 @@ function needsNormalizing(totalMass: number, eps: number): boolean {
 export class Turn {
   private readonly eps: number;
   private readonly state: TurnState;
-  private readonly plan: TurnPlan;
+  /** The plan every walk reads; built on first use for a stateless turn (see {@link Turn.rows}). */
+  private built?: TurnPlan;
+  /**
+   * The rows of a turn that needs no walk state (`isStateless`): no rider, substitute, condition,
+   * probe or gate. Every reader of such a turn is a closed form of its rows, so no plan is built
+   * and nothing is walked unless a reader needs the plan (`pmf`, `toQuery`, `landings`).
+   * `undefined` for a turn that carries state, or when {@link walkEverything} is forced.
+   */
+  private readonly rows?: { ids: readonly string[]; byId: ReadonlyMap<string, StatelessRow> };
   private resolved?: { pmf: PMF };
   /** Firing masses from a walk that carried no damage; see {@link Turn.fireProbability}. */
   private massed?: ReadonlyMap<string, number>;
@@ -348,8 +410,21 @@ export class Turn {
     this.eps = eps;
     // Built here, not on first use, so every way of constructing a Turn
     // validates at the same moment: the call that introduced the mistake.
-    ({ planned: this.planned, plan: this.plan } = Turn.optionalChoice(this.state, eps));
-    inspections.set(this, { plan: this.plan });
+    if (eps === 0 && !walkEverything.forced && isStateless(this.state)) {
+      // A stateless turn has no optional condition to decide: its plan, if a reader ever needs
+      // it, is its own state's.
+      const rows = statelessRows(this.state, eps);
+      this.rows = { ids: rows.map((row) => row.id), byId: new Map(rows.map((row) => [row.id, row])) };
+      this.planned = this.state;
+    } else {
+      ({ planned: this.planned, plan: this.built } = Turn.optionalChoice(this.state, eps));
+    }
+    inspections.set(this, { plan: () => this.plan });
+  }
+
+  private get plan(): TurnPlan {
+    this.built ??= buildPlan(this.planned, this.eps, new Set(this.planned.declined), "masses");
+    return this.built;
   }
 
   /**
@@ -432,7 +507,7 @@ export class Turn {
    * reader of nothing instead).
    */
   private defaultOf(): readonly string[] | undefined {
-    const of = [...this.plan.attackIds, ...this.plan.rerollIds];
+    const of = this.rows === undefined ? [...this.plan.attackIds, ...this.plan.rerollIds] : this.attackIds;
     return of.length === 0 ? undefined : of;
   }
 
@@ -944,7 +1019,7 @@ export class Turn {
 
   /** The sum of every attack's and rider's marginal mean: the mean, from the reader walk alone. */
   private marginalMean(): number {
-    return [...this.plan.attackIds, ...this.plan.riderIds].reduce((sum, id) => sum + this.marginal(id).pmf.mean(), 0);
+    return [...this.attackIds, ...this.riderIds].reduce((sum, id) => sum + this.marginal(id).pmf.mean(), 0);
   }
 
   /**
@@ -965,7 +1040,7 @@ export class Turn {
    * defaults given to bare sources. These are the names `of` accepts.
    */
   get attackIds(): readonly string[] {
-    return this.plan.attackIds;
+    return this.rows === undefined ? this.plan.attackIds : this.rows.ids;
   }
 
   /**
@@ -973,7 +1048,7 @@ export class Turn {
    * defaults. These are the names {@link Turn.fireProbability} accepts.
    */
   get riderIds(): readonly string[] {
-    return this.plan.riderIds;
+    return this.rows === undefined ? this.plan.riderIds : NONE;
   }
 
   /**
@@ -981,7 +1056,7 @@ export class Turn {
    * {@link Turn.fireProbability} accepts these too.
    */
   get substituteIds(): readonly string[] {
-    return this.plan.substituteIds;
+    return this.rows === undefined ? this.plan.substituteIds : NONE;
   }
 
   /**
@@ -989,7 +1064,7 @@ export class Turn {
    * {@link Turn.fireProbability} accepts these too.
    */
   get conditionIds(): readonly string[] {
-    return this.plan.conditionIds;
+    return this.rows === undefined ? this.plan.conditionIds : NONE;
   }
 
   /**
@@ -997,7 +1072,7 @@ export class Turn {
    * {@link Turn.fireProbability} accepts these too.
    */
   get probeIds(): readonly string[] {
-    return this.plan.probeIds;
+    return this.rows === undefined ? this.plan.probeIds : NONE;
   }
 
   /**
@@ -1011,14 +1086,27 @@ export class Turn {
   marginal(id: string): AttackMarginal | RiderMarginal {
     const known = this.marginals.get(id);
     if (known !== undefined) return known;
-    if (!this.plan.attackIds.includes(id) && !this.plan.riderIds.includes(id)) {
+    if (!this.attackIds.includes(id) && !this.riderIds.includes(id)) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not an attack or rider in this turn. Attacks and riders: ${[...this.plan.attackIds, ...this.plan.riderIds]
+        `"${id}" is not an attack or rider in this turn. Attacks and riders: ${[...this.attackIds, ...this.riderIds]
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
+    }
+    const row = this.rows?.byId.get(id);
+    if (row !== undefined) {
+      // No state ever changes the row's context: it rolls its own PMF whenever it happens.
+      const { pmf, chance, rollType } = row;
+      const result: AttackMarginal = {
+        pmf: pmf.applyHitFrequency(chance),
+        whenHappens: pmf,
+        occurs: chance,
+        rollType: { flat: 0, advantage: 0, disadvantage: 0, "elven accuracy": 0, [rollType]: 1 },
+      };
+      this.marginals.set(id, result);
+      return result;
     }
     const readers = this.resolveReaders();
     const plan = this.walkPlan;
@@ -1170,17 +1258,20 @@ export class Turn {
    * have no firing probability).
    */
   fireProbability(id: string): number {
-    const masses = this.plan.probes.has(id) ? this.resolveMasses() : this.resolveReaders().fireMass;
-    const mass = masses.get(id);
+    // A stateless turn has nothing that fires.
+    const mass =
+      this.rows !== undefined
+        ? undefined
+        : (this.plan.probes.has(id) ? this.resolveMasses() : this.resolveReaders().fireMass).get(id);
     if (mass === undefined) {
       throw new TurnSpecError(
         "unknown-id",
         id,
         `"${id}" is not a rider, substitute, condition or probe in this turn. Riders: ${[
-          ...this.plan.riderIds,
-          ...this.plan.substituteIds,
-          ...this.plan.conditionIds,
-          ...this.plan.probeIds,
+          ...this.riderIds,
+          ...this.substituteIds,
+          ...this.conditionIds,
+          ...this.probeIds,
         ]
           .map((each) => `"${each}"`)
           .join(", ")}.`
@@ -1199,18 +1290,23 @@ export class Turn {
    * @throws {TurnSpecError} `unknown-id` if `id` is not a rider.
    */
   expectedApplications(id: string): number {
-    const readers = this.resolveReaders();
-    const mass = readers.applications.get(id) ?? (this.plan.riderIds.includes(id) ? readers.fireMass.get(id) : undefined);
+    const mass = this.rows !== undefined ? undefined : this.walkedApplications(id);
     if (mass === undefined) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not a rider in this turn. Riders: ${this.plan.riderIds
+        `"${id}" is not a rider in this turn. Riders: ${this.riderIds
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
     }
     return mass;
+  }
+
+  /** The expected applications of `id` from the reader walk, or `undefined` for an id that is no rider. */
+  private walkedApplications(id: string): number | undefined {
+    const readers = this.resolveReaders();
+    return readers.applications.get(id) ?? (this.plan.riderIds.includes(id) ? readers.fireMass.get(id) : undefined);
   }
 
   /**
@@ -1224,17 +1320,24 @@ export class Turn {
    * id included, since only those roll their own attack and have hit/crit odds.
    */
   stepStats(id: string): StepStats {
-    const { tally, total, stepStats } = this.resolveReaders();
-    const stats = stepStats.get(id);
-    if (stats === undefined) {
-      throw new TurnSpecError(
+    const unknown = (attacks: Iterable<string>): TurnSpecError =>
+      new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not an attack or attack-shaped rider in this turn. Attacks: ${[...stepStats.keys()]
+        `"${id}" is not an attack or attack-shaped rider in this turn. Attacks: ${[...attacks]
           .map((each) => `"${each}"`)
           .join(", ")}.`
       );
+    if (this.rows !== undefined) {
+      const row = this.rows.byId.get(id);
+      if (row === undefined) throw unknown(this.rows.ids);
+      // Nothing is ever in force, nothing is tried; the row draws in every state (`rolled` 1) and
+      // lands where it happens.
+      return { rolled: 1, hit: row.chance * row.hit, crit: row.chance * row.crit, live: NO_LIVE, conditions: NONE };
     }
+    const { tally, total, stepStats } = this.resolveReaders();
+    const stats = stepStats.get(id);
+    if (stats === undefined) throw unknown(stepStats.keys());
     // All of it from the reader walk: no damage arithmetic. The 0.16 fields agree with the joint
     // walk's to rounding.
     const plan = this.walkPlan;
@@ -1279,12 +1382,12 @@ export class Turn {
    * @throws {TurnSpecError} `unknown-id` if `id` is not a condition.
    */
   attemptProbability(id: string): number {
-    const c = this.plan.conditionIds.indexOf(id);
+    const c = this.conditionIds.indexOf(id);
     if (c === -1) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not a condition in this turn. Conditions: ${this.plan.conditionIds.map((each) => `"${each}"`).join(", ")}.`
+        `"${id}" is not a condition in this turn. Conditions: ${this.conditionIds.map((each) => `"${each}"`).join(", ")}.`
       );
     }
     const { tally, total } = this.resolveReaders();
@@ -1298,11 +1401,11 @@ export class Turn {
    * @throws {TurnSpecError} `unknown-id` if `id` is not an attack.
    */
   landings(id: string): readonly LandingPattern[] {
-    if (!this.plan.attackIds.includes(id)) {
+    if (!this.attackIds.includes(id)) {
       throw new TurnSpecError(
         "unknown-id",
         id,
-        `"${id}" is not an attack in this turn. Attacks: ${this.plan.attackIds.map((each) => `"${each}"`).join(", ")}.`
+        `"${id}" is not an attack in this turn. Attacks: ${this.attackIds.map((each) => `"${each}"`).join(", ")}.`
       );
     }
     if (this.patterns === undefined) {
@@ -1338,9 +1441,9 @@ export class Turn {
     }));
   }
 
-  /** The most states the walk held after any step. */
+  /** The most states the walk held after any step: 1 for a turn that needs no state. */
   get peakStates(): number {
-    return this.resolveReaders().peakStates;
+    return this.rows === undefined ? this.resolveReaders().peakStates : 1;
   }
 
   private get walkPlan(): TurnPlan {
@@ -1362,7 +1465,7 @@ export class Turn {
     const plan = buildPlan({ ...this.planned, observe: [] }, this.eps, new Set(this.planned.declined), "joint");
     const eps = this.eps;
     const { states, stateCounts } = this.walk(pmfLedger(eps), plan);
-    inspections.set(this, { plan: this.plan, stateCounts });
+    inspections.set(this, { plan: () => this.plan, stateCounts });
 
     let total: PMF | undefined;
     for (const state of states.values()) {
