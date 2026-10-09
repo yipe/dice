@@ -846,9 +846,13 @@ caster.marginal("breath").pmf.mean(); // 10.5563
 | Effect                                                                           | Lifetimes                                     | Notes                                                    |
 | -------------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------- |
 | `advantage()`, `disadvantage()`, `critOnHit()` (chainable)                       | `untilNextAttack()`, `untilEndOfTurn()`       | `.to(ids or tags)` limits the readers                    |
-| `blinded()`, `paralyzed()`, `prone()`, `restrained()`, `stunned()`, `unconscious()` | `untilEndOfTurn()`, `untilDamaged()`       | from `@yipe/dice/dnd5e`; `condition(name, rule)` for any other |
+| `blinded()`, `paralyzed()`, `prone()`, `restrained()`, `stunned()`, `unconscious()` | `untilEndOfTurn()`, `untilDamaged()`       | from `@yipe/dice/dnd5e`, each rule in `RULES`; `condition(name, rule)` for any other |
 | `vulnerability()`                                                                | `untilNextHit()`                              | the hit's whole damage doubles, riders included          |
 | `saveDisadvantage()`, `savePenalty(d4)`                                          | `untilNextSave()`, `untilEndOfTurn()`         | `savePenalty` takes one plain die group; `.to(...)`      |
+
+A `next-save` effect is used up by the target's next save row. A trigger's own save (`save: …`) is no row: it
+reads the effects that last the turn on its creature (a condition's rule, `untilEndOfTurn()` save effects not
+scoped with `.to(...)`), never a `next-save` one.
 
 | Verb                                                    | On                                       | Fires                                       |
 | ------------------------------------------------------- | ---------------------------------------- | ------------------------------------------- |
@@ -909,10 +913,10 @@ or `strength`, in a save and in a rule's `save` keys alike.
 | --------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | `unknown-range`             | a rule keyed by range (Prone, Unconscious) reads a row with none   | add `.melee()` or `.ranged()` to the attack                |
 | `unknown-ability`           | a save or a rule's `save` key names no 5e ability                  | use `str`/`dex`/`con`/`int`/`wis`/`cha` or the full name   |
-| `save-without-ability`      | a rule keyed by ability (Stunned, Restrained) reads a save with none | add `.ability("dex")` to the DC check                    |
+| `save-without-ability`      | a rule keyed by ability (Stunned, Restrained) reads a save row or a trigger's save with none | add `.ability("dex")` to the DC check |
 | `too-many-states`           | more effects live at once than the walk holds, or past `stateLimit` | drop or scope effects (`.to`, `of`), or raise `stateLimit(n)` |
 | `dealing-joint-unsupported` | the joint `pmf` of a turn with `dealing`                           | read `mean()` or `marginal(id)` instead                    |
-| `no-rebindable-source`      | a rider `joins` a row whose source does not pool rider dice        | make the row a `ContextualSource` whose `under(context)` rolls `context.joined` |
+| `no-rebindable-source`      | an effect reaches a row with no check to re-derive (a bare PMF, a list of payloads), or a rider `joins` a row whose source does not pool rider dice | scope the effect with `.to(...)`, or make the row a `ContextualSource` (for `joins`, one whose `under(context)` rolls `context.joined`) |
 
 A rider's `joins` rolls its dice inside the row's own roll, so the row's source must pool them: a
 `ContextualSource` whose `under(context)` adds the dice of the riders in `context.joined`. The library's attack and
