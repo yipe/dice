@@ -24,7 +24,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
       for (const [damage, bin] of pmf.map) {
         if (bin.attr) {
           const attrSum = Object.values(bin.attr).reduce(
-            (sum, val) => sum + (val as number),
+            (sum: number, val) => sum + (val ?? 0),
             0
           );
           const expected = damage * bin.p;
@@ -192,7 +192,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
       for (const [damage, bin] of pmf.map) {
         if (bin.attr && damage > 0) {
           const attrSum = Object.values(bin.attr).reduce(
-            (sum, val) => sum + (val as number),
+            (sum: number, val) => sum + (val ?? 0),
             0
           );
           const expected = damage * bin.p;
@@ -238,7 +238,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
       for (const [damage, bin] of pmf.map) {
         if (damage > 0 && bin.attr) {
           const attrSum = Object.values(bin.attr).reduce(
-            (sum, val) => sum + (val as number),
+            (sum: number, val) => sum + (val ?? 0),
             0
           );
           const expected = damage * bin.p;
@@ -430,7 +430,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
 
       if (zeroBin?.attr) {
         const attrSum = Object.values(zeroBin.attr).reduce(
-          (sum, val) => sum + (val as number),
+          (sum: number, val) => sum + (val ?? 0),
           0
         );
         // At damage=0, attr sum should be 0 regardless of probability
@@ -445,7 +445,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
       for (const [damage, bin] of pmf.map) {
         if (bin.attr && damage > 0) {
           const attrSum = Object.values(bin.attr).reduce(
-            (sum, val) => sum + (val as number),
+            (sum: number, val) => sum + (val ?? 0),
             0
           );
           const expected = damage * bin.p;
@@ -465,7 +465,7 @@ describe("DiceQuery.combinedWithAttribution()", () => {
       for (const [damage, bin] of pmf.map) {
         if (bin.attr && damage > 0) {
           const attrSum = Object.values(bin.attr).reduce(
-            (sum, val) => sum + (val as number),
+            (sum: number, val) => sum + (val ?? 0),
             0
           );
           const expected = damage * bin.p;

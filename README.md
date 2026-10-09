@@ -244,6 +244,16 @@ turn([fist, fist, fist])
 turn([shortsword, shortsword]).onFirstHit(critOnHit().untilEndOfTurn()).mean(); // 12.765
 ```
 
+### Conditions: Prone, Stunned, Unconscious, grapples, curses
+
+- `@yipe/dice/dnd5e` names the conditions; trigger verbs put them on the target behind a save, a chance or a contest, and `atStart` says what it already has, per creature. See the [guide](docs/guide.md#conditions-what-the-target-has-and-what-it-gets).
+
+```ts
+import { restrained } from "@yipe/dice/dnd5e";
+const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
+turn().attacks(2, sword).attack(sword, { target: "second" }).atStart(restrained()).mean(); // 21.545
+```
+
 ### Once-per-turn rerolls such as Savage Attacker
 
 ```ts

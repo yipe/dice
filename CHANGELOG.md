@@ -9,11 +9,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Turn` evaluates the first `TurnSpec` v2 fields **: an attack whose source is a
+  `ContextualSource` (rolled `under` the row context the turn state puts it in; Elven Accuracy's three
+  dice upgrade only an advantage the state grants), conditions on `first-crit`, a condition's `landing`
+  (`"damage"` over an attack row: a hit or crit that deals 0 lands nothing), the `vulnerability` effect
+  (`until: "next-hit"`: the next attack that hits takes double damage; a miss leaves it), and
+  `stateLimit` (default 16,384 states per step; more is `too-many-states`). The save
+  side: save rows read `saveDisadvantage` and `savePenalty` effects (`end-of-turn`, or `next-save`,
+  used up by the next save that reads it; `to` scopes them to save rows), and a condition's `save`
+  (`{ dc, bonus, rollType? }` or `{ failChance(context) }`, one or several) is rolled in the target's
+  state at the start of the row that tries it, with the option it fails least. Conditions: `{ condition, rule, until }` puts a `ConditionRule` on the target (attack rolls by
+  range, saves and the grant's own save by ability); `until: "until-damaged"` ends it after the first
+  later row that deals its creature damage (the row's own, a miss payload included, or a rider that
+  lands there), leaving `rule.onEnd` for the rest of the turn; and `optional: true` conditions are
+  taken as the engine takes them: with up to three, the subset with the highest mean (the full set
+  first, so a tie keeps it); past three, each where the later attack rolls on its creature lean melee. New
+  error codes: `unknown-range`, `unknown-ability`, `save-without-ability`. Creatures: `AttackOptions.target` aims a row at a creature (default `"target"`) and every effect
+  lives on the creature its row was aimed at; a once-per-turn condition (`first-*`) is tried only on
+  a landing with a later reader on that creature; `on: "start"` conditions are in force on their
+  `target` before the first row. Riders: a payload per attack
+  (`ContextualPayload`, doubled with a hit that used up a vulnerability), `any-crit` riders with a
+  `max` (their first `max` crits; `Infinity` for every crit), `landing: "any"` (every outcome once the
+  row happens, a miss included), `happens` (one coin for the turn), `joins` (the rider's dice roll in
+  the row while it has a landing left, and it deals nothing beside it there; the row's source must pool
+  them through `under(context).joined`, else `no-rebindable-source`), partners (a first-hit
+  rider named in another's `of` opens its rows, `where`, to it), conditions that fire where a rider
+  landed (`of: [rider id]`, `where`), and gated attacks (`AttackOptions.after`), which happen at
+  their own place in the turn only where the earlier attack landed. `dealing` (a landing must deal a
+  damage type, read from `ContextualSource.dealt` and `ContextualPayload.dealt`) is evaluated by its
+  odds: every attack's and rider's marginal and `mean()` are exact, and the turn's joint `pmf` throws
+  `dealing-joint-unsupported`. Nothing is `unsupported-until-0.17` any more: the
+  code is gone.
+- **`Turn.marginal(id)`**: one attack's or rider's own damage distribution in the turn. An attack's
+  (or attack-shaped rider's) carries `whenHappens`, `occurs` and the odds of the d20 it rolls
+  (`rollType`); a rider's carries its `landings` per attack (hit, crit, and the part doubled by a
+  vulnerability, before `happens`) and `anyLanding`. Every marginal comes from one walk that carries
+  mass alone (and a capped rider's damage as a plain array), cached per turn.
+- **More readers**: `stepStats(id).live` has every effect's odds (`autoFail`, `saveDisadvantage`,
+  `savePenalty`, `vulnerable` beside the 0.16 three) with the part each source accounts for
+  (`sources`), and `stepStats(id).conditions` the odds each condition is attempted on the row and
+  takes; `attemptProbability(id)` is a condition's expected number of attempts; `landings(id)` the
+  ways riders land on an attack together; `peakStates` the most states the walk held. The 0.16
+  fields keep their numbers bit for bit.
+- **Conditions, fluently**: `@yipe/dice/dnd5e` (`blinded()`, `paralyzed()`, `prone()`, `restrained()`,
+  `stunned()`, `unconscious()`, their `RULES`, `contestLossChance({ attacker, defender })`, and
+  `saveDC(dc, { con: 2 })` for a trigger's save, keyed by the builder's `AbilityName`);
+  `condition(name, rule)`, `vulnerability().untilNextHit()`, `saveDisadvantage()` and `savePenalty(d4)`
+  (`untilNextSave()` / `untilEndOfTurn()`), and `untilDamaged()` on a condition; `turn.atStart(effect)`,
+  `onFirstCrit` (on the turn and attached) and `dc.onSaveFailure([damage, effect])`; trigger options
+  `save` (a DC check, kept as written and rolled in the target's state, `saveDC(dc, { con: 2 })`, or a list the
+  target picks from), `dealing` and `optional` (a trigger takes no `target`: its effects go on the creature of
+  the row that lands them; `atStart(effect, { target })` names one); and the row facts `melee()` / `ranged()` (within
+  5 feet / farther, for condition rules), `ability()` (`str` or `strength`, in saves and rule keys alike),
+  `pinned()` and `alwaysFails()`.
+  The guide's new section "Conditions: what the target has, and what it gets" and
+  `yarn example conditions` run the examples (Vex, Topple optional and forced, Stunning Strike, the 2024
+  Grappler, a 2014 shove to Prone, Knock Out, Frostbite, Path to the Grave, a Restrained start), each pinned
+  to the brute-force oracle.
 - **`AttackBuilder.mean()` and `SaveBuilder.mean()`**: the expected damage, read from the exact PMF, so
   `d20.plus(8).ac(16).onHit(d8.plus(4)).mean()` is 5.75 without going through `toQuery()`. This matches
   `Turn.mean()`. `CheckBuilder` requires it. `RollBuilder` has no `mean()`, because `ACBuilder` and
   `DCBuilder` would inherit it and return the raw to-hit total and the chance the save fails. Use
   `.pmf.mean()` on a plain roll.
+
+### Changed
+
+- **Probability readers (`stepStats`, `fireProbability`, `expectedApplications`) are computed without
+  convolving damage**; results may differ from 0.16 in the last bits (≤ 1e-12 relative). Only `pmf`,
+  `mean` and `toQuery` walk the joint distribution.
+
+- **No 8-flag cap**: granted modifiers whose lives do not overlap share a bit of the walk state, and up to
+  30 may be live at once (`too-many-states` past that, no longer `too-many-flags`). Turns that walked
+  before walk the same states and return the same numbers bit for bit.
+- **An unreachable `to` is a no-op**: an effect whose `to` names a row with no attack roll after the
+  condition's first source (an earlier row, a save) is never read, instead of `unknown-id`. A `to` id
+  the turn does not have is still `unknown-id`.
+- **An explicit `of: []` never lands**: a rider or condition with an empty `of` watches nothing (fire
+  probability 0, a zero marginal). An omitted `of` keeps its default; with no attack to default to, it is
+  still `unknown-id`.
+- **A DC check given as a trigger's `save` is rolled in the target's state** whether or not it names an
+  `ability`: save disadvantage and penalty dice in force apply to it, and in a turn whose rules read saves
+  by ability it is `save-without-ability` without one, as a save row is. With nothing in force its odds are
+  its own P(fail), bit for bit as in 0.16. Only `chance` is a fixed gate.
+- **`where` and `joins` are rider options**: a trigger verb's `where` reaches the condition it adds (not
+  only the rider), `joins` on a call without damage is refused, and a rider's `joins` must name a row it
+  watches (`unknown-id`) on a trigger that watches attacks (`unsupported-trigger` for `not-fired`).
 
 ### Documentation
 
@@ -25,6 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`landing: "damage"` on a rider over attacks was ignored; it now requires damage dealt.** A hit or
+  crit that deals 0 is no landing for it (it was before), as for a save.
 - **A skipped attack no longer uses up a pending `next-attack` grant** (since 0.14.0, an attack with
   `chance < 1` spent a grant such as `advantage().untilNextAttack()` in the rounds where it did not happen,
   so the next attack that did happen lost it). With `chance: 0` the turn now equals the turn without the

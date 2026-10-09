@@ -3,13 +3,13 @@ import { d, d20 } from "../builder";
 import { parse } from "../parser/parser";
 import { RollBuilder, ScaleRollBuilder, sumRolls } from "./roll";
 
-const mean = (pmf: { map: Map<number, { p: number }> }): number => {
+const mean = (pmf: { map: ReadonlyMap<number, { p: number }> }): number => {
   let m = 0;
   for (const [v, b] of pmf.map.entries()) m += v * b.p;
   return m;
 };
 
-const distEntries = (pmf: { map: Map<number, { p: number }> }) =>
+const distEntries = (pmf: { map: ReadonlyMap<number, { p: number }> }) =>
   [...pmf.map.entries()].sort((a, b) => a[0] - b[0]).map(([v, b]) => [v, b.p]);
 
 const d6 = () => new RollBuilder().plus(1, d(6));

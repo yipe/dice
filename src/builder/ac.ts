@@ -3,8 +3,8 @@ import { AttackBuilder } from "./attack";
 import { resolveRootD20 } from "./ast";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
-import { AlwaysCritBuilder, naturalRollIndex, RollBuilder } from "./roll";
-import type { RollConfig, RollType } from "./types";
+import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";
+import type { AttackRange, RollConfig, RollType } from "./types";
 
 export interface AttackConfig {
   ac: number;
@@ -13,6 +13,9 @@ export interface AttackConfig {
   // `withCheck` re-derivations, whether the advantage came from this source's own roll type or
   // was granted later (`combine()` below). Default 2.
   advantageDice: 2 | 3;
+  // `ranged()` / `melee()`: a row fact for a turn's condition rules keyed by range; the PMF does
+  // not read it. Unset when neither was called.
+  range?: AttackRange;
 }
 
 /**
@@ -81,6 +84,27 @@ export class ACBuilder extends RollBuilder {
   }
 
   /**
+   * An attack from farther than 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on
+   * "within 5 feet"). A reach attack from 10 feet is `ranged()` for this purpose. A row fact; the PMF does not change.
+   */
+  ranged(): ACBuilder {
+    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, range: "ranged" });
+  }
+
+  /**
+   * An attack from within 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on "within
+   * 5 feet"). A melee reach attack from farther away should be `ranged()`. A row fact; the PMF does not change.
+   */
+  melee(): ACBuilder {
+    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, range: "melee" });
+  }
+
+  /** See {@link RollBuilder.pinned}; keeps the AC, crit threshold, three-dice advantage and range. */
+  override pinned(): ACBuilder {
+    return new ACBuilder(new RollBuilder(this.pinnedConfigs()), this.attackConfig.ac, this.attackConfig);
+  }
+
+  /**
    * The dice configs with `advantageDice` mechanically folded in (`elven accuracy` in place of
    * `advantage` when the net roll should use 3 dice). Shared by every consumer that needs the
    * REAL resolvable dice rather than the raw stored config: {@link getRootDieConfig} (read by
@@ -126,6 +150,14 @@ export class ACBuilder extends RollBuilder {
     return new ACBuilder(this, this.attackConfig.ac, newConfig);
   }
 
+  /** Every roll hits; keeps the crit threshold and the range. */
+  override alwaysHits(): AlwaysHitBuilder {
+    return new AlwaysHitBuilder(new RollBuilder(this.resolvedConfigs()), {
+      critThreshold: this.attackConfig.critThreshold,
+      range: this.attackConfig.range,
+    });
+  }
+
   alwaysCrits(): AlwaysCritBuilder {
     const resolvedBase = new RollBuilder(this.resolvedConfigs());
     return new AlwaysCritBuilder(
@@ -133,6 +165,7 @@ export class ACBuilder extends RollBuilder {
       {
         critThreshold: this.attackConfig.critThreshold,
         ac: this.attackConfig.ac,
+        range: this.attackConfig.range,
       },
       false
     );
@@ -184,6 +217,7 @@ export class ACBuilder extends RollBuilder {
       ac: ac ?? this.attackConfig.ac,
       critThreshold: this.attackConfig.critThreshold,
       advantageDice: this.attackConfig.advantageDice,
+      range: this.attackConfig.range,
     };
     return new ACBuilder(baseCopy, newConfig.ac, newConfig);
   }
