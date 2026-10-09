@@ -328,6 +328,13 @@ interface HoldChoice {
   spend: Draw[];
 }
 
+/** Whether two draws fold in the same riders with the same payloads. */
+function sameRiders(a: Draw["riders"], b: Draw["riders"]): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) return false;
+  return a.every(([id, payload], index) => b[index][0] === id && b[index][1] === payload);
+}
+
 /** `draws` with every pair that advances the walk identically summed into one draw. */
 function mergeDraws(draws: readonly Draw[]): Draw[] {
   const merged: Draw[] = [];
@@ -341,7 +348,9 @@ function mergeDraws(draws: readonly Draw[]): Draw[] {
         other.wounded === draw.wounded &&
         other.typed === draw.typed &&
         // A wound split conditions the riders' payloads; parts with different conditions stay apart.
-        (draw.wounded === undefined || other.riders === draw.riders)
+        (draw.wounded === undefined || other.riders === draw.riders) &&
+        // So does a type split (see `typedSplit`), into payloads of its own.
+        (draw.typed === undefined || sameRiders(other.riders, draw.riders))
     );
     if (index === -1) merged.push(draw);
     else {
@@ -3126,10 +3135,45 @@ export function buildPlan(
     };
   };
 
+  /** Per payload a rider folds in, and its odds of dealing the type: the payload split by whether it did (see `typedSplit`). */
+  const typedPayloads = new WeakMap<PMF, Map<number, { odds: number; typed: PMF; untyped: PMF }>>();
+  /**
+   * `paid` (a folded rider's payload) given that it dealt the `dealing` type, and given that it did not, with `odds` the
+   * chance it did. Typed damage above 0 is damage dealt, so the typed part is the payload's part above 0, at most all of it.
+   */
+  const typedPayloadOf = (paid: PMF, odds: number): { odds: number; typed: PMF; untyped: PMF } => {
+    let byOdds = typedPayloads.get(paid);
+    if (byOdds === undefined) typedPayloads.set(paid, (byOdds = new Map()));
+    let known = byOdds.get(odds);
+    if (known === undefined) {
+      const [above, none] = paid.splitByFactor((damage) => (damage > 0 ? 1 : 0));
+      const mass = paid.mass();
+      const dealtShare = mass > 0 ? above.mass() / mass : 0;
+      const t = Math.min(odds, dealtShare);
+      known = {
+        odds: t,
+        typed: t > 0 ? above.scaleMass(mass / above.mass()) : paid,
+        untyped: t <= 0 ? paid : (t < dealtShare ? above.scaleMass(1 - t / dealtShare).add(none) : none).scaleMass(1 / (1 - t)),
+      };
+      byOdds.set(odds, known);
+    }
+    return known;
+  };
+  /** `own` with `riders`' payloads folded in, as {@link fold} folds them. */
+  const foldPayloads = (own: PMF, riders: ReadonlyArray<readonly [string, PMF]>): PMF =>
+    riders.reduce((all, [, paid]) => {
+      if (folds === "joint") return all.convolve(paid, eps, true);
+      const paidMass = paid.mass();
+      return paidMass !== 1 ? all.scaleMass(paidMass) : all;
+    }, own);
+
   /**
    * `draws` of a hit or crit of `sourceId`, split by whether the landing dealt the `dealing` type:
    * the row's own odds in its context (within a part that dealt damage, scaled to it), or a rider's
    * that landed with it, each independent. The split is by odds alone: exact for every marginal.
+   * A rider's payload is split with it (typed damage above 0 is damage dealt), so a landing that
+   * dealt the type through a rider also dealt that rider's damage: one event for a condition that
+   * damage ends.
    */
   const typedSplit = (
     sourceId: string,
@@ -3153,10 +3197,12 @@ export function buildPlan(
     return draws.flatMap((draw) => {
       // Typed damage above 0 is damage dealt: a part that dealt none is typed only by a rider.
       const own = draw.byKind === NOT_DEALT[outcome] ? 0 : Math.min(1, dealtMass > 0 ? (rowOdds * whole) / dealtMass : 0);
-      let untyped = 1 - own;
-      for (const [id] of draw.riders ?? []) {
+      const riders = draw.riders ?? [];
+      // The riders that may deal the type here: by index into `riders`, each payload split by whether it did.
+      const typing: [number, { odds: number; typed: PMF; untyped: PMF }][] = [];
+      riders.forEach(([id, paid], index) => {
         const payload = (perHitBySource.get(sourceId) ?? []).find((each) => each.id === id);
-        if (payload === undefined || payload.landing === "any") continue;
+        if (payload === undefined) return;
         if (payload.typedOdds === undefined) {
           fail(
             "not-an-attack",
@@ -3164,13 +3210,35 @@ export function buildPlan(
             `Rider "${id}" lands on "${sourceId}", which a condition needing ${type} damage reads, but it cannot say the odds it deals it (ContextualPayload.dealt).`
           );
         }
-        untyped *= 1 - (payload.typedOdds as NonNullable<HitPayload["typedOdds"]>)(type)[outcome];
+        // A rider that lands on anything deals its plain payload on a crit too (see `fold`): its plain hit's odds.
+        const mode = payload.landing === "any" && !payload.critOnly ? "hit" : outcome;
+        const split = typedPayloadOf(paid, (payload.typedOdds as NonNullable<HitPayload["typedOdds"]>)(type)[mode]);
+        if (split.odds > 0) typing.push([index, split]);
+      });
+      if (typing.length === 0) {
+        return [
+          ...(own > 0 ? [{ ...scaleDraw(draw, own), typed: true }] : []),
+          ...(own < 1 ? [{ ...scaleDraw(draw, 1 - own), typed: false }] : []),
+        ];
       }
-      const typed = 1 - untyped;
-      return [
-        ...(typed > 0 ? [{ ...scaleDraw(draw, typed), typed: true }] : []),
-        ...(untyped > 0 ? [{ ...scaleDraw(draw, untyped), typed: false }] : []),
-      ];
+      // Disjoint pieces: the own damage dealt the type; else the first typing rider did; else the next; ...; else none did.
+      const pieces: Draw[] = own > 0 ? [{ ...scaleDraw(draw, own), typed: true }] : [];
+      const piece = (share: number, paid: ReadonlyArray<readonly [string, PMF]>, typed: boolean): Draw => {
+        const ownPart = (draw.own as PMF).scaleMass(share);
+        return { ...draw, own: ownPart, riders: paid, slice: foldPayloads(ownPart, paid), typed };
+      };
+      const paid = [...riders];
+      let rest = 1 - own;
+      for (const [index, split] of typing) {
+        if (rest <= 0) break;
+        const [id] = riders[index];
+        paid[index] = [id, split.typed];
+        pieces.push(piece(rest * split.odds, [...paid], true));
+        paid[index] = [id, split.untyped];
+        rest *= 1 - split.odds;
+      }
+      if (rest > 0) pieces.push(piece(rest, paid, false));
+      return pieces;
     });
   };
 
