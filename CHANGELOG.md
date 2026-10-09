@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `chance` by rounding only (≤ 7e-16 relative observed), since the walk divides its masses by a
   terminal mass that drifts from 1 by an ulp. A stateless 5-attack turn built and read per AC runs
   3–4× faster (`bench/turn.bench.ts`, "stateless 5-row sweep").
+- **Convolution and merge kernels, same bits, less copying.** The mass-invariant rescale after a
+  convolution multiplies the fresh result in place instead of cloning it; a one-bin operand (a
+  miss slice, a flat payload) is convolved by building each bin directly, with no slot arrays; and
+  `addScaled` merges in one pass instead of copying every bin and then merging. Every sum and
+  product is the same, in the same order, so every result is bit for bit what it was
+  (`tests/pmf-kernel-reference.test.ts` pins `convolve`, `convolveRaw` and `addScaled` to a plain
+  reference walk on random labelled PMFs, at the default epsilon and at 0). The 12-attack joint
+  `pmf` sweep runs about 10% faster.
 - **Faster convolution.** `PMF.convolve` accumulates integer-valued operands in flat typed arrays,
   the fingerprint is built in one pass with memoized label quoting, and `add()` merges an unscaled
   branch without copying it first. Every sum is added in the same order as before, so every result
