@@ -200,12 +200,11 @@ describe("triggers on the turn", () => {
     );
   });
 
-  it("passes landing, dealing, target, optional, chance and onSave through", () => {
+  it("passes landing, dealing, optional, chance and onSave through", () => {
     const { conditions } = specOf(() =>
       turn([sword, sword])
         .onFirstHit(prone().untilEndOfTurn(), {
           landing: "damage",
-          target: "ogre",
           optional: true,
         })
         .onEveryHit(savePenalty(d4).untilNextSave(), {
@@ -222,7 +221,6 @@ describe("triggers on the turn", () => {
         on: "first-hit",
         of: both,
         landing: "damage",
-        target: "ogre",
         grants: [proneSpec],
         optional: true,
       },
@@ -242,6 +240,12 @@ describe("triggers on the turn", () => {
         onSave: [{ vulnerability: true, until: "next-hit" }],
       },
     ]);
+  });
+
+  it("refuses a target on a trigger: its effects go on the creature of the row that lands them", () => {
+    expect(
+      codeOf(() => turn([sword]).onFirstHit(prone().untilEndOfTurn(), { target: "ogre" } as never)),
+    ).toBe("unsupported-trigger");
   });
 
   it("damage and effects in one call: happens goes on the rider, the rest on the condition", () => {

@@ -11,10 +11,12 @@ const show = (label: string, value: number) => console.log(`${label.padEnd(48)} 
 // Vex: a hit gives the next attack advantage.
 show("Vex: mean", turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean());
 
-// Topple: each hit may knock the target Prone (CON save); the bow would then have
-// disadvantage, so the player tries it only when it helps.
-const toppling = sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
-show("Topple (optional): mean", turn([toppling, toppling, bow]).mean());
+// Topple: a toppling hit may knock the target Prone (CON save). Prone helps the swords after it and
+// costs the bow, so the player topples with the first sword and not with the third.
+const topple = (optional: boolean) =>
+  sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), ...(optional ? { optional: true as const } : {}) });
+show("Topple (optional): mean", turn([topple(true), sword, topple(true), bow]).mean());
+show("Topple (every time): mean", turn([topple(false), sword, topple(false), bow]).mean());
 
 // 2024 Stunning Strike: once a turn, a failed save stuns; a pass still gives the next attack advantage.
 const monk = turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {

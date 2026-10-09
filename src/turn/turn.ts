@@ -520,7 +520,7 @@ export class Turn {
    * names the rider and the condition takes the default `condition N`.
    */
   private addEffect(on: AttackTriggerOn | "first-crit", effect: Effect, options: EveryHitOptions): Turn {
-    const { save, chance, onSave, dealing, target, optional, happens, ...riderOptions } = options;
+    const { save, chance, onSave, dealing, optional, happens, ...riderOptions } = options;
     const parts: readonly unknown[] = Array.isArray(effect) ? effect : [effect];
     const grants = parts.filter(isGrant);
     const damage = parts.filter((part) => !isGrant(part)) as Damage[];
@@ -533,9 +533,9 @@ export class Turn {
     }
     const coin = happens === undefined ? {} : { happens };
     if (grants.length === 0) {
-      if ([save, chance, onSave, dealing, target, optional].some((field) => field !== undefined)) {
+      if ([save, chance, onSave, dealing, optional].some((field) => field !== undefined)) {
         throw new Error(
-          "save, chance, onSave, dealing, target and optional shape effects only, and this call has none: damage is never gated by them. Pass a SaveBuilder as the damage for damage that depends on a save."
+          "save, chance, onSave, dealing and optional shape effects only, and this call has none: damage is never gated by them. Pass a SaveBuilder as the damage for damage that depends on a save."
         );
       }
       return this.rider({ ...riderOptions, ...coin, damage: effect as RiderDamage, on: on as AttackTriggerOn });
@@ -637,6 +637,14 @@ export class Turn {
     }
     if (options.perSource !== undefined) {
       throw new Error("A transform rewrites the attack's own payload, so it has no payload per source.");
+    }
+    const ignored = (["happens", "dealing", "optional"] as const).find((field) => options[field] !== undefined);
+    if (ignored !== undefined) {
+      throw new TurnSpecError(
+        "unsupported-trigger",
+        options.id ?? "",
+        `A transform is a once-per-turn substitute for the attack's own payload, so it takes no "${ignored}".`
+      );
     }
     if (options.critDamage !== undefined) {
       throw new TurnSpecError(
@@ -1467,9 +1475,20 @@ export class Turn {
       const split = new Map<string, State>();
       for (const [key, state] of states) {
         if (happens > 0) {
-          split.set(`${key}+`, { ...state, flags: state.flags | bit, damage: ledger.scale(state.damage, happens) });
+          split.set(`${key}+`, {
+            ...state,
+            flags: state.flags | bit,
+            damage: ledger.scale(state.damage, happens),
+            applied: state.applied.map((mass) => mass * happens),
+          });
         }
-        if (happens < 1) split.set(`${key}-`, { ...state, damage: ledger.scale(state.damage, 1 - happens) });
+        if (happens < 1) {
+          split.set(`${key}-`, {
+            ...state,
+            damage: ledger.scale(state.damage, 1 - happens),
+            applied: state.applied.map((mass) => mass * (1 - happens)),
+          });
+        }
       }
       states = split;
     }

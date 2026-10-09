@@ -778,10 +778,13 @@ const fist = d20.plus(8).ac(16).onHit(d6.plus(4));
 // Vex: a hit gives the next attack advantage.
 turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean(); // 12.8959
 
-// Topple: each hit may knock the target Prone (CON save). The bow would then have disadvantage,
-// so the player tries it only when it helps.
-const toppling = sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
-turn([toppling, toppling, bow]).mean(); // 17.2500
+// Topple: a toppling hit may knock the target Prone (CON save). Prone helps the swords after it and
+// costs the bow, so with `optional` the player topples with the first sword and not with the third.
+const topple = (optional: boolean) =>
+  sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), ...(optional ? { optional: true as const } : {}) });
+turn([topple(true), sword, topple(true), bow]).mean(); // 23.7677
+turn([topple(false), sword, topple(false), bow]).mean(); // 23.2745: toppling every time
+turn([sword, sword, sword, bow]).mean(); // 23.0000: never toppling
 
 // 2024 Stunning Strike: once a turn, a failed save stuns; a pass still gives the next attack advantage.
 const monk = turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {
@@ -862,27 +865,56 @@ caster.marginal("breath").pmf.mean(); // 10.5563
 | `onSave`            | effects on the other branch: the save passed, or `1 - chance`                             |
 | `of`, `id`          | the rows or riders watched (a rider id: land with that rider), and a name to read it by   |
 | `dealing`           | the landing must deal this damage type; the row says its type with `typed("cold")` (see above) |
-| `target`            | the creature the effects go on; rows name theirs with `attack(source, { target })`       |
 | `optional: true`    | "you can": taken only where it raises the mean                                            |
+
+A trigger's effects go on the creature of the row that lands them (`attack(source, { target })` aims a row);
+a trigger takes no `target` (`unsupported-trigger`). Only `atStart(effect, { target })` names one, and it must be
+`"target"` or a creature some attack is aimed at (`unknown-id` otherwise).
+
+A DC check given as `save` keeps everything it says. A plain one (a d20 plus a flat bonus) is the save
+`{ ability, dc, bonus, rollType }`; one with bonus dice (Bless `.plus(d4)`), a reroll (`d20.reroll(1)`),
+`pinned()` or `alwaysFails()` is rolled as written, in the target's state. Abilities may be spelled `str` or
+`strength`, in a save and in a rule's `save` keys alike.
+
+| Row fact                         | On                         | Means                                                                    |
+| -------------------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| `melee()` / `ranged()`           | an attack                  | from within 5 feet / from farther away, for condition rules (see above)  |
+| `ability("con")`                 | a DC check or a save       | the ability the save is made with, for rules keyed by ability            |
+| `pinned()`                       | a roll, check, or save     | no grant or condition changes this roll's advantage or disadvantage     |
+| `alwaysFails()`                  | a DC check or a save       | the save fails without rolling                                           |
+| `turn.stateLimit(n)`             | the turn                   | the most distinct states the walk may carry (default 16,384); more is `too-many-states` |
 
 | Sugar                                  | Is                                                                                         |
 | -------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `saveDC(15, { con: 2 })`               | `{ ability: "constitution", dc: 15, bonus: 2 }`; several abilities give the list the target picks from; `TypeError` on none, an unknown or repeated one, or a non-integer |
 | `attack.typed("cold")`                 | the attack's whole damage is cold: `dealt("cold", context)` is P(damage > 0 \| hit) and \| crit; any other type is 0 |
 
-Readers: `mean()`, `marginal(id).pmf` (one attack's or rider's own damage; the marginals' means add up to the
-mean), `fireProbability(id)` (P(a condition was applied where a later row reads it)), and `stepStats(id).live`
-(how often each modifier was in force when an attack rolled).
+| Reader                        | Returns                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `mean()`                      | the turn's expected damage                                                                  |
+| `marginal(id).pmf`            | one attack's or rider's own damage; the marginals' means add up to the mean                 |
+| `fireProbability(id)`         | P(a condition was applied where a later row reads it); 1 for a `start` condition           |
+| `attemptProbability(id)`      | the expected number of times a condition is tried (for a `first-*` one, the odds it is)     |
+| `stepStats(id).live`          | how often each effect was in force when the row rolled, with the part each source accounts for |
+| `stepStats(id).conditions`    | each condition the row tried: the odds it was attempted there and the odds it took          |
+| `landings(id)`                | the ways riders land on attack `id` together, per outcome, with their odds                 |
+| `conditionIds`                | the turn's condition ids, declared and attached, in order                                   |
+| `peakStates`                  | the most states the walk held after any step                                                |
 
 ### Errors
 
 | Code                        | Cause                                                              | Fix                                                        |
 | --------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | `unknown-range`             | a rule keyed by range (Prone, Unconscious) reads a row with none   | add `.melee()` or `.ranged()` to the attack                |
-| `unknown-ability`           | a save names an ability that is neither 5e's nor in any rule       | use `str`/`dex`/`con`/`int`/`wis`/`cha` or the full name   |
+| `unknown-ability`           | a save or a rule's `save` key names no 5e ability                  | use `str`/`dex`/`con`/`int`/`wis`/`cha` or the full name   |
 | `save-without-ability`      | a rule keyed by ability (Stunned, Restrained) reads a save with none | add `.ability("dex")` to the DC check                    |
 | `too-many-states`           | more effects live at once than the walk holds, or past `stateLimit` | drop or scope effects (`.to`, `of`), or raise `stateLimit(n)` |
 | `dealing-joint-unsupported` | the joint `pmf` of a turn with `dealing`                           | read `mean()` or `marginal(id)` instead                    |
+| `no-rebindable-source`      | a rider `joins` a row whose source does not pool rider dice        | make the row a `ContextualSource` whose `under(context)` rolls `context.joined` |
+
+A rider's `joins` rolls its dice inside the row's own roll, so the row's source must pool them: a
+`ContextualSource` whose `under(context)` adds the dice of the riders in `context.joined`. The library's attack and
+save builders do not, nor does a plain PMF, and a rider that joins one is `no-rebindable-source`.
 
 ## Statistics and charts
 

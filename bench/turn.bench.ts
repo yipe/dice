@@ -33,7 +33,7 @@ const breath = d20.plus(5).dc(15).ability("dex").onSaveFailure(roll(4, d6)).save
 
 const examples: Record<string, { build: () => Turn; joint: boolean }> = {
   vex: { build: () => turn([sword.onEveryHit(advantage().untilNextAttack()), sword]), joint: true },
-  topple: { build: () => turn([toppling, toppling, bow]), joint: true },
+  topple: { build: () => turn([toppling, melee, toppling, bow]), joint: true },
   stunningStrike: {
     build: () =>
       turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {

@@ -3,7 +3,7 @@ import { AttackBuilder } from "./attack";
 import { resolveRootD20 } from "./ast";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
-import { AlwaysCritBuilder, naturalRollIndex, RollBuilder } from "./roll";
+import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";
 import type { AttackRange, RollConfig, RollType } from "./types";
 
 export interface AttackConfig {
@@ -148,6 +148,14 @@ export class ACBuilder extends RollBuilder {
       critThreshold: threshold,
     };
     return new ACBuilder(this, this.attackConfig.ac, newConfig);
+  }
+
+  /** Every roll hits; keeps the crit threshold and the range. */
+  override alwaysHits(): AlwaysHitBuilder {
+    return new AlwaysHitBuilder(new RollBuilder(this.resolvedConfigs()), {
+      critThreshold: this.attackConfig.critThreshold,
+      range: this.attackConfig.range,
+    });
   }
 
   alwaysCrits(): AlwaysCritBuilder {

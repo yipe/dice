@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ContextualPayload`, doubled with a hit that used up a vulnerability), `any-crit` riders with a
   `max` (their first `max` crits; `Infinity` for every crit), `landing: "any"` (every outcome once the
   row happens, a miss included), `happens` (one coin for the turn), `joins` (the rider's dice roll in
-  the row while it has a landing left, and it deals nothing beside it there), partners (a first-hit
+  the row while it has a landing left, and it deals nothing beside it there; the row's source must pool
+  them through `under(context).joined`, else `no-rebindable-source`), partners (a first-hit
   rider named in another's `of` opens its rows, `where`, to it), conditions that fire where a rider
   landed (`of: [rider id]`, `where`), and gated attacks (`AttackOptions.after`), which happen at
   their own place in the turn only where the earlier attack landed. `dealing` (a landing must deal a
@@ -51,15 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ways riders land on an attack together; `peakStates` the most states the walk held. The 0.16
   fields keep their numbers bit for bit.
 - **Conditions, fluently**: `@yipe/dice/dnd5e` (`blinded()`, `paralyzed()`, `prone()`, `restrained()`,
-  `stunned()`, `unconscious()`, their `RULES`, and `contestLossChance({ attacker, defender })`);
+  `stunned()`, `unconscious()`, their `RULES`, `contestLossChance({ attacker, defender })`, and
+  `saveDC(dc, { con: 2 })` for a trigger's save, keyed by the builder's `AbilityName`);
   `condition(name, rule)`, `vulnerability().untilNextHit()`, `saveDisadvantage()` and `savePenalty(d4)`
   (`untilNextSave()` / `untilEndOfTurn()`), and `untilDamaged()` on a condition; `turn.atStart(effect)`,
   `onFirstCrit` (on the turn and attached) and `dc.onSaveFailure([damage, effect])`; trigger options
-  `save` (an `ability(...)` DC check, or a list the target picks from), `dealing`, `target` and
-  `optional`; and the row facts `melee()` / `ranged()`, `ability()`, `pinned()` and `alwaysFails()`.
+  `save` (an `ability(...)` DC check, rolled as written in the target's state, or a list the target picks
+  from), `dealing` and `optional` (a trigger takes no `target`: its effects go on the creature of the row
+  that lands them; `atStart(effect, { target })` names one); and the row facts `melee()` / `ranged()` (within
+  5 feet / farther, for condition rules), `ability()` (`str` or `strength`, in saves and rule keys alike),
+  `pinned()` and `alwaysFails()`.
   The guide's new section "Conditions: what the target has, and what it gets" and
-  `yarn example conditions` run nine examples (Vex, Topple, Stunning Strike, both grapples, Knock Out,
-  Frostbite, Path to the Grave, a Restrained start), each pinned to the brute-force oracle.
+  `yarn example conditions` run the examples (Vex, Topple optional and forced, Stunning Strike, the 2024
+  Grappler, a 2014 shove to Prone, Knock Out, Frostbite, Path to the Grave, a Restrained start), each pinned
+  to the brute-force oracle.
 - **`AttackBuilder.mean()` and `SaveBuilder.mean()`**: the expected damage, read from the exact PMF, so
   `d20.plus(8).ac(16).onHit(d8.plus(4)).mean()` is 5.75 without going through `toQuery()`. This matches
   `Turn.mean()`. `CheckBuilder` requires it. `RollBuilder` has no `mean()`, because `ACBuilder` and

@@ -12,6 +12,7 @@ import {
   combineRollType,
   contextKey,
   contextOf,
+  IGNORES_JOINED,
   isContextual,
   MOD_ADVANTAGE,
   MOD_AUTO_FAIL,
@@ -664,15 +665,30 @@ function maskOf(modifiers: readonly string[], table: Readonly<Record<string, num
   return modifiers.reduce((mask, modifier) => mask | (table[modifier] ?? 0), 0);
 }
 
-/** The abilities a save may name without a rule naming it. */
-const ABILITIES: Readonly<Record<string, true>> = {
-  strength: true,
-  dexterity: true,
-  constitution: true,
-  intelligence: true,
-  wisdom: true,
-  charisma: true,
+/** The 5e abilities by every name a turn accepts (the full name or its three-letter form), to the full name. */
+const ABILITIES: Readonly<Record<string, string>> = {
+  str: "strength",
+  dex: "dexterity",
+  con: "constitution",
+  int: "intelligence",
+  wis: "wisdom",
+  cha: "charisma",
+  strength: "strength",
+  dexterity: "dexterity",
+  constitution: "constitution",
+  intelligence: "intelligence",
+  wisdom: "wisdom",
+  charisma: "charisma",
 };
+
+/** What `rule` does to a save made with `ability`, either spelled by its full or its three-letter name. */
+function saveModifiersOf(rule: ConditionRule, ability: string): number {
+  const full = ABILITIES[ability];
+  return Object.entries(rule.save ?? {}).reduce(
+    (mask, [key, modifiers]) => (ABILITIES[key] === full ? mask | maskOf(modifiers ?? [], SAVE_MODIFIERS) : mask),
+    0
+  );
+}
 
 /** Whether a flag is still needed once step `step` is done: set by then, and read later. */
 const liveAfter = (flag: Flag, step: number): boolean => flag.first <= step && step < flag.lastRead;
@@ -1156,19 +1172,11 @@ export function buildPlan(
   // A rider's `ContextualPayload` damage is replaced below (`placed`): from there on every damage is a `RiderDamage`.
   const declaredRiders = (spec.riders ?? []) as readonly EvaluatedRider[];
   // `every-hit` capped at 1 IS `first-hit`: lowered here, before anything reads the riders, so
-  // it takes the same step, fire slot, `otherwise` / `not-fired`, `of` naming and arithmetic.
+  // it takes the same step, fire slot, `otherwise` / `not-fired`, `of` naming and arithmetic. Every
+  // other field (`happens`, `joins`, `where`, …) is kept.
   const lowered: readonly EvaluatedRider[] = declaredRiders.map((rider): EvaluatedRider => {
     if (rider.on !== "every-hit" || rider.max !== 1) return rider;
-    const { id, of, damage, critDamage, perSource, landing } = rider;
-    return {
-      on: "first-hit",
-      damage,
-      ...(landing === undefined ? {} : { landing }),
-      ...(id === undefined ? {} : { id }),
-      ...(of === undefined ? {} : { of }),
-      ...(critDamage === undefined ? {} : { critDamage }),
-      ...(perSource === undefined ? {} : { perSource }),
-    };
+    return { ...rider, on: "first-hit", max: undefined } as EvaluatedRider;
   });
   const substitutes: readonly SubstituteSpec[] = spec.substitutes ?? [];
   const probes: readonly ProbeSpec[] = spec.observe ?? [];
@@ -1471,8 +1479,20 @@ export function buildPlan(
       if (tried !== undefined) {
         throw new Error(`Condition "${id}" is in force from the start, so nothing tries it: it takes no "${tried}".`);
       }
+      const { target } = condition;
+      if (target !== undefined && target !== DEFAULT_CREATURE && !attackTargets.includes(target)) {
+        fail(
+          "unknown-id",
+          id,
+          `Condition "${id}" starts on "${String(target)}", which no attack is aimed at. Name "${DEFAULT_CREATURE}" or an attack's target.`
+        );
+      }
     } else if (condition.target !== undefined) {
-      throw new Error(`Condition "${id}" names a target, which only a "start" condition takes: the others are on the creature of the row that lands them.`);
+      fail(
+        "unsupported-trigger",
+        id,
+        `Condition "${id}" names a target, which only a "start" condition takes: the others are on the creature of the row that lands them.`
+      );
     }
     if (condition.onSave !== undefined && chance === undefined && options.length === 0) {
       throw new Error(
@@ -1908,7 +1928,16 @@ export function buildPlan(
       fail("unsupported-trigger", id, `Rider "${id}" joins rows but lands on anything: a miss has no roll to join.`);
     }
     for (const joined of rider.joins) {
-      if (!attackIndexById.has(joined)) fail("unknown-id", joined, `Rider "${id}" joins "${joined}", which is not an attack in this turn.`);
+      const attackIndex = attackIndexById.get(joined);
+      if (attackIndex === undefined) fail("unknown-id", joined, `Rider "${id}" joins "${joined}", which is not an attack in this turn.`);
+      const source = attackSources[attackIndex as number];
+      if (!isContextual(source) || IGNORES_JOINED in source) {
+        fail(
+          "no-rebindable-source",
+          joined,
+          `Rider "${id}" joins "${joined}", but joins needs a source that pools the rider's dice via under(context).joined; this row's source does not.`
+        );
+      }
     }
   });
   // An attack gated on an earlier one: validated here, before the parent's draws are split.
@@ -2111,8 +2140,23 @@ export function buildPlan(
       "rule" in effect ? [effect.rule, ...(effect.rule.onEnd ? [effect.rule.onEnd.rule] : [])] : []
     )
   );
-  const ruledAbilities = new Set(rules.flatMap((rule) => Object.keys(rule.save ?? {})));
-  /** Checks a save's ability against the turn's rules: needed where a rule reads saves by ability, and known. */
+  conditions.forEach((condition, index) => {
+    for (const effect of [...condition.grants, ...(condition.onSave ?? [])]) {
+      if (!("rule" in effect)) continue;
+      for (const rule of [effect.rule, ...(effect.rule.onEnd ? [effect.rule.onEnd.rule] : [])]) {
+        const unknown = Object.keys(rule.save ?? {}).find((key) => ABILITIES[key] === undefined);
+        if (unknown !== undefined) {
+          fail(
+            "unknown-ability",
+            conditionIds[index],
+            `The rule of "${effect.condition}" changes saves made with "${unknown}", which is not a 5e ability (str, dex, con, int, wis, cha or the full name).`
+          );
+        }
+      }
+    }
+  });
+  const ruledAbilities = new Set(rules.flatMap((rule) => Object.keys(rule.save ?? {}).map((key) => ABILITIES[key])));
+  /** Checks a save's ability: a known one, and present where a rule reads saves by ability. */
   const checkAbility = (owner: string, ability: string | undefined): void => {
     if (ability === undefined) {
       if (ruledAbilities.size > 0) {
@@ -2124,8 +2168,8 @@ export function buildPlan(
       }
       return;
     }
-    if (!ABILITIES[ability] && !ruledAbilities.has(ability)) {
-      fail("unknown-ability", owner, `"${owner}" saves with "${ability}", which is neither a 5e ability nor one a condition's rule names.`);
+    if (ABILITIES[ability] === undefined) {
+      fail("unknown-ability", owner, `"${owner}" saves with "${ability}", which is not a 5e ability (str, dex, con, int, wis, cha or the full name).`);
     }
   };
   sequence.forEach((entry, position) => {
@@ -2160,7 +2204,7 @@ export function buildPlan(
     const ruleRead = (name: string, rule: ConditionRule, position: number): number => {
       if (savesAt[position]) {
         const ability = rowFacts[position]?.ability;
-        return ability === undefined ? 0 : maskOf(rule.save?.[ability] ?? [], SAVE_MODIFIERS);
+        return ability === undefined ? 0 : saveModifiersOf(rule, ability);
       }
       if (!rollsAttack[position] || rule.attack === undefined) return 0;
       const range = rowFacts[position]?.range;
@@ -2227,7 +2271,7 @@ export function buildPlan(
           "rule" in effect
             ? ability === undefined
               ? 0
-              : maskOf(effect.rule.save?.[ability] ?? [], SAVE_MODIFIERS)
+              : saveModifiersOf(effect.rule, ability)
             : modifiers,
         until: effect.until,
         readers,

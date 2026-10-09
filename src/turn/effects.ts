@@ -11,6 +11,7 @@ import type {
   SubstitutePolicy,
   SubstituteSpec,
 } from "./types";
+import { combineRollType } from "./context";
 import { TurnSpecError } from "./types";
 
 /**
@@ -299,21 +300,34 @@ export function lastingForTurn(effect: StartEffect): Lasting {
 }
 
 /**
- * A trigger's save: a DC check whose `ability` (when it has one) and numbers become a
- * state-aware {@link GrantSaveSpec}, or that spec itself.
+ * A trigger's save: a DC check (its `ability`, when it has one, decides what the target's state does
+ * to it) or a {@link GrantSaveSpec} itself.
  */
 export type TriggerSave = DCBuilder | GrantSaveSpec;
 
-/** The {@link GrantSaveSpec} of a {@link TriggerSave}: a DC check's stored ability (when set) and numbers. */
+/**
+ * The {@link GrantSaveSpec} of a {@link TriggerSave}. A plain DC check (a d20 plus a flat bonus) is
+ * `{ ability, dc, bonus, rollType }`; any other (bonus dice, a reroll, `pinned()`, `alwaysFails()`)
+ * is a `failChance` that rolls the check itself in the target's state, so nothing it says is lost.
+ */
 export function grantSaveSpec(save: TriggerSave): GrantSaveSpec {
   if (!isDCCheck(save)) return save;
   const ability = save.saveAbility;
+  const named = ability === undefined ? {} : { ability };
   const rollType = save.rollType;
+  if (save.isPlainSave) {
+    return { ...named, dc: save.saveDC, bonus: save.modifier, ...(rollType === "flat" ? {} : { rollType }) };
+  }
+  const pinned = save.getRootDieConfig()?.pinned === true;
   return {
-    ...(ability === undefined ? {} : { ability }),
-    dc: save.saveDC,
-    bonus: save.modifier,
-    ...(rollType === "flat" ? {} : { rollType }),
+    ...named,
+    // The walk's context carries the target's state over a flat roll: the check's own roll type joins it here.
+    failChance: (context) =>
+      save.rolledIn({
+        rollType: pinned ? rollType : combineRollType(rollType, false, context.rollType === "disadvantage", false),
+        autoFail: context.autoFail,
+        penaltyDice: context.penaltyDice,
+      }).saveProbabilities().pFail,
   };
 }
 
@@ -329,10 +343,18 @@ export function isDCCheck(save: unknown): save is DCBuilder {
  * save bonus, not its AC). Any other save is state-aware, rolled by the walk.
  */
 export function gateFields(
-  options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "target" | "optional">,
+  options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "optional">,
   eps: number
 ): Omit<ConditionSpec, "on" | "of" | "grants" | "id"> {
-  const { save, chance, onSave, landing, dealing, target, optional } = options;
+  const { save, chance, onSave, landing, dealing, optional } = options;
+  // A plain-JS caller can still pass the `target` the types no longer offer: refuse it rather than drop it.
+  if ("target" in options && options.target !== undefined) {
+    throw new TurnSpecError(
+      "unsupported-trigger",
+      "",
+      "A trigger takes no target: its effects go on the creature of the row that lands them. Use atStart(effect, { target }) for a creature's starting state."
+    );
+  }
   if (save !== undefined && chance !== undefined) {
     throw new Error("Pass either save or chance, not both: each is the chance the grants take.");
   }
@@ -345,7 +367,7 @@ export function gateFields(
     throw new Error("save must be a DC check such as d20.plus(2).dc(15), or a GrantSaveSpec.");
   }
   const [lone] = saves;
-  const legacy = !Array.isArray(save) && isDCCheck(lone) && grantSaveSpec(lone).ability === undefined;
+  const legacy = !Array.isArray(save) && isDCCheck(lone) && lone.saveAbility === undefined;
   const probability = legacy && isDCCheck(lone) ? lone.toPMF(eps).pAt(1) : chance;
   const grantSaves = legacy ? [] : saves.map(grantSaveSpec);
   const saved = (onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave]) as readonly Lasting[];
@@ -353,7 +375,6 @@ export function gateFields(
     ...(probability === undefined ? {} : { chance: probability }),
     ...(landing === undefined ? {} : { landing }),
     ...(dealing === undefined ? {} : { dealing }),
-    ...(target === undefined ? {} : { target }),
     ...(grantSaves.length === 0 ? {} : { save: Array.isArray(save) ? grantSaves : grantSaves[0] }),
     ...(saved.length === 0 ? {} : { onSave: saved.map(effectSpec) }),
     ...(optional === undefined ? {} : { optional }),
@@ -377,8 +398,6 @@ export interface ConditionOptions extends RiderOptions {
   onSave?: Lasting | readonly Lasting[];
   /** The landing must deal damage of this type. */
   dealing?: string;
-  /** The creature the effects go on. */
-  target?: string;
   /** "You can": the turn takes the effects only where that raises the mean. */
   optional?: true;
   /** The probability, in `[0, 1]`, that the call's damage happens at all this turn. */

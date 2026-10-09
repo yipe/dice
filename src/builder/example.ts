@@ -639,14 +639,23 @@ const longbow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
 export const vex = turn([longsword.onEveryHit(advantage().untilNextAttack()), longsword]);
 
 /**
- * Topple: each hit may knock the target Prone (CON save); the bow would then have disadvantage, so the player tries
- * it only when it helps. A function, not a constant: deciding an optional condition walks the turn, and that must not
- * happen at import.
+ * Topple: a toppling hit may knock the target Prone (CON save). Prone from the first toppling sword helps the two melee
+ * attacks after it and costs the bow; from the second it only costs the bow. With `optional` the player takes the first
+ * and declines the second, which beats both toppling every time ({@link toppleForced}) and never toppling. A function,
+ * not a constant: deciding an optional condition walks the turn, and that must not happen at import.
  */
 export function topple(): Turn {
   const toppling = longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
-  return turn([toppling, toppling, longbow]);
+  return turn([toppling, longsword, toppling, longbow]);
 }
+
+/** {@link topple} without the choice: every toppling hit tries to knock the target Prone. */
+export const toppleForced = turn([
+  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longsword,
+  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longbow,
+]);
 
 /** 2024 Stunning Strike: once a turn, a failed save stuns; a passed one still gives the next attack advantage. */
 export const stunningStrike = turn([smallFist, smallFist, smallFist]).onFirstHit(stunned().untilEndOfTurn(), {

@@ -6,9 +6,10 @@ import type { DiceQuery } from "../pmf/query";
 import { pmfFromRollBuilder } from "./ast";
 import type { AttachedCondition } from "./attack";
 import type { DCBuilder } from "./dc";
-import { naturalRollIndex, ParsedRollBuilder, RollBuilder } from "./roll";
+import { ParsedRollBuilder, RollBuilder } from "./roll";
 import type { AbilityName, CheckBuilder, SaveResolution } from "./types";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
+import { IGNORES_JOINED } from "../turn/context";
 
 export type SaveOutcome = "normal" | "half";
 
@@ -31,6 +32,9 @@ function payloadPMF(effect: RollBuilder, eps: number): PMF {
 }
 
 export class SaveBuilder implements CheckBuilder, ContextualSource {
+  /** A turn rolls no rider's dice into this row (`Rider.joins`): `under` ignores `context.joined`. */
+  readonly [IGNORES_JOINED] = true;
+
   /**
    * @param check the DC check
    * @param failureEffect what a failed save deals; none means a failure deals 0
@@ -135,18 +139,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
     const autoFail = own.autoFail || context.autoFail;
     let save: SaveBuilder = this;
     if (rollType !== own.rollType || autoFail !== own.autoFail || context.penaltyDice.length > 0) {
-      if (rollType === "elven accuracy") {
-        throw new RangeError("A save cannot roll with Elven Accuracy: it is only valid for attack rolls.");
-      }
-      const configs = this.check.getSubRollConfigs();
-      const root = naturalRollIndex(configs);
-      if (root !== -1) configs[root].rollType = rollType;
-      let roll = new RollBuilder(configs);
-      for (const { count, sides } of context.penaltyDice) roll = roll.minus(count, new RollBuilder(1).d(sides));
-      let check = roll.dc(this.check.saveDC);
-      const ability = this.check.saveAbility;
-      if (ability !== undefined) check = check.ability(ability);
-      if (autoFail) check = check.alwaysFails();
+      const check = this.check.rolledIn({ rollType, autoFail, penaltyDice: context.penaltyDice });
       save = new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
     }
     return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);

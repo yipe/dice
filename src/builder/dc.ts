@@ -2,12 +2,13 @@ import { PMF } from "../pmf/pmf";
 import { resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { requireFinite } from "./arguments";
-import { RollBuilder } from "./roll";
+import { naturalRollIndex, RollBuilder } from "./roll";
 import { SaveBuilder } from "./save";
 import type { AttachedCondition } from "./attack";
 import type { Lasting } from "../turn/effects";
 import { isGrant } from "../turn/effects";
 import type { Ability, AbilityName } from "./types";
+import type { RowContext } from "../turn/types";
 
 interface SaveConfig {
   dc: number;
@@ -104,6 +105,41 @@ export class DCBuilder extends RollBuilder {
   /** See {@link RollBuilder.pinned}; keeps the DC and the save's facts. */
   override pinned(): DCBuilder {
     return new DCBuilder(new RollBuilder(this.pinnedConfigs()), this.saveConfig);
+  }
+
+  /**
+   * Whether this check is a lone d20 plus a flat bonus and nothing else: no bonus or penalty dice, no
+   * reroll or other die option, not {@link pinned} and not {@link alwaysFails}. Exactly what a plain
+   * `{ dc, bonus, rollType }` save spells.
+   */
+  get isPlainSave(): boolean {
+    if (this.saveConfig.autoFail) return false;
+    const configs = this.getSubRollConfigs();
+    const root = naturalRollIndex(configs);
+    if (root === -1) return false;
+    const { sides, count, reroll, explode, explodePoolBudget, minimum, bestOf, keep, pinned } = configs[root];
+    if (sides !== 20 || count !== 1 || reroll || explode || explodePoolBudget || minimum || bestOf || keep || pinned) {
+      return false;
+    }
+    return configs.every((config, index) => index === root || config.sides === 0 || config.count === 0);
+  }
+
+  /**
+   * This check rolled in a turn's row context, as a save row rolls: the natural roll takes `rollType`
+   * literally, each of `penaltyDice` comes off the roll (`d20.plus(5).minus(1, d4)`), and `autoFail`
+   * makes it fail without rolling (on top of its own {@link alwaysFails}). The DC and ability are kept.
+   */
+  rolledIn(context: Pick<RowContext, "rollType" | "autoFail" | "penaltyDice">): DCBuilder {
+    if (context.rollType === "elven accuracy") {
+      throw new RangeError("A save cannot roll with Elven Accuracy: it is only valid for attack rolls.");
+    }
+    const configs = this.getSubRollConfigs();
+    const root = naturalRollIndex(configs);
+    if (root !== -1) configs[root].rollType = context.rollType;
+    let roll = new RollBuilder(configs);
+    for (const { count, sides } of context.penaltyDice) roll = roll.minus(count, new RollBuilder(1).d(sides));
+    const autoFail = this.saveConfig.autoFail || context.autoFail;
+    return new DCBuilder(roll, { ...this.saveConfig, ...(autoFail ? { autoFail: true } : {}) });
   }
 
   override add(anotherRoll: RollBuilder): DCBuilder {

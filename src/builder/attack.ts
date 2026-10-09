@@ -23,6 +23,7 @@ import {
 import type { AttackRange, AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
 import type { ConditionOptions, Lasting } from "../turn/effects";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
+import { IGNORES_JOINED } from "../turn/context";
 
 type ActionEffect = RollBuilder;
 
@@ -47,7 +48,7 @@ export interface AttachedCondition {
 /** What gates an attached condition's grants: the same fields `Turn`'s trigger verbs accept. */
 export type ConditionGate = Pick<
   ConditionOptions,
-  "save" | "chance" | "onSave" | "landing" | "dealing" | "target" | "optional"
+  "save" | "chance" | "onSave" | "landing" | "dealing" | "optional"
 >;
 
 /**
@@ -73,6 +74,9 @@ function withRange<C extends ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder>(c
 }
 
 export class AttackBuilder implements CheckBuilder, ContextualSource {
+  /** A turn rolls no rider's dice into this row (`Rider.joins`): `under` ignores `context.joined`. */
+  readonly [IGNORES_JOINED] = true;
+
   constructor(
     readonly check: ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder,
     private readonly hitEffect?: ActionEffect,

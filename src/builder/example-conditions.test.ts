@@ -36,6 +36,18 @@ describe("Conditions examples, against the oracle", () => {
     cap: "once",
     ...rest,
   });
+  /** Topple on the first and third swords: a CON save or Prone, optional or forced. */
+  const toppleGrants = (optional: boolean): GrantSpec[] =>
+    [0, 2].map(
+      (k): GrantSpec => ({
+        of: [k],
+        trigger: "hit",
+        cap: "unlimited",
+        ...(optional ? { optional: true } : {}),
+        save: { ability: "constitution", dc: 15, saveBonus: 3 },
+        effects: [{ kind: "condition", condition: "prone" }],
+      })
+    );
   const oracle = (synthetic: SyntheticTurn) => enumerateSyntheticTurn(synthetic, { detail: true });
   const expectMarginal = (actual: PMF, expected: Map<number, number>): void => {
     for (const value of new Set([...expected.keys(), ...actual.support()])) {
@@ -55,19 +67,12 @@ describe("Conditions examples, against the oracle", () => {
     [
       "topple",
       () => examples.topple().mean(),
-      {
-        attacks: [longsword, longsword, longbow],
-        grants: [0, 1].map(
-          (k): GrantSpec => ({
-            of: [k],
-            trigger: "hit",
-            cap: "unlimited",
-            optional: true,
-            save: { ability: "constitution", dc: 15, saveBonus: 3 },
-            effects: [{ kind: "condition", condition: "prone" }],
-          })
-        ),
-      },
+      { attacks: [longsword, longsword, longsword, longbow], grants: toppleGrants(true) },
+    ],
+    [
+      "toppleForced",
+      () => examples.toppleForced.mean(),
+      { attacks: [longsword, longsword, longsword, longbow], grants: toppleGrants(false) },
     ],
     [
       "grappler",
@@ -116,6 +121,12 @@ describe("Conditions examples, against the oracle", () => {
 
   it.each(means)("%s: mean() is the oracle's", (_name, mean, synthetic) => {
     expect(Math.abs(mean() - oracle(synthetic).mean)).toBeLessThanOrEqual(TOLERANCE);
+  });
+
+  it("topple: optional beats both toppling every time and never toppling", () => {
+    const optional = examples.topple().mean();
+    expect(optional).toBeGreaterThan(examples.toppleForced.mean() + 0.1);
+    expect(optional).toBeGreaterThan(oracle({ attacks: [longsword, longsword, longsword, longbow] }).mean + 0.1);
   });
 
   it("stunningStrike: mean() and the third fist's advantage odds (stepStats) are the oracle's", () => {

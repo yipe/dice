@@ -2,6 +2,7 @@
  * The D&D 5e rules the generic turn contract leaves out: what each condition does to a row,
  * a target's saves by ability, and the chance a target loses a contest.
  */
+import type { AbilityName } from "../builder/types";
 import type { ConditionEffect } from "../turn/effects";
 import { condition } from "../turn/effects";
 import type { ConditionRule, GrantSaveSpec } from "../turn/types";
@@ -88,10 +89,6 @@ const ABILITIES = {
   cha: "charisma",
 } as const;
 
-type Abbreviation = keyof typeof ABILITIES;
-/** An ability by its three-letter or its full name. */
-export type Ability = Abbreviation | (typeof ABILITIES)[Abbreviation];
-
 const FULL_NAMES: ReadonlyMap<string, string> = new Map(
   Object.entries(ABILITIES).flatMap(([short, full]) => [
     [short, full],
@@ -107,7 +104,7 @@ const FULL_NAMES: ReadonlyMap<string, string> = new Map(
  *
  * @throws {TypeError} on no ability, an unknown or repeated one, or a `dc` or bonus that is not an integer.
  */
-export function saveDC(dc: number, bonuses: Partial<Record<Ability, number>>): GrantSaveSpec | GrantSaveSpec[] {
+export function saveDC(dc: number, bonuses: Partial<Record<AbilityName, number>>): GrantSaveSpec | GrantSaveSpec[] {
   if (!Number.isInteger(dc)) throw new TypeError(`saveDC: dc must be an integer, got ${dc}.`);
   const saves = Object.entries(bonuses).map(([key, bonus]): GrantSaveSpec => {
     const ability = FULL_NAMES.get(key);

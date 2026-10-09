@@ -41,6 +41,12 @@ export function isContextual(source: unknown): source is ContextualSource {
   return rowCheckOf(source) !== undefined;
 }
 
+/**
+ * Set on a {@link ContextualSource} whose `under` does not roll `context.joined` riders' dice into its
+ * own roll (the library's `AttackBuilder` and `SaveBuilder`): no rider may join its row (`Rider.joins`).
+ */
+export const IGNORES_JOINED: unique symbol = Symbol("ignoresJoined");
+
 const ADVANTAGE_OF: Record<RollType, number> = { flat: 0, advantage: 1, "elven accuracy": 2, disadvantage: -1 };
 
 /**
