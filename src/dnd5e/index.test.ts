@@ -35,10 +35,21 @@ describe("@yipe/dice/dnd5e", () => {
     expect(enumerated(0, 0)).toBe(190 / 400);
   });
 
-  it("matches the enumeration for bonuses -5..+15", () => {
+  it("matches the enumeration and the closed form for bonuses -5..+15", () => {
+    // The attacker wins where its d20 beats the defender's by more than `lead = defender − attacker`:
+    // the pairs with yours − theirs ≥ m (m = lead + 1) number (20 − m)(21 − m)/2 for 1 ≤ m ≤ 20, and
+    // 400 less the mirror count (19 + m)(20 + m)/2 for −19 ≤ m ≤ 0.
+    const closedForm = (attacker: number, defender: number): number => {
+      const m = defender - attacker + 1;
+      if (m > 20) return 0;
+      if (m < -19) return 1;
+      return (m >= 1 ? ((20 - m) * (21 - m)) / 2 : 400 - ((19 + m) * (20 + m)) / 2) / 400;
+    };
+    expect(closedForm(0, 0)).toBe(190 / 400);
     for (let attacker = -5; attacker <= 15; attacker++) {
       for (let defender = -5; defender <= 15; defender++) {
         expect(contestLossChance({ attacker, defender })).toBe(enumerated(attacker, defender));
+        expect(contestLossChance({ attacker, defender })).toBe(closedForm(attacker, defender));
       }
     }
   });
