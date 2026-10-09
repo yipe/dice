@@ -2,8 +2,9 @@
  * The acceptance gate: every oracle case through `Turn.from(spec)` must give the oracle's
  * readers at 1e-12, field for field: per row id its marginal, the odds of the d20 it rolls and of every effect in
  * force with the part each source accounts for; per rider id its marginal and P(at least one landing). Off until
- * the port lands: `PORT_READY=1 yarn vitest run tests/oracle`. A case the contract cannot spell yet (`gaps`) is a
- * todo; an engine-only case is not listed.
+ * A case the contract cannot spell yet (`gaps`) is a todo; an engine-only case is not run. The expected JSON must
+ * hold exactly the family's cases, each computed from the case's current oracle turn (regenerate with
+ * `yarn oracle:expected`).
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -11,11 +12,10 @@ import type { RollType } from '../../../src/common/types'
 import type { PMF } from '../../../src/pmf/pmf'
 import { Turn, type AttackMarginal, type RiderMarginal } from '../../../src/turn/index'
 import { FAMILIES } from './cases/index'
-import { expectedPath, fromBits, type ExpectedCase, type ExpectedPmf, type ExpectedRow } from './expected'
+import { expectedPath, fromBits, syntheticHash, type ExpectedCase, type ExpectedPmf, type ExpectedRow } from './expected'
 import { START_ID } from './toSpec'
 
 const TOLERANCE = 1e-12
-const PORT_READY = Boolean(process.env.PORT_READY)
 
 /** The oracle's roll type keys, by the library's roll type. */
 const ROLL_TYPE_KEYS: Record<RollType, keyof ExpectedRow['rollType']> = {
@@ -60,13 +60,17 @@ function expectRow(turn: Turn, id: string, row: ExpectedRow, label: string): voi
 for (const [family, cases] of Object.entries(FAMILIES)) {
   const expected: Record<string, ExpectedCase> = JSON.parse(readFileSync(expectedPath(family), 'utf8'))
   describe(`oracle ${family}`, () => {
+    it('expected JSON is current: same case names, each from the same oracle turn', () => {
+      expect(Object.keys(expected).sort()).toEqual(cases.map((c) => c.name).sort())
+      for (const c of cases) expect(expected[c.name]?.synthetic, c.name).toBe(syntheticHash(c.synthetic))
+    })
     for (const c of cases) {
       if (c.engineOnly !== undefined) continue
       if (c.gaps.length > 0) {
         it.todo(`${c.name} (gaps: ${c.gaps.join('; ')})`)
         continue
       }
-      it.skipIf(!PORT_READY)(c.name, () => {
+      it(c.name, () => {
         const want = expected[c.name]!
         const turn = Turn.from(c.spec)
         for (const [id, row] of Object.entries(want.rows)) expectRow(turn, id, row, `${c.name} ${id}`)

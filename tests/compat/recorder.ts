@@ -2,7 +2,7 @@
  * L0 compat recorder (vitest setup file). Inert unless `COMPAT` is `capture` or `check`.
  *
  * When active it wraps the public readers of `Turn` — the `pmf` getter, `mean()`,
- * `fireProbability(id)`, `expectedApplications(id)` and `stepStats(id)` — and records
+ * `fireProbability(id)`, `expectedApplications(id)`, `stepStats(id)` and `toQuery()` (its `singles`) — and records
  * every outermost call as `{ ordinal, reader, args, value }` under the running test
  * file and test name, with every number as its float64 bit pattern.
  *
@@ -33,6 +33,7 @@ import {
   TOLERANCE,
   withinTolerance,
 } from "./format";
+import type { DiceQuery } from "../../src/pmf/query";
 import type { StepStats } from "../../src/turn/turn";
 
 if (MODE !== undefined) await install();
@@ -120,6 +121,7 @@ async function install(): Promise<void> {
   // 0.17 adds fields to `stepStats` (every effect's odds and sources, `conditions`): the fixture
   // holds the 0.16 fields, and those must stay bit for bit, so only they are compared.
   const serializers: Record<string, (value: unknown) => Serialized> = {
+    toQuery: (value) => (value as DiceQuery).singles.map(serializePMF),
     stepStats: (value) => {
       const { rolled, hit, crit, live } = value as StepStats;
       return serializeLeaves({
@@ -130,7 +132,7 @@ async function install(): Promise<void> {
       });
     },
   };
-  for (const reader of ["mean", "fireProbability", "expectedApplications", "stepStats"] as const) {
+  for (const reader of ["mean", "fireProbability", "expectedApplications", "stepStats", "toQuery"] as const) {
     const original = Turn.prototype[reader] as (this: unknown, ...args: unknown[]) => unknown;
     wrap(reader, {
       ...Object.getOwnPropertyDescriptor(Turn.prototype, reader),
@@ -184,7 +186,7 @@ function firstDifference(want: Entry, got: Entry): string {
 
 function firstLeafDifference(want: Serialized, got: Serialized, path: string): string {
   if (Array.isArray(want) && Array.isArray(got)) {
-    // A PMF is `[value, probHex][]`: name the first differing support entry.
+    // A PMF is `[value, probHex, count, attr][]`: name the first differing support entry.
     for (let i = 0; i < Math.max(want.length, got.length); i++) {
       if (i >= want.length) return `${path}[${i}] unexpected ${stableJSON(got[i])}`;
       if (i >= got.length) return `${path}[${i}] ${stableJSON(want[i])} missing`;

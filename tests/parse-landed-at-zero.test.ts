@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { d20, d6, roll } from "../src/builder";
 import { parse } from "../src/index";
 import type { Dist } from "./enumerate-dice";
-import { add, attack, expectLabelled, expectSameLabelled, map, max, mixLabelled, negate, point, repeat, uniform } from "./enumerate-dice";
+import { add, attack, expectLabelled, expectSameLabelled, type LabelledDist, map, max, mixLabelled, negate, point, repeat, uniform } from "./enumerate-dice";
 
 /**
  * An attack check whose total is exactly 0 lands when its target is 0 or less, like any total that
@@ -76,7 +76,7 @@ describe("an attack check that totals exactly 0 against a target of 0 or less la
 
   it("the check on its own labels a landed total of 0 a hit", () => {
     const hits = map(D20, (natural) => natural - 5);
-    const expected = new Map([...hits].filter(([total]) => total > 0).map(([total, p]) => [total, { hit: p }]));
+    const expected: LabelledDist = new Map([...hits].filter(([total]) => total > 0).map(([total, p]) => [total, { hit: p }]));
     expected.set(0, { hit: 1 / 20, missNone: 4 / 20 });
     expectLabelled(parse("d20 - 5 AC 0"), expected);
   });

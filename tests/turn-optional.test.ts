@@ -80,7 +80,7 @@ describe("optional conditions within the search", () => {
       attacks: [{ id: "a", source: row("melee") }, { id: "b", source: row("melee") }],
       conditions: [{ id: "c", on: "every-hit", of: ["a"], optional: true, grants: [prone] }],
     });
-    expect(melee.fireProbability("c")).toBeGreaterThan(0);
+    expect(melee.fireProbability("c")).toBeCloseTo(0.6, 12); // d20 + 5 vs AC 14 lands on 9..20
   });
 });
 
@@ -99,7 +99,7 @@ describe("optional conditions attached to a source", () => {
     const gate = (optional: boolean) =>
       Turn.from({
         attacks: [sword, bow, bow],
-        conditions: [{ on: "every-hit", of: ["attack 1"], chance: fail, optional, grants: [prone] }],
+        conditions: [{ on: "every-hit", of: ["attack 1"], chance: fail, ...(optional ? { optional: true as const } : {}), grants: [prone] }],
       });
     const plain = Turn.from({ attacks: [sword, bow, bow] });
     expect(attached.mean()).toBeCloseTo(plain.mean(), 12);

@@ -92,11 +92,25 @@ export function serializeLeaves(value: unknown): Serialized {
   throw new TypeError(`compat: cannot serialize ${typeof value}`);
 }
 
-/** A PMF as `[value, probHex]` pairs sorted by value. */
-export function serializePMF(pmf: { readonly map: ReadonlyMap<number, { readonly p: number }> }): Serialized {
+/** A bin's outcome-label map (`count` or `attr`) with its unset labels dropped; `null` when absent. */
+function serializeLabels(labels: Readonly<Record<string, number | undefined>> | undefined): Serialized {
+  if (labels === undefined) return null;
+  return serializeLeaves(Object.fromEntries(Object.entries(labels).filter(([, v]) => v !== undefined)));
+}
+
+/**
+ * A PMF as `[value, probHex, count, attr]` entries sorted by value: each bin's mass and its outcome labels (the
+ * per-outcome mass and damage attribution that `outcomeTotals` and the attribution charts read).
+ */
+export function serializePMF(pmf: {
+  readonly map: ReadonlyMap<
+    number,
+    { readonly p: number; readonly count: Readonly<Record<string, number | undefined>>; readonly attr?: Readonly<Record<string, number | undefined>> }
+  >;
+}): Serialized {
   return [...pmf.map]
     .sort(([a], [b]) => a - b)
-    .map(([value, bin]): Serialized => [value, hex(bin.p)]);
+    .map(([value, bin]): Serialized => [value, hex(bin.p), serializeLabels(bin.count), serializeLabels(bin.attr)]);
 }
 
 /** JSON with object keys sorted at every depth. */
