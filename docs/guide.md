@@ -868,6 +868,7 @@ scoped with `.to(...)`), never a `next-save` one.
 | `chance`            | a fixed P(the effects take), instead of a save (`contestLossChance` for a contest)        |
 | `onSave`            | effects on the other branch: the save passed, or `1 - chance`                             |
 | `of`, `id`          | the rows or riders watched (a rider id: land with that rider), and a name to read it by   |
+| `where`             | with `of: [rider id]`: that rider's attacks where its landing counts (default: all of them) |
 | `dealing`           | the landing must deal this damage type; the row says its type with `typed("cold")` (see above) |
 | `optional: true`    | "you can": taken only where it raises the mean                                            |
 
