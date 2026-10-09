@@ -27,6 +27,35 @@ describe("shapes 0.17 accepts", () => {
     expect(partner.fireProbability("partner")).toBeCloseTo(partner.fireProbability("folded"), 12);
   });
 
+  it("a partner lands only where its partner lands: `where` on a subset, and on a save row", () => {
+    // The partner (a step rider before the fix) fired on every hit of attack 3; it lands there only
+    // where "folded" lands, i.e. when attack 3 is the first hit.
+    const subset = turn([sword, sword, sword])
+      .onFirstHit(d6, { id: "folded", perSource: { "attack 2": { damage: d8 } } })
+      .onFirstHit(d4, { of: ["folded"], where: { folded: ["attack 3"] }, id: "partner" });
+    expect(subset.fireProbability("partner")).toBeCloseTo(0.35 * 0.35 * 0.65, 12);
+
+    // On a save row the partner landed on every class, a passed save included.
+    const breath = d20.plus(5).dc(15).onSaveFailure(d8).saveHalf(); // fails on d20 <= 9: 0.45
+    const save = turn([breath, sword])
+      .onFirstHit(d6, { id: "folded", landing: "fail", perSource: { "attack 2": { damage: d8 } } })
+      .onFirstHit(d4, { of: ["folded"], id: "partner" });
+    expect(save.fireProbability("folded")).toBeCloseTo(1 - 0.55 * 0.35, 12);
+    expect(save.fireProbability("partner")).toBeCloseTo(save.fireProbability("folded"), 12);
+    const base = turn([breath, sword]).onFirstHit(d6, { id: "folded", landing: "fail", perSource: { "attack 2": { damage: d8 } } });
+    // d4 (2.5) where it lands, doubled (5) where the landing is attack 2's crit: 0.55 * 0.05.
+    expect(save.mean() - base.mean()).toBeCloseTo(2.5 * (1 - 0.55 * 0.35) + 2.5 * 0.55 * 0.05, 12);
+  });
+
+  it("a partner of a partner is refused", () => {
+    expect(() =>
+      turn([sword, sword])
+        .onFirstHit(d6, { id: "folded", perSource: { "attack 2": { damage: d8 } } })
+        .onFirstHit(d4, { of: ["folded"], id: "partner" })
+        .onFirstHit(d4, { of: ["partner"], id: "chained" })
+    ).toThrow(/lands alongside "partner"/);
+  });
+
   it("a grant with `landing: 'fail'` over attacks alone lands on a hit, as by default", () => {
     const grant = advantage().untilEndOfTurn();
     const failing = turn([sword, sword]).onFirstHit(grant, { landing: "fail" }).mean();

@@ -653,6 +653,12 @@ describe("keepBestDamage() — errors (R17, R23)", () => {
     ).toBe("unsupported-trigger");
   });
 
+  it("a transform takes no rider-only option: where and joins are refused like happens", () => {
+    expect(codeOf(() => o20Turn.onFirstHit(keepBestDamage(), { where: { "attack 1": [] } }))).toBe("unsupported-trigger");
+    expect(codeOf(() => o20Turn.onFirstHit(keepBestDamage(), { joins: ["attack 1"] }))).toBe("unsupported-trigger");
+    expect(codeOf(() => o20Turn.onFirstHit(keepBestDamage(), { happens: 0.5 }))).toBe("unsupported-trigger");
+  });
+
   it("an `of` naming nothing in the turn is unknown-id; naming a save is not-an-attack", () => {
     expect(codeOf(() => o20Turn.onFirstHit(keepBestDamage(), { of: ["nope"] }))).toBe("unknown-id");
     const save = d20.dc(13).onSaveFailure(roll(3, d6)).saveHalf();

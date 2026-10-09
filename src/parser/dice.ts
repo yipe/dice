@@ -24,8 +24,6 @@ const MAX_BINARY_OUTCOMES = 100_000_000;
 export interface DicePrivateData {
   /** Marks a DC (saving-throw) check so outcomes are attributed correctly. */
   isDCCheck?: boolean;
-  /** The "other" distribution recorded by {@link Dice.combine}. */
-  except?: Dice | Record<string, never>;
   /** Set by a keep (`4kh3`, `2kl1`) on the dice it keeps from: how many of the repeated copies are
    * kept, and whether the lowest or the highest. A keep of one (`2kh1d20`) keeps a single natural roll. */
   keep?: { kept: number; lowest: boolean };
@@ -361,14 +359,6 @@ export class Dice {
     return this.max(this);
   }
 
-  public ge(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => (a >= b ? 0 : 1));
-  }
-
-  public divide(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => a / b);
-  }
-
   public divideRoundUp(other: Dice | number): Dice {
     this.assertNonZeroDivisor(other);
     return this.binaryOp(other, (a, b) => (b === 0 ? 0 : Math.ceil(a / b)));
@@ -384,10 +374,6 @@ export class Dice {
     if (typeof other === "number" ? other === 0 : other.get(0) > 0) {
       throw new DiceParseError("Division by zero: the divisor can be 0");
     }
-  }
-
-  public and(other: Dice | number): Dice {
-    return this.binaryOp(other, (a, b) => (a && b ? 1 : 0));
   }
 
   private checkTarget(
@@ -471,25 +457,16 @@ export class Dice {
       other = Dice.scalar(other);
     }
 
-    // Start by copying "other" into a new Dice object
+    // Start by copying "other" into a new Dice object, then add the faces of `this`.
     const result = new Dice();
     for (const [key, value] of Object.entries(other.faces)) {
       result.faces[Number(key)] = value;
     }
-
-    // Build the "except" dice and add faces from `this` to result
-    const except = new Dice();
     for (const [key, value] of Object.entries(this.faces)) {
-      const numKey = Number(key);
-      result.increment(numKey, value);
-
-      // A key absent from `other` is still tracked in `except`.
-      if (!(numKey in other.faces)) {
-        except.increment(numKey, value); // still tracked in except
-      }
+      result.increment(Number(key), value);
     }
 
-    result.privateData = { ...this.privateData, except: other };
+    result.privateData = { ...this.privateData };
     result.outcomeData = { ...this.outcomeData };
     return result;
   }
