@@ -2952,9 +2952,15 @@ export function buildPlan(
     }
   }
   /**
-   * `slice` with the every-hit riders of variant `mask` folded in: every uncapped one, and each
-   * capped one whose bit is set; with the own part and the riders' payloads when any is folded.
+   * `lands` without the payloads a partner opens the row to whose partner is not among them: on a
+   * row a partner opens, a payload lands only where that partner lands too (in the same draw).
    */
+  const alongsidePartners = (lands: HitPayload[]): HitPayload[] => {
+    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
+    return lands.filter(
+      (payload) => payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))
+    );
+  };
   /**
    * The payloads of `sourceId` that land on a draw of `outcome` from variant `mask`: within their
    * cap, on a crit for a crit-only rider, where damage was dealt for a `damage` rider, on a miss only
@@ -2976,23 +2982,20 @@ export function buildPlan(
         !(dealt === false && payload.landing === "damage") &&
         (outcome !== "miss" || (payload.landing === "any" && !payload.critOnly))
     );
-    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
-    return lands.filter(
-      (payload) =>
-        (payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))) &&
-        (!coins || payload.coinBit === 0 || (mask & payload.coinBit) !== 0)
+    return alongsidePartners(lands).filter(
+      (payload) => !coins || payload.coinBit === 0 || (mask & payload.coinBit) !== 0
     );
   };
-  /**
-   * `slice` with the riders that land on it folded in (see {@link activeAt}); with the own part and
-   * the riders' payloads when any is folded.
-   */
   /** Per builder, its re-derivation under each modifier key (see the step's `rederive`). */
   const rederivedBuilders = new Map<unknown, Map<number, { pmf: () => PMF; signature: string }>>();
   /** Per source, its PMF under each context signature (see the step's `rederive`). */
   const pmfsUnder = new Map<unknown, Map<string, PMF>>();
   /** Folds already made: several rows fold the same payload into the same slice. */
   const foldsMade = new WeakMap<PMF, WeakMap<PMF, PMF>>();
+  /**
+   * `slice` with the riders that land on it folded in (see {@link activeAt}); with the own part and
+   * the riders' payloads when any is folded.
+   */
   const fold = (
     sourceId: string,
     outcome: "hit" | "crit" | "miss",
@@ -3269,17 +3272,16 @@ export function buildPlan(
       return fired;
     }
     let marked: FireMode[] | null = null;
-    const lands = (perHitBySource.get(sourceId) ?? []).filter(
-      (payload) =>
-        payload.slot !== -1 &&
-        fired[payload.slot] === null &&
-        (draw?.byKind === undefined || payload.landing === "any" || draw.byKind[payload.landing ?? "fail"] === "hit")
+    const lands = alongsidePartners(
+      (perHitBySource.get(sourceId) ?? []).filter(
+        (payload) =>
+          payload.slot !== -1 &&
+          fired[payload.slot] === null &&
+          (draw?.byKind === undefined || payload.landing === "any" || draw.byKind[payload.landing ?? "fail"] === "hit")
+      )
     );
-    // A payload a partner opens here lands only where the partner lands: in this same draw.
-    const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
     for (const payload of lands) {
       if ((marked ?? fired)[payload.slot] !== null) continue;
-      if (payload.partners.length > 0 && !payload.partners.some((partner) => landed.has(partner))) continue;
       marked ??= [...fired];
       marked[payload.slot] = "hit";
     }
@@ -3296,16 +3298,14 @@ export function buildPlan(
       // The riders that apply on this class: every uncapped one, and each capped one whose bit is
       // set in `mask`, only where the class lands under the rider's own kind, and a rider a partner
       // opens the row to only where that partner lands too (as {@link activeAt} gates it).
-      const lands = (perHitBySource.get(sourceId) ?? []).filter(
-        (payload) =>
-          (payload.bit === 0 || (mask & payload.bit) !== 0) &&
-          (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
-          !payload.critOnly &&
-          (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
-      );
-      const landed = new Set(lands.filter((payload) => payload.partners.length === 0).map((payload) => payload.id));
-      const active = lands.filter(
-        (payload) => payload.partners.length === 0 || payload.partners.some((partner) => landed.has(partner))
+      const active = alongsidePartners(
+        (perHitBySource.get(sourceId) ?? []).filter(
+          (payload) =>
+            (payload.bit === 0 || (mask & payload.bit) !== 0) &&
+            (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
+            !payload.critOnly &&
+            (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
+        )
       );
       let folded = slice;
       const parts: [string, PMF][] = active.map((payload) => [payload.id, payload.hit]);
