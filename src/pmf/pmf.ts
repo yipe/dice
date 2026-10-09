@@ -1081,8 +1081,11 @@ export class PMF {
     return this._fingerprint;
   }
 
-  /** One bin's part of the {@link fingerprint}: `damage:p[count labels]{attr labels}`. */
-  private static binSegment(damage: number, bin: Bin): string {
+  /**
+   * One bin's part of the {@link fingerprint}: `damage:p[count labels]{attr labels}`.
+   * @internal
+   */
+  static binSegment(damage: number, bin: Bin): string {
     return `${damage}:${bin.p}[${labelText(bin.count)}]{${labelText(bin.attr)}}`;
   }
 

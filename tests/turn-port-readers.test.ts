@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { advantage, critOnHit, d20, d4, d6, d8, roll, turn } from "../src/builder";
 import { prone, stunned } from "../src/dnd5e";
+import { DenseTotal } from "../src/pmf/dense-total";
 import { PMF } from "../src/pmf/pmf";
 import {
   Turn,
@@ -250,6 +251,7 @@ describe("probability readers never walk the joint distribution", () => {
     // The joint walk convolves damage in every state; the mass walks never do.
     const convolve = vi.spyOn(PMF.prototype, "convolve");
     const convolveRaw = vi.spyOn(PMF.prototype, "convolveRaw");
+    const dense = vi.spyOn(DenseTotal.prototype, "convolve");
     try {
       for (const id of t.attackIds) {
         t.stepStats(id);
@@ -267,11 +269,13 @@ describe("probability readers never walk the joint distribution", () => {
       expect(t.peakStates).toBeGreaterThan(0);
       expect(convolve).not.toHaveBeenCalled();
       expect(convolveRaw).not.toHaveBeenCalled();
+      expect(dense).not.toHaveBeenCalled();
       t.mean();
-      expect(convolveRaw).toHaveBeenCalled();
+      expect(dense).toHaveBeenCalled();
     } finally {
       convolve.mockRestore();
       convolveRaw.mockRestore();
+      dense.mockRestore();
     }
   });
 });
@@ -285,6 +289,7 @@ describe("a probe or a rider is read without damage arithmetic (moved from probe
     const convolve = vi.spyOn(PMF.prototype, "convolve");
     const convolveRaw = vi.spyOn(PMF.prototype, "convolveRaw");
     const add = vi.spyOn(PMF.prototype, "add");
+    const dense = vi.spyOn(DenseTotal.prototype, "convolve");
     try {
       const crit = t.fireProbability("crit");
       expect(t.fireProbability("crit")).toBe(crit);
@@ -292,12 +297,14 @@ describe("a probe or a rider is read without damage arithmetic (moved from probe
       expect(convolve).not.toHaveBeenCalled();
       expect(convolveRaw).not.toHaveBeenCalled();
       expect(add).not.toHaveBeenCalled();
+      expect(dense).not.toHaveBeenCalled();
       t.mean();
-      expect(convolveRaw).toHaveBeenCalled();
+      expect(dense).toHaveBeenCalled();
     } finally {
       convolve.mockRestore();
       convolveRaw.mockRestore();
       add.mockRestore();
+      dense.mockRestore();
     }
   });
 });
