@@ -5,6 +5,7 @@ import { cases as gated } from './gated'
 import { cases as grantFormat } from './grantFormat'
 import { cases as optional } from './optional'
 import { cases as random } from './random'
+import { cases as riderColdHit } from './riderColdHit'
 import type { OracleCase } from './types'
 import { cases as vulnerability } from './vulnerability'
 
@@ -19,5 +20,6 @@ export const FAMILIES: Readonly<Record<string, readonly OracleCase[]>> = {
   grantFormat,
   optional,
   random,
+  riderColdHit,
   vulnerability
 }
