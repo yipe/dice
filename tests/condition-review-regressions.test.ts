@@ -181,9 +181,9 @@ describe("rider and transform options are kept or refused", () => {
   });
 
   it("onFirstHit(transform) refuses happens, dealing and optional", () => {
-    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { happens: 0.1 }))).toBeDefined();
-    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { dealing: "fire" }))).toBeDefined();
-    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { optional: true }))).toBeDefined();
+    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { happens: 0.1 }))).toBe("unsupported-trigger");
+    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { dealing: "fire" }))).toBe("unsupported-trigger");
+    expect(codeOf(() => turn([a, a]).onFirstHit(keepBestDamage(), { optional: true }))).toBe("unsupported-trigger");
   });
 
   it("a start condition is applied once when a coin splits the start state", () => {
