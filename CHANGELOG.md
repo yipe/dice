@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.0] - 2026-10-09
 
 ### Fixed
 
@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Performance: turns with no conditions or riders skip plan construction.** A turn with no
+  rider, substitute, condition (declared or attached to a builder), probe or `after` gate needs no
+  walk state, so `Turn.from` no longer builds a plan for it and its readers walk nothing:
+  `marginal` is the row's own PMF gated by its `chance`, `stepStats` its landing masses, and
+  `peakStates` 1. The plan is built on first use by the readers that need it (`pmf`, `mean`,
+  `toQuery`, `landings`), so those stay bit for bit what they were. Every reader returns what the
+  full walk returns (`tests/turn-stateless-path.test.ts` proves it on 600 seeded random turns, with
+  the walk forced for comparison): the walk's `occurs`, `hit` and `crit` differ from the row's own
+  `chance` by rounding only (≤ 7e-16 relative observed), since the walk divides its masses by a
+  terminal mass that drifts from 1 by an ulp. A stateless 5-attack turn built and read per AC runs
+  3–4× faster (`bench/turn.bench.ts`, "stateless 5-row sweep").
 - **Faster convolution.** `PMF.convolve` accumulates integer-valued operands in flat typed arrays,
   the fingerprint is built in one pass with memoized label quoting, and `add()` merges an unscaled
   branch without copying it first. Every sum is added in the same order as before, so every result
