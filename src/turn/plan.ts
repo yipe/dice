@@ -2532,6 +2532,8 @@ export function buildPlan(
     for (const group of groups.slice(0, -1)) releasesAt[groupLastStep[group]].push(slot);
   });
 
+  /** A plain save's fail odds per `dc|bonus|context`: the same check is tried at every row a condition can fire on. */
+  const plainSaveOdds = new Map<string, number>();
   /**
    * The chance a condition's grant save fails at step `position`, as a function of the state's
    * flags; undefined without a save. The save reads what lasts the turn on its target and was set
@@ -2580,11 +2582,18 @@ export function buildPlan(
         };
         // An automatic failure never reaches a `failChance`. A plain save rolls the DC check a fluent
         // caller would have written, so its odds are the check's own PMF, as the 0.16 gate read them.
-        const chance = context.autoFail
-          ? 1
-          : "failChance" in option
-            ? option.failChance(context)
-            : new DCBuilder(d20.plus(option.bonus), { dc: option.dc }).rolledIn(context).toPMF(eps).pAt(1);
+        let chance: number;
+        if (context.autoFail) chance = 1;
+        else if ("failChance" in option) chance = option.failChance(context);
+        else {
+          const key = `${option.dc}|${option.bonus}|${contextKey(context)}`;
+          let odds = plainSaveOdds.get(key);
+          if (odds === undefined) {
+            odds = new DCBuilder(d20.plus(option.bonus), { dc: option.dc }).rolledIn(context).toPMF(eps).pAt(1);
+            plainSaveOdds.set(key, odds);
+          }
+          chance = odds;
+        }
         if (!(chance >= 0 && chance <= 1)) {
           throw new RangeError(`Condition "${id}" has a save whose fail chance is ${chance}, not a probability.`);
         }
