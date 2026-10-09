@@ -1055,7 +1055,7 @@ function attackEntry(
       throw new TurnSpecError(
         "unknown-key",
         typeof wrapper.id === "string" ? wrapper.id : id,
-        `Attack "${typeof wrapper.id === "string" ? wrapper.id : id}" carries an unknown key "${key}". Valid keys are source, id, tag, chance and target.`
+        `Attack "${typeof wrapper.id === "string" ? wrapper.id : id}" carries an unknown key "${key}". Valid keys are ${Object.keys(ATTACK_KEYS).join(", ")}.`
       );
     }
   }

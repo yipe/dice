@@ -7,6 +7,8 @@ import type { ConditionEffect } from "../turn/effects";
 import { condition } from "../turn/effects";
 import type { ConditionRule, GrantSaveSpec } from "../turn/types";
 
+export type { AbilityName, ConditionEffect, ConditionRule, GrantSaveSpec };
+
 const proneRule: ConditionRule = { attack: { melee: ["advantage"], ranged: ["disadvantage"] } };
 
 /**
