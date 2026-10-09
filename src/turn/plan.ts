@@ -1074,6 +1074,93 @@ function attackEntry(
   };
 }
 
+/** A declared attack, validated and resolved: what `buildPlan` and the stateless path both read. */
+export interface DeclaredAttack {
+  id: string;
+  tag?: string;
+  source: Damage;
+  chance: number;
+  /** The source's PMF in its own context. */
+  pmf: PMF;
+  /** Its hit / crit / miss slices, or null for a row with no hit or crit outcome (a save, a plain roll). */
+  slices: SourceSlices | null;
+  target: string;
+  after: AttackOptions["after"] | undefined;
+}
+
+/** Refuses a `stateLimit` that is not a whole number of 1 or more, before anything else is read. */
+export function checkStateLimit(stateLimit: number | undefined): void {
+  if (stateLimit !== undefined && !(Number.isInteger(stateLimit) && stateLimit >= 1)) {
+    throw new RangeError(`A turn's stateLimit must be a whole number of 1 or more, got ${stateLimit}.`);
+  }
+}
+
+/**
+ * The declared attacks of `spec`, in order, each validated (its keys, ids, chance, target) and
+ * resolved to its PMF. One source declared as several rows (`attacks(12, sword)`) resolves and
+ * slices once.
+ */
+export function declaredAttacks(spec: TurnSpec, eps: number): DeclaredAttack[] {
+  const resolvedSources = new Map<Damage, { pmf: PMF; slices: SourceSlices | null }>();
+  return spec.attacks.map((entry, index) => {
+    const { id, tag, source, chance } = attackEntry(entry, index);
+    if (!(chance >= 0 && chance <= 1)) {
+      throw new RangeError(`Attack "${id}" needs a chance in [0, 1], got ${chance}.`);
+    }
+    let resolved = resolvedSources.get(source);
+    if (resolved === undefined) {
+      const resolvedPmf = toPMF(source, eps, id);
+      // A declared attack (or a row that lands without a roll) whose PMF holds no landing in this
+      // context (every roll misses) still is one: it simply never lands. Validity is structural.
+      const declared = rowCheckOf(source);
+      resolved = {
+        pmf: resolvedPmf,
+        slices:
+          sliceSource(resolvedPmf) ??
+          (declared !== undefined && declared.kind !== "save"
+            ? { hit: PMF.emptyMass(), crit: PMF.emptyMass(), miss: resolvedPmf }
+            : null),
+      };
+      resolvedSources.set(source, resolved);
+    }
+    const target =
+      typeof entry === "object" && entry !== null && "source" in entry && "target" in entry ? entry.target : undefined;
+    if (target !== undefined && typeof target !== "string") {
+      throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string target.`);
+    }
+    const after = typeof entry === "object" && entry !== null && "source" in entry && "after" in entry ? entry.after : undefined;
+    return { id, tag, source, chance, pmf: resolved.pmf, slices: resolved.slices, target: target ?? DEFAULT_CREATURE, after };
+  });
+}
+
+/** `duplicate-id` over every id of a turn, in `buildPlan`'s order. */
+export function checkDuplicateIds(ids: readonly string[]): void {
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) throw new TurnSpecError("duplicate-id", id, `Duplicate id "${id}".`);
+    seen.add(id);
+  }
+}
+
+/**
+ * Whether `spec` carries nothing a walk state would hold: no rider, substitute, condition (declared
+ * or attached to a source) or probe, and no attack gated on another. Structural: read off the
+ * spec's shape, never its numbers. Such a turn's every reader is a closed form of its rows'
+ * own PMFs (see `Turn`'s stateless path).
+ */
+export function isStateless(spec: TurnSpec): boolean {
+  if ((spec.riders?.length ?? 0) !== 0) return false;
+  if ((spec.substitutes?.length ?? 0) !== 0) return false;
+  if ((spec.conditions?.length ?? 0) !== 0) return false;
+  if ((spec.observe?.length ?? 0) !== 0) return false;
+  return spec.attacks.every((entry) => {
+    const wrapped = typeof entry === "object" && entry !== null && "source" in entry && entry.source !== undefined;
+    const source = wrapped ? entry.source : entry;
+    if (wrapped && entry.after !== undefined) return false;
+    return attachedConditionsOf(source) === undefined;
+  });
+}
+
 /**
  * The attached conditions a source carries, or `undefined` when it has none.
  * Duck-typed: the only sources that carry `attached` are `AttackBuilder`s, whose
@@ -1162,10 +1249,7 @@ export function buildPlan(
   folds: "joint" | "masses" = "joint"
 ): TurnPlan {
   const declaredConditions = (spec.conditions ?? []) as readonly EvaluatedCondition[];
-  const { stateLimit } = spec;
-  if (stateLimit !== undefined && !(Number.isInteger(stateLimit) && stateLimit >= 1)) {
-    throw new RangeError(`A turn's stateLimit must be a whole number of 1 or more, got ${stateLimit}.`);
-  }
+  checkStateLimit(spec.stateLimit);
   const fail = (code: TurnSpecErrorCode, id: string, message: string): never => {
     throw new TurnSpecError(code, id, message);
   };
@@ -1284,30 +1368,7 @@ export function buildPlan(
   /** Per declared attack, the earlier attack whose landing gates it (`AttackOptions.after`). */
   const attackAfters: (AttackOptions["after"] | undefined)[] = [];
 
-  /** One source declared as several rows (`attacks(12, sword)`) resolves and slices once. */
-  const resolvedSources = new Map<Damage, { pmf: PMF; slices: SourceSlices | null }>();
-  spec.attacks.forEach((entry, index) => {
-    const { id, tag, source, chance } = attackEntry(entry, index);
-    if (!(chance >= 0 && chance <= 1)) {
-      throw new RangeError(`Attack "${id}" needs a chance in [0, 1], got ${chance}.`);
-    }
-    let resolved = resolvedSources.get(source);
-    if (resolved === undefined) {
-      const resolvedPmf = toPMF(source, eps, id);
-      // A declared attack (or a row that lands without a roll) whose PMF holds no landing in this
-      // context (every roll misses) still is one: it simply never lands. Validity is structural.
-      const declared = rowCheckOf(source);
-      resolved = {
-        pmf: resolvedPmf,
-        slices:
-          sliceSource(resolvedPmf) ??
-          (declared !== undefined && declared.kind !== "save"
-            ? { hit: PMF.emptyMass(), crit: PMF.emptyMass(), miss: resolvedPmf }
-            : null),
-      };
-      resolvedSources.set(source, resolved);
-    }
-    const pmf = resolved.pmf;
+  for (const { id, tag, source, chance, pmf, slices, target, after } of declaredAttacks(spec, eps)) {
     attackIds.push(id);
     attackSources.push(source);
     attackPMFs.push(pmf);
@@ -1315,22 +1376,16 @@ export function buildPlan(
     // probability. The walk uses the full slices plus a "none" draw instead, so
     // a not-happened attack never reads as a miss or a landing.
     attackSingles.push(chance === 1 ? pmf : pmf.applyHitFrequency(chance));
-    attackSlices.push(resolved.slices);
+    attackSlices.push(slices);
     attackChances.push(chance);
-    const target =
-      typeof entry === "object" && entry !== null && "source" in entry && "target" in entry ? entry.target : undefined;
-    if (target !== undefined && typeof target !== "string") {
-      throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string target.`);
-    }
-    attackTargets.push(target ?? DEFAULT_CREATURE);
-    const after = typeof entry === "object" && entry !== null && "source" in entry && "after" in entry ? entry.after : undefined;
+    attackTargets.push(target);
     attackAfters.push(after);
     if (tag !== undefined) {
       const tagged = attackIdsByTag.get(tag);
       if (tagged) tagged.push(id);
       else attackIdsByTag.set(tag, [id]);
     }
-  });
+  }
 
   // --- attached conditions --------------------------------------------------
   // A builder can carry conditions (`AttackBuilder.onEveryHit` / `onAnyCrit`):
@@ -1385,11 +1440,7 @@ export function buildPlan(
     if (index === startingIndex) return 0;
     return effectSources.findIndex((source) => source.kind === "grant" && source.grant === id);
   };
-  const seen = new Set<string>();
-  for (const id of [...attackIds, ...riderIds, ...substituteIds, ...conditionIds, ...probeIds]) {
-    if (seen.has(id)) fail("duplicate-id", id, `Duplicate id "${id}".`);
-    seen.add(id);
-  }
+  checkDuplicateIds([...attackIds, ...riderIds, ...substituteIds, ...conditionIds, ...probeIds]);
 
   /** Refuses a payload no rider can carry: a transform, a grant, or a source's attached condition. */
   const refusePayload = (id: string, on: string, damage: Damage | readonly Damage[]): void => {

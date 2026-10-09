@@ -317,7 +317,8 @@ describe("triggers on the turn", () => {
   });
 
   it("stateLimit sets the turn's", () => {
-    expect(specOf(() => turn([sword]).stateLimit(4096)).stateLimit).toBe(4096);
+    // A turn with no state builds its plan on first use: reading `pmf` builds it.
+    expect(specOf(() => turn([sword]).stateLimit(4096).pmf).stateLimit).toBe(4096);
   });
 
   it("evaluates every new field, and names what a source cannot say", () => {
