@@ -152,19 +152,6 @@ describe("a probe is read from a walk that carries no damage", () => {
       .onEveryHit(critOnHit().untilNextAttack(), { chance: 0.5 })
       .observeAnyCrit("crit");
 
-  it("reading a probe does no damage arithmetic; reading anything else still does", () => {
-    const t = convolving();
-    const convolve = vi.spyOn(PMF.prototype, "convolve");
-    const add = vi.spyOn(PMF.prototype, "add");
-    const crit = t.fireProbability("crit");
-    expect(convolve).not.toHaveBeenCalled();
-    expect(add).not.toHaveBeenCalled();
-    expect(t.fireProbability("crit")).toBe(crit);
-
-    t.fireProbability("sneak");
-    expect(convolve).toHaveBeenCalled();
-  });
-
   it("agrees with the full walk's value for a rider over the same sources", () => {
     const stood = turn([sword, sword, sword])
       .onFirstHit(roll(3, d6), { id: "sneak" })

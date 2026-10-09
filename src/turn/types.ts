@@ -1,7 +1,13 @@
-import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
+import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
 
 export type { DiceMatchInfo, HasDiceMatchInfo };
+
+/**
+ * The version of the plain-data `TurnSpec` v2 contract this module declares. A consumer holding
+ * its own copy of the contract can assert it matches.
+ */
+export const CONTRACT_REVISION = 4;
 
 /**
  * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
@@ -98,12 +104,79 @@ export interface ToPMF {
 export type Damage = PMF | ToPMF;
 
 /**
- * Same shape as {@link Damage}, named separately because the requirement is
- * stronger: a source must resolve to an *outcome-labelled* PMF carrying
- * hit/crit/miss, which no type can express. Supplying one that does not is a
- * `not-an-attack` {@link TurnSpecError} at build time, not a compile error.
+ * The context a row rolls in once the turn state is resolved: what the conditions and
+ * grants in force do to it.
  */
-export type Source = Damage;
+export interface RowContext {
+  /** The d20 roll type after every grant and condition has combined with the row's own. */
+  rollType: RollType;
+  /** Every hit lands (no attack roll). */
+  autoHit: boolean;
+  /** Every landing is a crit. */
+  critOnHit: boolean;
+  /** A save row fails without rolling. */
+  autoFail: boolean;
+  /** The target takes double damage from this row. */
+  vulnerable: boolean;
+  /** Dice subtracted from the target's save roll. */
+  penaltyDice: readonly { count: number; sides: number }[];
+  /**
+   * Ids of the riders whose dice are part of this row's own damage roll in this state: riders
+   * that list the row in `joins` and still have a landing left. Sorted; empty for nearly every row.
+   */
+  joined: readonly string[];
+}
+
+/**
+ * What a row declares about itself, filled by builders, so the turn knows which effects apply to it.
+ *
+ * `rollType` is the row's own final d20 before the state's effects: its own walked advantage, three
+ * own dice as `"elven accuracy"`, a save row's target d20. `advantageDice: 3` upgrades only an
+ * advantage the STATE grants to three dice; it never makes an own `"advantage"` three dice.
+ * `pinned`: `rollType` replaces the roll and every advantage or disadvantage the state adds.
+ */
+export interface RowCheck {
+  /** An attack roll, a target's save, or a payload that lands without a roll. */
+  kind: "attack" | "save" | "auto";
+  /** Melee or ranged, for condition rules keyed by range; attack rows only. */
+  range?: "melee" | "ranged";
+  /** The save's ability, for condition rules keyed by ability; save rows only. */
+  ability?: string;
+  /** The row's own roll type before any effect. */
+  rollType: RollType;
+  /** How many d20s a net advantage rolls: 2, or 3 with Elven Accuracy. */
+  advantageDice: 2 | 3;
+  /** The roll type is fixed: no grant or condition changes it. */
+  pinned: boolean;
+  /** The row hits without rolling. */
+  autoHit: boolean;
+  /** Every landing of the row is a crit. */
+  autoCrit: boolean;
+  /** The save always fails. */
+  autoFail: boolean;
+}
+
+/** A source whose PMF depends on the state it rolls in: the turn resolves a {@link RowContext} and asks for it. */
+export interface ContextualSource {
+  /** What the row declares; read once, when the turn is built. Not the builders' `check`. */
+  readonly rowCheck: RowCheck;
+  /** The row's outcome-labelled PMF in the given context. */
+  under(context: RowContext): PMF;
+  /**
+   * P(the row deals more than 0 damage of `type` after the target's scale), given it lands as a hit
+   * and as a crit, in `context` (its `joined` riders' dice included; a `vulnerable` context has the
+   * target's scales off). Read where a condition with `dealing` watches the row.
+   */
+  dealt?(type: string, context: RowContext): { hit: number; crit: number };
+}
+
+/**
+ * A {@link Damage}, or a {@link ContextualSource} whose PMF depends on the turn state. A
+ * damage source must resolve to an *outcome-labelled* PMF carrying hit/crit/miss, which no
+ * type can express. Supplying one that does not is a `not-an-attack` {@link TurnSpecError}
+ * at build time, not a compile error.
+ */
+export type Source = Damage | ContextualSource;
 
 /**
  * One payload, or several to convolve: Flurry of Blows is `[flurry, flurry]`. A list of
@@ -161,13 +234,54 @@ export interface RiderOptions {
    * watches a rider, not attacks.
    */
   landing?: SaveLanding;
+  /**
+   * For a first-hit rider named in `of` (a partner): its attacks where this landing counts (default:
+   * all of them). See {@link Rider.where}; a condition over the same `of` reads it too.
+   */
+  where?: Readonly<Record<string, readonly string[]>>;
+  /** Attack ids whose own damage roll this call's dice join: damage only. See {@link Rider.joins}. */
+  joins?: readonly string[];
 }
 
-export type Rider = Trigger & {
+/**
+ * What a rider deals on one attack it lands on: as a plain hit, as a crit, and both where that hit
+ * used up a vulnerability (doubled, the target's scales off).
+ */
+export interface LandingPayload {
+  onHit: PMF;
+  onCrit: PMF;
+  vulnerable: { onHit: PMF; onCrit: PMF };
+}
+
+/** Rider damage that depends on the attack it lands on: its type and the target's scale for that attack. */
+export interface ContextualPayload {
+  at(attackId: string): LandingPayload;
+  /** P(the payload on `attackId` deals more than 0 damage of `type` after the target's scale), as a plain hit and as a crit. */
+  dealt?(type: string, attackId: string): { hit: number; crit: number };
+}
+
+/**
+ * An `any-crit` rider may land on its first `max` crits (default 1). A rider id in `of` is a
+ * partner: the rider lands where that partner lands, on the partner's attacks listed in `where`
+ * (default: all of them).
+ */
+export type Rider = (Trigger | { on: "any-crit"; of?: readonly string[]; max?: number }) & {
   id?: string;
-  damage: RiderDamage;
+  /** Also a {@link ContextualPayload}: per attack it lands on, with its vulnerable payload. */
+  damage: RiderDamage | ContextualPayload;
   critDamage?: RiderDamage;
-  landing?: SaveLanding;
+  /** `"any"` lands whatever the source's outcome, a miss included, once it happens. */
+  landing?: SaveLanding | "any";
+  /** The probability, in `[0, 1]`, that the rider happens at all this turn: one coin for the whole turn. */
+  happens?: number;
+  /**
+   * Attack ids whose own damage roll this rider's dice join (one reroll pool). On such a row,
+   * while the rider has a landing left, the row's source rolls with the rider in `joined` and the
+   * rider deals nothing beside it; its landing still counts.
+   */
+  joins?: readonly string[];
+  /** For a rider named in `of`: the partner's attacks where its landing counts (default: all of them). */
+  where?: Readonly<Record<string, readonly string[]>>;
 };
 
 /** How an attack is declared: `id` names it for `of`; `tag` groups it with others. */
@@ -190,6 +304,14 @@ export interface AttackOptions {
    * a miss trigger.
    */
   chance?: number;
+  /** The creature the attack is aimed at; defaults to `"target"`. Effects on that creature apply to it. */
+  target?: string;
+  /**
+   * The attack happens only where the earlier attack `of` landed for `landing` (a hit, damage
+   * dealt, or `"any"`: it happened), at its own place in the turn. An attack that does not happen
+   * consumes nothing; its `chance` is a further coin.
+   */
+  after?: { of: string; landing: "hit" | "damage" | "any" };
 }
 
 /**
@@ -257,6 +379,38 @@ export interface GrantSpec {
   to?: readonly string[];
 }
 
+/** What a condition does to a row it applies to. */
+export type Modifier = "advantage" | "disadvantage" | "critOnHit" | "autoFail" | "saveDisadvantage" | "vulnerable";
+
+/**
+ * A condition's effect on rows, as data: the modifiers an attack against the creature gets
+ * by range, and the modifiers its saves get by ability.
+ */
+export interface ConditionRule {
+  /** Modifiers on attack rolls against the creature, by the attack's range. */
+  attack?: { melee?: readonly Modifier[]; ranged?: readonly Modifier[] };
+  /** Modifiers on the creature's saves, keyed by ability. */
+  save?: Readonly<Record<string, readonly Modifier[]>>;
+  /** The condition the creature is left with when this one ends early (Unconscious leaves Prone). */
+  onEnd?: { condition: string; rule: ConditionRule };
+}
+
+/** One effect a grant puts on a creature. Every effect states its lifetime. */
+export type EffectSpec =
+  | GrantSpec
+  | { condition: string; rule: ConditionRule; until: "end-of-turn" | "until-damaged" }
+  | { vulnerability: true; until: "next-hit" }
+  | { saveDisadvantage: true; until: "end-of-turn" | "next-save"; to?: readonly string[] }
+  | { savePenalty: { count: number; sides: number }; until: "end-of-turn" | "next-save"; to?: readonly string[] };
+
+/**
+ * A grant's save, state-aware: a DC and bonus the library rolls in the target's current
+ * context, or a fail chance computed from that context.
+ */
+export type GrantSaveSpec =
+  | { ability?: string; dc: number; bonus: number; rollType?: RollType }
+  | { ability?: string; failChance: (context: RowContext) => number };
+
 /**
  * Grants applied by the outcomes of earlier attacks to later attack rolls: "a hit
  * gives the next attack advantage". The JSON-safe form of `Turn.onEveryHit(grant)`.
@@ -274,18 +428,35 @@ export interface GrantSpec {
  */
 export interface ConditionSpec {
   id?: string;
-  on: AttackTriggerOn;
+  /**
+   * Adds `first-crit` (the first crit among `of` only) and `start` (in force from the start
+   * of the turn, on the `target` creature).
+   */
+  on: AttackTriggerOn | "first-crit" | "start";
   /**
    * Omit it: defaults to every declared attack plus every attack-shaped `any-miss` /
-   * `first-miss` rider (see {@link Trigger}).
+   * `first-miss` rider (see {@link Trigger}). May also name a first-hit, first-crit or
+   * any-crit rider: the condition fires where that rider landed.
    */
   of?: readonly string[];
+  /** For a rider named in `of`: the attacks where its landing counts (default: every attack it watches). */
+  where?: Readonly<Record<string, readonly string[]>>;
   /** In `[0, 1]`; defaults to 1. */
   chance?: number;
+  /** How a save row among `of` lands the condition: on a failed save or on damage dealt (see {@link SaveLanding}). */
+  landing?: SaveLanding;
+  /** The landing must deal damage of this type. */
+  dealing?: string;
+  /** The creature a `start` condition is on. */
+  target?: string;
+  /** The target's save against the grants: one, or several of which the target picks the likeliest pass. */
+  save?: GrantSaveSpec | readonly GrantSaveSpec[];
   /** Applied on the fail branch, or with probability `chance`. */
-  grants: readonly GrantSpec[];
+  grants: readonly EffectSpec[];
   /** Applied on the success branch. Requires `chance`. */
-  onSave?: readonly GrantSpec[];
+  onSave?: readonly EffectSpec[];
+  /** Optional ("you can"): the turn takes it only where that raises the mean. */
+  optional?: true;
 }
 
 /**
@@ -315,6 +486,8 @@ export interface TurnSpec {
   conditions?: readonly ConditionSpec[];
   /** Probabilities to report; see {@link ProbeSpec}. They add no damage. */
   observe?: readonly ProbeSpec[];
+  /** The most distinct turn states the walk may carry; more is `too-many-states`. */
+  stateLimit?: number;
 }
 
 export type TurnSpecErrorCode =
@@ -332,9 +505,24 @@ export type TurnSpecErrorCode =
   | "no-rebindable-source"
   | "unsupported-trigger"
   | "unsupported-policy"
+  /** @deprecated Never thrown since 0.17: flags share bits, and a turn past the bit budget is `too-many-states`. */
   | "too-many-flags"
   | "unknown-key"
-  | "non-string-id";
+  | "non-string-id"
+  /** A row's check names a range other than `melee` / `ranged`. */
+  | "unknown-range"
+  /** A row's check or a save names an ability the turn does not know. */
+  | "unknown-ability"
+  /** The walk would carry more distinct states than `stateLimit` allows. */
+  | "too-many-states"
+  /** A save is declared without the ability it is made with, where a condition rule needs one. */
+  | "save-without-ability"
+  /**
+   * The joint distribution of a turn whose conditions need a damage type dealt (`dealing`): the
+   * library knows only the odds a landing dealt the type, so it answers every per-row and per-rider
+   * reader and `mean()`, but not the turn's joint `pmf`.
+   */
+  | "dealing-joint-unsupported";
 
 /**
  * A malformed turn. `code` is a stable contract: consumer UIs map it to their own

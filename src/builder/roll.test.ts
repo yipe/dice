@@ -935,6 +935,7 @@ describe("RollBuilder", () => {
           modifier: 0,
           reroll: 0,
           explode: 0,
+          explodePoolBudget: 0,
           minimum: 0,
           bestOf: 0,
           keep: undefined,
@@ -1097,7 +1098,7 @@ describe("RollBuilder", () => {
       const halvedDamage = damage.half();
       const ast = halvedDamage.toAST();
 
-      expect(ast.type).toBe("half");
+      if (ast.type !== "half") throw new Error(`expected a half node, got ${ast.type}`);
       expect(ast.child.type).toBe("add");
     });
 

@@ -37,6 +37,9 @@ export type RollConfig = {
   keep: { total: number; count: number; mode: KeepMode } | undefined;
   rollType: RollType;
   isSubtraction?: boolean; // true if this negative count should be treated as subtraction
+  // Set only on a check's natural roll by `pinned()`: no grant or condition in a turn changes
+  // this roll's type. A row fact, not part of the distribution; absent (never `false`) otherwise.
+  pinned?: true;
 };
 
 export type Resolution = {
@@ -60,6 +63,15 @@ export type AttackResolution = Resolution & {
   critSeparate: PMF;
   weights: { hit: number; crit: number; miss: number };
 };
+
+/** Melee or ranged, for a turn's condition rules keyed by range: `ranged()` / `melee()`. */
+export type AttackRange = "melee" | "ranged";
+
+/** A save's ability, as `ability()` stores it: always the full name. */
+export type Ability = "strength" | "dexterity" | "constitution" | "intelligence" | "wisdom" | "charisma";
+
+/** What `ability()` accepts: a full name or its three-letter form. */
+export type AbilityName = Ability | "str" | "dex" | "con" | "int" | "wis" | "cha";
 
 /**
  * The one re-derivation surface `AttackBuilder.withCheck(fn)` accepts. `roll` is the

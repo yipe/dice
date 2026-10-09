@@ -1,5 +1,17 @@
 import type { DCBuilder } from "../builder/dc";
-import type { GrantSpec, PerSource, RiderOptions, SubstitutePolicy, SubstituteSpec } from "./types";
+import type { RollBuilder } from "../builder/roll";
+import type {
+  ConditionRule,
+  ConditionSpec,
+  EffectSpec,
+  GrantSaveSpec,
+  GrantSpec,
+  PerSource,
+  RiderOptions,
+  SubstitutePolicy,
+  SubstituteSpec,
+} from "./types";
+import { combineRollType } from "./context";
 import { TurnSpecError } from "./types";
 
 /**
@@ -115,15 +127,18 @@ export interface Modifiers {
 }
 
 /**
- * A modifier with a lifetime: the only thing a trigger verb accepts besides damage
- * and transforms. Pass several in an array to have one outcome (and one save)
- * apply them together. Immutable.
+ * Any effect with a lifetime: what a trigger verb accepts besides damage and transforms.
+ * Pass several in an array to have one outcome (and one save) apply them together. Immutable.
  */
-export interface Grant {
+export interface Lasting {
   readonly kind: "grant";
+}
+
+/** A {@link Lasting} effect that can be scoped to the rows that read it. Immutable. */
+export interface Grant extends Lasting {
   /**
    * The attack ids, attack-shaped rider ids or tags that read it. Omitted, every
-   * later attack roll does. Naming nothing that comes after the condition's
+   * later row does. Naming nothing that comes after the condition's
    * sources is `unknown-id`.
    */
   to(...targets: readonly string[]): Grant;
@@ -155,13 +170,15 @@ class ModifierSet implements Modifiers {
   }
 }
 
-class GrantValue implements Grant {
+class LastingValue implements Lasting {
   readonly kind = "grant" as const;
 
-  constructor(readonly spec: GrantSpec) {}
+  constructor(readonly spec: EffectSpec) {}
+}
 
+class GrantValue extends LastingValue implements Grant {
   to(...targets: readonly string[]): Grant {
-    return new GrantValue({ ...this.spec, to: [...targets] });
+    return new GrantValue({ ...this.spec, to: [...targets] } as EffectSpec);
   }
 }
 
@@ -180,14 +197,188 @@ export function critOnHit(): Modifiers {
   return new ModifierSet({ critOnHit: true });
 }
 
-/** True for a {@link Grant} built by a factory in this module. */
+/** True for a {@link Lasting} effect built by a factory in this module. */
 export function isGrant(value: unknown): value is Grant {
-  return value instanceof GrantValue;
+  return value instanceof LastingValue;
 }
 
-/** The JSON-safe form of a {@link Grant}. */
+/** The JSON-safe form of a {@link Grant} built by `advantage()`, `disadvantage()` or `critOnHit()`. */
 export function grantSpec(grant: Grant): GrantSpec {
-  return (grant as GrantValue).spec;
+  return effectSpec(grant) as GrantSpec;
+}
+
+/** The JSON-safe form of any {@link Lasting} effect. */
+export function effectSpec(effect: Lasting): EffectSpec {
+  return (effect as LastingValue).spec;
+}
+
+/** A condition before it has a lifetime: `prone()`, `condition("frightened", rule)`. Immutable. */
+export interface ConditionEffect {
+  /** Lasts for the rest of the turn. */
+  untilEndOfTurn(): Lasting;
+  /** Ends when the creature takes damage; the rule's `onEnd` condition is left for the rest of the turn. */
+  untilDamaged(): Lasting;
+}
+
+/** Vulnerability before it has a lifetime; its only lifetime is the next hit. */
+export interface VulnerabilityEffect {
+  /** The next hit against the creature deals double damage, then it ends. */
+  untilNextHit(): Lasting;
+}
+
+/** A modifier on the creature's saves before it has a lifetime. Immutable. */
+export interface SaveModifier {
+  /** Consumed by the creature's next save. */
+  untilNextSave(): Grant;
+  /** Lasts for the rest of the turn. */
+  untilEndOfTurn(): Grant;
+}
+
+/** What {@link Turn.atStart} accepts: an effect with a lifetime, or one without (meaning the turn). */
+export type StartEffect = Lasting | Modifiers | ConditionEffect | SaveModifier;
+
+class PendingCondition implements ConditionEffect {
+  constructor(
+    private readonly name: string,
+    private readonly rule: ConditionRule
+  ) {}
+
+  untilEndOfTurn(): Lasting {
+    return new LastingValue({ condition: this.name, rule: this.rule, until: "end-of-turn" });
+  }
+
+  untilDamaged(): Lasting {
+    return new LastingValue({ condition: this.name, rule: this.rule, until: "until-damaged" });
+  }
+}
+
+type SaveFields = { saveDisadvantage: true } | { savePenalty: { count: number; sides: number } };
+
+class PendingSaveModifier implements SaveModifier {
+  constructor(private readonly fields: SaveFields) {}
+
+  untilNextSave(): Grant {
+    return new GrantValue({ ...this.fields, until: "next-save" });
+  }
+
+  untilEndOfTurn(): Grant {
+    return new GrantValue({ ...this.fields, until: "end-of-turn" });
+  }
+}
+
+/** A condition the creature has, by name and rule: `condition("frightened", rule).untilEndOfTurn()`. */
+export function condition(name: string, rule: ConditionRule): ConditionEffect {
+  return new PendingCondition(name, rule);
+}
+
+/** The next hit against the creature deals double damage: `vulnerability().untilNextHit()`. */
+export function vulnerability(): VulnerabilityEffect {
+  return { untilNextHit: () => new LastingValue({ vulnerability: true, until: "next-hit" }) };
+}
+
+/** Disadvantage on the creature's saves: `saveDisadvantage().untilNextSave().to("spells")`. */
+export function saveDisadvantage(): SaveModifier {
+  return new PendingSaveModifier({ saveDisadvantage: true });
+}
+
+/**
+ * A die subtracted from the creature's saves: `savePenalty(d4).untilNextSave()`. Takes one
+ * plain die group, `d4` or `roll(2, d4)`.
+ */
+export function savePenalty(die: RollBuilder): SaveModifier {
+  const configs = die.getSubRollConfigs();
+  const [config] = configs;
+  if (configs.length !== 1 || config === undefined || config.modifier !== 0 || config.count < 1) {
+    throw new Error("savePenalty takes one plain die group, such as d4 or roll(1, d4).");
+  }
+  return new PendingSaveModifier({ savePenalty: { count: config.count, sides: config.sides } });
+}
+
+/** A {@link StartEffect} as a lasting effect: one without a lifetime lasts the turn. */
+export function lastingForTurn(effect: StartEffect): Lasting {
+  return isGrant(effect) ? effect : (effect as Exclude<StartEffect, Lasting>).untilEndOfTurn();
+}
+
+/**
+ * A trigger's save: a DC check (rolled in the target's state; its `ability`, when it has one, is what
+ * a condition rule keyed by ability reads) or a {@link GrantSaveSpec} itself.
+ */
+export type TriggerSave = DCBuilder | GrantSaveSpec;
+
+/**
+ * The {@link GrantSaveSpec} of a {@link TriggerSave}. A plain DC check (a d20 plus a flat bonus) is
+ * `{ ability, dc, bonus, rollType }`; any other (bonus dice, a reroll, `pinned()`, `alwaysFails()`)
+ * is a `failChance` that rolls the check itself in the target's state, so nothing it says is lost.
+ * Either way its odds are read off the check's own PMF at `eps`, as the 0.16 gate read them.
+ */
+export function grantSaveSpec(save: TriggerSave, eps: number = 0): GrantSaveSpec {
+  if (!isDCCheck(save)) return save;
+  const ability = save.saveAbility;
+  const named = ability === undefined ? {} : { ability };
+  const rollType = save.rollType;
+  if (save.isPlainSave) {
+    return { ...named, dc: save.saveDC, bonus: save.modifier, ...(rollType === "flat" ? {} : { rollType }) };
+  }
+  const pinned = save.getRootDieConfig()?.pinned === true;
+  return {
+    ...named,
+    // The walk's context carries the target's state over a flat roll: the check's own roll type joins it here.
+    failChance: (context) =>
+      save
+        .rolledIn({
+          rollType: pinned ? rollType : combineRollType(rollType, false, context.rollType === "disadvantage", false),
+          autoFail: context.autoFail,
+          penaltyDice: context.penaltyDice,
+        })
+        .toPMF(eps)
+        .pAt(1),
+  };
+}
+
+/** True for a DC check (a `DCBuilder`), as opposed to a plain {@link GrantSaveSpec}. */
+export function isDCCheck(save: unknown): save is DCBuilder {
+  return typeof save === "object" && save !== null && "toPMF" in save && typeof save.toPMF === "function";
+}
+
+/**
+ * The fields of a {@link ConditionSpec} that a trigger verb's options (or a builder's attached
+ * gate) set, beside `on`, `of` and `grants`. Every save, a DC check included, is rolled by the walk
+ * in the target's state; `chance` is the only fixed gate.
+ */
+export function gateFields(
+  options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "optional">,
+  eps: number
+): Omit<ConditionSpec, "on" | "of" | "grants" | "id"> {
+  const { save, chance, onSave, landing, dealing, optional } = options;
+  // A plain-JS caller can still pass the `target` the types no longer offer: refuse it rather than drop it.
+  if ("target" in options && options.target !== undefined) {
+    throw new TurnSpecError(
+      "unsupported-trigger",
+      "",
+      "A trigger takes no target: its effects go on the creature of the row that lands them. Use atStart(effect, { target }) for a creature's starting state."
+    );
+  }
+  if (save !== undefined && chance !== undefined) {
+    throw new Error("Pass either save or chance, not both: each is the chance the grants take.");
+  }
+  if (onSave !== undefined && save === undefined && chance === undefined) {
+    throw new Error("onSave needs a save or a chance: without one there is no other branch to apply it on.");
+  }
+  // `Array.isArray` does not narrow a readonly array out of the union.
+  const saves = (save === undefined ? [] : Array.isArray(save) ? save : [save]) as readonly TriggerSave[];
+  if (saves.some((entry) => typeof entry !== "object" || entry === null)) {
+    throw new Error("save must be a DC check such as d20.plus(2).dc(15), or a GrantSaveSpec.");
+  }
+  const grantSaves = saves.map((entry) => grantSaveSpec(entry, eps));
+  const saved = (onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave]) as readonly Lasting[];
+  return {
+    ...(chance === undefined ? {} : { chance }),
+    ...(landing === undefined ? {} : { landing }),
+    ...(dealing === undefined ? {} : { dealing }),
+    ...(grantSaves.length === 0 ? {} : { save: Array.isArray(save) ? grantSaves : grantSaves[0] }),
+    ...(saved.length === 0 ? {} : { onSave: saved.map(effectSpec) }),
+    ...(optional === undefined ? {} : { optional }),
+  };
 }
 
 /**
@@ -195,12 +386,23 @@ export function grantSpec(grant: Grant): GrantSpec {
  * damage passed in the same call lands whatever the save does.
  */
 export interface ConditionOptions extends RiderOptions {
-  /** The target's save; its P(fail) is the chance the grants take. */
-  save?: DCBuilder;
+  /**
+   * The target's save, rolled in its state (save disadvantage, penalty dice and, for a check that
+   * names an ability, the rules keyed by it): a DC check, a plain {@link GrantSaveSpec}, or a list of
+   * them (the target picks the one it passes most). With nothing in force a DC check is its own
+   * P(fail), as in 0.16.
+   */
+  save?: TriggerSave | readonly TriggerSave[];
   /** In `[0, 1]`; mutually exclusive with `save`. */
   chance?: number;
-  /** Grants applied on the other branch: the save succeeded (or `1 - chance`). */
-  onSave?: Grant | readonly Grant[];
+  /** Effects applied on the other branch: the save succeeded (or `1 - chance`). */
+  onSave?: Lasting | readonly Lasting[];
+  /** The landing must deal damage of this type. */
+  dealing?: string;
+  /** "You can": the turn takes the effects only where that raises the mean. */
+  optional?: true;
+  /** The probability, in `[0, 1]`, that the call's damage happens at all this turn. */
+  happens?: number;
 }
 
 /**

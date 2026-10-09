@@ -9,6 +9,7 @@
 //   basic       Basic dice rolling and query examples
 //   stats       Advanced statistics and probability analysis
 //   turn        Conditional damage riders (sneak attack, smite, flurry)
+//   conditions  Conditions and effects (Vex, Topple, Stunning Strike, grapples, …)
 //   misc        Miscellaneous examples
 //   list        Show detailed descriptions
 
@@ -37,6 +38,12 @@ function showList() {
   );
   console.log("                and a once-per-turn miss reroll, via `turn()`.\n");
 
+  console.log("  conditions  - Conditions: what the target has, and what it gets");
+  console.log(
+    "                Vex, Topple, Stunning Strike, grapples, Knock Out, Frostbite,"
+  );
+  console.log("                Path to the Grave and a Restrained start.\n");
+
   console.log("  misc        - Miscellaneous examples");
   console.log("                A collection of many random examples\n");
 
@@ -61,6 +68,10 @@ function showList() {
 
     case "turn":
       await runExample("./turn-examples", "Running turn/rider examples...");
+      break;
+
+    case "conditions":
+      await runExample("./conditions", "Running conditions examples...");
       break;
 
     case "list":

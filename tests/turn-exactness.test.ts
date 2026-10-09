@@ -8,16 +8,19 @@ import { DiceQuery } from "../src/pmf/query";
 import { onAnyHit, onCritOnly } from "../src/common/types";
 import type { StepOutcome } from "../src/turn/state";
 
+/** The outcomes of an attack that happened (`none` is one that did not). */
+type Outcome = Exclude<StepOutcome, "none">;
+
 const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
 const daggerPMF = dagger.pmf;
 
-const SLICES: Record<StepOutcome, PMF> = {
+const SLICES: Record<Outcome, PMF> = {
   hit: daggerPMF.filterOutcome("hit"),
   crit: daggerPMF.filterOutcome("crit"),
   miss: daggerPMF.filterOutcome("missNone"),
 };
 
-const OUTCOMES: StepOutcome[] = ["hit", "crit", "miss"];
+const OUTCOMES: Outcome[] = ["hit", "crit", "miss"];
 
 /**
  * Independent oracle: enumerate every outcome sequence for `n` identical attacks
@@ -26,11 +29,11 @@ const OUTCOMES: StepOutcome[] = ["hit", "crit", "miss"];
  */
 function bruteForce(
   n: number,
-  riderFor: (sequence: StepOutcome[]) => PMF[]
+  riderFor: (sequence: Outcome[]) => PMF[]
 ): PMF {
   const branches: [PMF, number][] = [];
 
-  const walk = (sequence: StepOutcome[]): void => {
+  const walk = (sequence: Outcome[]): void => {
     if (sequence.length === n) {
       const parts = sequence.map((outcome) => SLICES[outcome]);
       let branch = parts.reduce((all, part) => all.convolve(part, undefined, true));
@@ -56,7 +59,7 @@ function expectSamePMF(actual: PMF, expected: PMF): void {
 }
 
 const sneak = roll(3, d6);
-const firstLanding = (sequence: StepOutcome[]): StepOutcome | undefined =>
+const firstLanding = (sequence: Outcome[]): Outcome | undefined =>
   sequence.find((outcome) => outcome !== "miss");
 
 describe("Turn exactness vs brute force", () => {

@@ -1156,8 +1156,8 @@ describe("onEveryHit max: an exact cap on applications", () => {
       expect(codeOf(() => Turn.from({ attacks: [sword], riders: [spec] }))).toBe("unsupported-trigger");
       // @ts-expect-error onFirstHit has no max option
       expect(codeOf(() => turn([sword]).onFirstHit(d6, { max: 1 }))).toBe("unsupported-trigger");
-      // @ts-expect-error onAnyCrit has no max option
-      expect(codeOf(() => turn([sword]).onAnyCrit(d6, { max: 1 }))).toBe("unsupported-trigger");
+      // @ts-expect-error onAnyCrit has no max option; a spec's any-crit rider takes one (its first `max` crits)
+      expect(codeOf(() => turn([sword]).onAnyCrit(d6, { max: 1 }))).toBeUndefined();
     });
 
     it("refuses a max or a payload per source beside a grant", () => {
@@ -1209,7 +1209,8 @@ describe("onEveryHit max: an exact cap on applications", () => {
         id: "folded",
         perSource: { "attack 2": { damage: d8 } },
       });
-      expect(codeOf(() => perSource.onFirstHit(d4, { of: ["folded"] }))).toBe("not-an-attack");
+      // A first-hit rider folded per source lands once: naming it makes it a partner (`Rider.of`), so the d4 lands alongside it.
+      expect(codeOf(() => perSource.onFirstHit(d4, { of: ["folded"] }))).toBeUndefined();
     });
 
     it("bounds the capped riders that watch one attack", () => {

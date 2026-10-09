@@ -25,7 +25,7 @@ import {
 } from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
-import type { RollConfig, RollType } from "./types";
+import type { AttackRange, RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
 
@@ -623,6 +623,27 @@ export class RollBuilder {
     return new AlwaysCritBuilder(this);
   }
 
+  /**
+   * Fixes this roll's type for a turn: no grant or condition changes it
+   * (`d20.plus(8).withAdvantage().pinned().ac(16)`). A row fact on the natural roll, carried
+   * through `ac()`, `dc()` and `alwaysHits()`; the roll's own distribution does not change.
+   * Throws on a roll with no natural roll to pin.
+   */
+  pinned(): RollBuilder {
+    return this.create(this.pinnedConfigs());
+  }
+
+  /** This roll's configs with the natural roll marked `pinned`: {@link pinned}, for every check builder. */
+  protected pinnedConfigs(): RollConfig[] {
+    const configs = this.getSubRollConfigs().map((config) => ({ ...config }));
+    const idx = naturalRollIndex(configs);
+    if (idx === -1) {
+      throw new Error("pinned() needs a die to pin: this roll has no natural roll (a rolled, added die).");
+    }
+    configs[idx].pinned = true;
+    return configs;
+  }
+
   copy(): RollBuilder {
     return this.create(this.getSubRollConfigs());
   }
@@ -1104,9 +1125,9 @@ export class RerollUpToRollBuilder extends TransformedRollBuilder {
 }
 
 export class AlwaysHitBuilder extends RollBuilder {
-  readonly attackConfig: CritConfig;
+  readonly attackConfig: CritConfig & { range?: AttackRange };
 
-  constructor(baseRoll: RollBuilder, attackConfig?: CritConfig) {
+  constructor(baseRoll: RollBuilder, attackConfig?: CritConfig & { range?: AttackRange }) {
     if (baseRoll.hasHiddenState()) {
       throw new Error(
         "Cannot create AlwaysHitBuilder from a roll with hidden state."
@@ -1149,12 +1170,33 @@ export class AlwaysHitBuilder extends RollBuilder {
   /** Sets the crit threshold for this always-hitting check: a natural roll at or above it crits. */
   critOn(critThreshold: number): AlwaysHitBuilder {
     requireFinite(critThreshold, "critOn() threshold");
-    const newConfig = { critThreshold };
+    const newConfig = { critThreshold, range: this.attackConfig.range };
     return new AlwaysHitBuilder(this, newConfig);
   }
 
   alwaysCrits(): AlwaysCritBuilder {
-    return new AlwaysCritBuilder(this, undefined, true);
+    return new AlwaysCritBuilder(this, { critThreshold: 20, range: this.attackConfig.range }, true);
+  }
+
+  /**
+   * An attack from farther than 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on
+   * "within 5 feet"). A reach attack from 10 feet is `ranged()` for this purpose. A row fact; the PMF does not change.
+   */
+  ranged(): AlwaysHitBuilder {
+    return new AlwaysHitBuilder(this, { ...this.attackConfig, range: "ranged" });
+  }
+
+  /**
+   * An attack from within 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on "within
+   * 5 feet"). A melee reach attack from farther away should be `ranged()`. A row fact; the PMF does not change.
+   */
+  melee(): AlwaysHitBuilder {
+    return new AlwaysHitBuilder(this, { ...this.attackConfig, range: "melee" });
+  }
+
+  /** See {@link RollBuilder.pinned}; keeps the crit threshold and range. */
+  override pinned(): AlwaysHitBuilder {
+    return new AlwaysHitBuilder(new RollBuilder(this.pinnedConfigs()), this.attackConfig);
   }
 
   /** The check's natural roll, which is all this builder's own PMF reads (see {@link toPMF}). */
@@ -1169,18 +1211,18 @@ export class AlwaysHitBuilder extends RollBuilder {
   override copy(): AlwaysHitBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
-    const newConfig = { critThreshold };
+    const newConfig = { critThreshold, range: this.attackConfig.range };
     return new AlwaysHitBuilder(baseCopy, newConfig);
   }
 }
 
 export class AlwaysCritBuilder extends RollBuilder {
-  readonly attackConfig: CritConfig & { ac?: number };
+  readonly attackConfig: CritConfig & { ac?: number; range?: AttackRange };
   readonly fromAlwaysHit: boolean;
 
   constructor(
     baseRoll: RollBuilder,
-    attackConfig?: CritConfig & { ac?: number },
+    attackConfig?: CritConfig & { ac?: number; range?: AttackRange },
     fromAlwaysHit: boolean = false
   ) {
     if (baseRoll.hasHiddenState()) {
@@ -1225,8 +1267,29 @@ export class AlwaysCritBuilder extends RollBuilder {
 
   critOn(critThreshold: number): AlwaysCritBuilder {
     requireFinite(critThreshold, "critOn() threshold");
-    const newConfig = { critThreshold, ac: this.attackConfig.ac };
+    const newConfig = { critThreshold, ac: this.attackConfig.ac, range: this.attackConfig.range };
     return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
+  }
+
+  /**
+   * An attack from farther than 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on
+   * "within 5 feet"). A reach attack from 10 feet is `ranged()` for this purpose. A row fact; the PMF does not change.
+   */
+  ranged(): AlwaysCritBuilder {
+    return new AlwaysCritBuilder(this, { ...this.attackConfig, range: "ranged" }, this.fromAlwaysHit);
+  }
+
+  /**
+   * An attack from within 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on "within
+   * 5 feet"). A melee reach attack from farther away should be `ranged()`. A row fact; the PMF does not change.
+   */
+  melee(): AlwaysCritBuilder {
+    return new AlwaysCritBuilder(this, { ...this.attackConfig, range: "melee" }, this.fromAlwaysHit);
+  }
+
+  /** See {@link RollBuilder.pinned}; keeps the crit threshold, AC and range. */
+  override pinned(): AlwaysCritBuilder {
+    return new AlwaysCritBuilder(new RollBuilder(this.pinnedConfigs()), this.attackConfig, this.fromAlwaysHit);
   }
 
   /** The check's natural roll, which is all this builder's own PMF reads (see {@link toPMF}). */
@@ -1241,7 +1304,7 @@ export class AlwaysCritBuilder extends RollBuilder {
   override copy(): AlwaysCritBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
-    const newConfig = { critThreshold, ac: this.attackConfig.ac };
+    const newConfig = { critThreshold, ac: this.attackConfig.ac, range: this.attackConfig.range };
     return new AlwaysCritBuilder(baseCopy, newConfig, this.fromAlwaysHit);
   }
 }
