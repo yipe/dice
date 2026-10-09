@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import type { Bin } from "../src/index";
 import { EPS, PMF } from "../src/index";
+import { DenseTotal } from "../src/pmf/dense-total";
 
 type Labels = Partial<Record<string, number>>;
 
@@ -251,5 +252,51 @@ describe("the merge kernel is the reference merge, bit for bit", () => {
     expect(bitsOf(self.addScaled(branch, probability))).toBe(bitsOf(referenceAddScaled(self, branch, probability)));
     expect(bitsOf(self.add(branch))).toBe(bitsOf(referenceAddScaled(self, branch, 1)));
     expect(bitsOf(branch.add(self))).toBe(bitsOf(referenceAddScaled(branch, self, 1)));
+  });
+});
+
+describe("a dense total is the PMF it stands for, bit for bit, after every operation", () => {
+  const SEEDS = Array.from({ length: 300 }, (_, i) => 11000 + i);
+
+  /** A random walk of the joint ledger's operations, the PMF beside the dense total at each step. */
+  it.each(SEEDS)("seed %i", (seed) => {
+    const random = rng(seed);
+    const eps = random() < 0.5 ? 0 : EPS;
+    let pmf = PMF.delta(0, eps);
+    let total = DenseTotal.of(pmf, eps);
+    // A second running total to merge in, built the same way.
+    let otherPmf = PMF.delta(0, eps);
+    let other = DenseTotal.of(otherPmf, eps);
+    const steps = 2 + Math.floor(random() * 6);
+    for (let step = 0; step < steps; step++) {
+      const op = random();
+      if (op < 0.55) {
+        // A slice: mostly integer, sometimes one bin, sometimes non-integer (the PMF path), sometimes zero mass.
+        const slice = randomPmf(random, {
+          bins: random() < 0.25 ? 1 : undefined,
+          integer: random() < 0.85,
+          normalized: random() < 0.3,
+          zeroMass: random() < 0.05,
+        });
+        pmf = pmf.convolveRaw(slice, eps);
+        total = total.convolve(slice);
+      } else if (op < 0.75) {
+        const factor = random() < 0.2 ? 1 : random();
+        pmf = pmf.scaleMass(factor);
+        total = total.scale(factor);
+      } else if (op < 0.9) {
+        const slice = randomPmf(random, { integer: true });
+        otherPmf = otherPmf.convolveRaw(slice, eps);
+        other = other.convolve(slice);
+        pmf = pmf.add(otherPmf);
+        total = total.add(other);
+      } else {
+        pmf = otherPmf.add(pmf);
+        total = other.add(total);
+      }
+      expect(bitsOf(total.toPMF()), `step ${step}`).toBe(bitsOf(pmf));
+      expect(total.mass(), `step ${step} mass`).toBe(pmf.mass());
+      expect(total.toPMF().normalized, `step ${step} normalized`).toBe(pmf.normalized);
+    }
   });
 });

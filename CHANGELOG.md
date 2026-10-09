@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2026-10-09
+
+### Changed
+
+- **The joint walk carries its damage as flat arrays.** `Turn.pmf` (and `mean`, `toQuery`) kept
+  each walk state's running total as a PMF, so every convolution and every merge of two states
+  built a bin object per damage value, some 230,000 of them for a 12-attack turn. The walk now
+  carries a `DenseTotal`: the dense convolution kernel's own arrays, convolved, merged and scaled
+  array to array, laid out as a PMF once at the end. Every operation is the PMF's to the bit —
+  the same products and sums in the same order, the same operand order, the same map and label
+  orders — and a total the arrays cannot hold (a non-integer support) is carried as a PMF and
+  takes the PMF's own path. `tests/pmf-kernel-reference.test.ts` walks 300 random operation
+  sequences with the PMF beside the total and compares every bit after each step; the 0.16
+  fixtures are untouched. The 12-attack joint `pmf` sweep runs about 1.8× faster.
+
 ## [0.18.1] - 2026-10-09
 
 ### Changed
