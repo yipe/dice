@@ -1210,9 +1210,15 @@ export class PMF {
     if (aDamages.length === 0 || bDamages.length === 0) return new Map();
     const lo = aDamages[0] + bDamages[0];
     const width = aDamages[aDamages.length - 1] + bDamages[bDamages.length - 1] - lo + 1;
-    const integral =
-      Number.isInteger(width) && width <= MAX_DENSE_WIDTH && aDamages.every(Number.isInteger) && bDamages.every(Number.isInteger);
-    if (!integral) return PMF.convolveBinsSparse(A, B);
+    // Flat arrays cost `width` cells per label; the map walk costs a pair per label. A support
+    // whose range is wide but sparse (`{0, 1000000}`) is cheaper on the map walk.
+    const dense =
+      Number.isInteger(width) &&
+      width <= MAX_DENSE_WIDTH &&
+      width <= 4 * aDamages.length * bDamages.length &&
+      aDamages.every(Number.isInteger) &&
+      bDamages.every(Number.isInteger);
+    if (!dense) return PMF.convolveBinsSparse(A, B);
 
     // Label slots: `count` labels then `attr` labels, each in order of first appearance (A's
     // then B's); each table's local label index maps to a slot.

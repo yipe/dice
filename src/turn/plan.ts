@@ -1245,17 +1245,27 @@ export function buildPlan(
   );
   // A first-hit rider whose `of` names a folded first-hit rider lands alongside it (a partner,
   // see `partnersOf` below), on the partner's rows where the partner lands. Only a fold gates a
-  // landing on another payload in the same draw, so such a rider is folded too. Iterated: a
-  // rider folded here can be the partner of a later one.
+  // landing on another payload in the same draw, so such a rider is folded too; a fold deals a
+  // payload, so one whose damage rolls an attack is refused here rather than mis-folded.
+  // Iterated: a rider folded here can be the partner of a later one.
   const riders: EvaluatedRider[] = [...stepped];
+  const idOf = (rider: EvaluatedRider, index: number): string =>
+    typeof rider.id === "string" ? rider.id : `rider ${index + 1}`;
   for (let changed = true; changed; ) {
     changed = false;
-    const folded = new Set(
-      riders.flatMap((rider, index) => (isFirstHitFold(rider) ? [typeof rider.id === "string" ? rider.id : `rider ${index + 1}`] : []))
-    );
+    const folded = new Set(riders.flatMap((rider, index) => (isFirstHitFold(rider) ? [idOf(rider, index)] : [])));
     riders.forEach((rider, index) => {
       if (rider.on !== "first-hit" || perSourceOf(rider) !== undefined || !Array.isArray(rider.of)) return;
-      if (!rider.of.some((entry) => folded.has(entry))) return;
+      const id = idOf(rider, index);
+      const partner = rider.of.find((entry) => entry !== id && folded.has(entry));
+      if (partner === undefined) return;
+      if (Array.isArray(rider.damage) || sliceSource(toPMF(rider.damage as Damage, eps), rider.damage as Damage, eps) !== null) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" lands alongside "${partner}", so it is dealt with that rider's landing and cannot roll an attack of its own. Give it damage, or watch the attacks directly.`
+        );
+      }
       riders[index] = { ...rider, perSource: {} };
       changed = true;
     });
@@ -1820,13 +1830,14 @@ export function buildPlan(
   // node's id. Per substitute: the source ids it watches.
   // A folded rider named in another rider's `of` is a partner: that rider lands on the partner's
   // rows (those in `where`) only where the partner lands too (Spellfire Adept on a smite).
-  const partnersOf = riders.map((rider) =>
+  const partnersOf = riders.map((rider, self) =>
     !Array.isArray(rider.of)
       ? []
       : (rider.of as readonly string[]).filter((entry) => {
           const index = riderIndexById.get(entry);
-          // A partner lands once: a first-hit rider folded into its sources (a smite).
-          return index !== undefined && isFirstHitFold(riders[index]);
+          // A partner lands once: a first-hit rider folded into its sources (a smite). A rider
+          // naming itself is left to `resolveSources`, which refuses the self-reference.
+          return index !== undefined && index !== self && isFirstHitFold(riders[index]);
         })
   );
   const ownSourcesOf = (rider: EvaluatedRider, index: number): string[] => {

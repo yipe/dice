@@ -56,6 +56,12 @@ describe("shapes 0.17 accepts", () => {
     ).toThrow(/lands alongside "partner"/);
   });
 
+  it("a partner that rolls an attack of its own is refused; a fold naming itself is a self-reference", () => {
+    const folded = turn([sword, sword]).onFirstHit(d6, { id: "folded", perSource: { "attack 2": { damage: d8 } } });
+    expect(() => folded.onFirstHit(sword, { of: ["folded"], id: "partner" })).toThrow(/cannot roll an attack of its own/);
+    expect(() => turn([sword]).onFirstHit(d6, { id: "x", of: ["x"], perSource: {} })).toThrow(/cannot depend on itself/);
+  });
+
   it("a grant with `landing: 'fail'` over attacks alone lands on a hit, as by default", () => {
     const grant = advantage().untilEndOfTurn();
     const failing = turn([sword, sword]).onFirstHit(grant, { landing: "fail" }).mean();
