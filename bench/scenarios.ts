@@ -1,7 +1,7 @@
 /**
  * Standalone scenario benchmark. Prints per-scenario median wall time and a content fingerprint of
  * the result, so a performance change can be checked bit-for-bit: run before and after and diff the
- * fingerprint column. Run with `yarn tsx bench/scenarios.ts [repeats]`.
+ * fingerprint column. Run with `yarn bench:scenarios [repeats]`.
  *
  * Each scenario clears the library caches first, so timings are cold-cache: what a fresh page
  * load (or a new AC sweep) pays, not what the LRU hands back on the second call.
@@ -99,10 +99,10 @@ const scenarios: Record<string, () => PMF | PMF[]> = {
       .onEveryHit(d6).pmf,
 };
 
+/** Length and hash of the results' content fingerprints: equal across runs iff every bit is. */
 function fingerprint(result: PMF | PMF[]): string {
-  const list = Array.isArray(result) ? result : [result];
-  // Fingerprint is content-only (bins, labels, mass); order of construction is irrelevant.
-  return list.map((p) => p.fingerprint()).join("|").length.toString(36) + ":" + hash(list.map((p) => p.fingerprint()).join("|"));
+  const text = (Array.isArray(result) ? result : [result]).map((p) => p.fingerprint()).join("|");
+  return `${text.length.toString(36)}:${hash(text)}`;
 }
 
 function hash(text: string): string {

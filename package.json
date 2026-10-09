@@ -83,7 +83,8 @@
     "prepare": "yarn build",
     "prepublishOnly": "yarn typecheck && yarn test && yarn compat:check && yarn build",
     "example": "tsx examples/run.ts",
-    "bench": "vitest bench --run"
+    "bench": "vitest bench --run",
+    "bench:scenarios": "tsx bench/scenarios.ts"
   },
   "publishConfig": {
     "access": "public"

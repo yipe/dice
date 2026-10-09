@@ -1136,11 +1136,14 @@ export class PMF {
   /**
    * The distribution of the sum of this PMF and `other`. The operands are ordered by
    * {@link fingerprint} (their content) and each is walked in ascending damage order, so the
-   * result does not depend on which PMF was created first, on which operand is `this`, on how
-   * either map was built, or on what the cache holds: a float sum depends on the order its terms
-   * are added in, and `a.convolve(b)` and `b.convolve(a)` add the same terms in the same order.
-   * The one map-order dependence left is upstream of the walk: a non-raw convolve first
-   * normalizes an operand whose mass is not 1, and `mass()` adds in map order.
+   * result does not depend on which PMF was created first, on which operand is `this` or on how
+   * either map was built: a float sum depends on the order its terms are added in, and
+   * `a.convolve(b)` and `b.convolve(a)` add the same terms in the same order. The map-order
+   * dependence left is in `mass()`, which adds in map order: a non-raw convolve first normalizes
+   * an operand whose mass is not 1, and the mass invariant below rescales the result when the
+   * operands' masses do not multiply out. So a cache hit, keyed on content alone, can hand back
+   * a result an equal-content operand in another map order computed, a few ulps apart; a walk
+   * that wants its own operands' bits every time uses {@link convolveRaw}.
    */
   convolve(other: PMF, eps?: number, raw = false): PMF {
     const epsilon = eps ?? this.epsilon;
@@ -1466,37 +1469,22 @@ export class PMF {
     return combinedMap;
   }
 
-  // Convolve without renormalizing (raw = true), for callers that combine raw counts.
+  /** {@link convolve} with `raw`: through the shared cache, unlike {@link convolveRaw}. */
   combineRaw(other: PMF, eps?: number): PMF {
     return this.convolve(other, eps, true);
   }
 
-  // Reduce a list of PMFs by left-folding convolve() with the given eps
-  private static reduceConvolveLeft(pmfList: PMF[], eps: number): PMF {
+  /**
+   * Convolves multiple PMFs left to right, each step through the convolution cache: every
+   * prefix (A+B, (A+B)+C, …) is a stable cache key, so lists sharing a prefix share the work.
+   */
+  static convolveMany(pmfList: PMF[], eps = EPS): PMF {
+    if (pmfList.length === 0) return PMF.empty(eps);
     let result = pmfList[0];
     for (let i = 1; i < pmfList.length; i++) {
       result = result.convolve(pmfList[i], eps);
     }
     return result;
-  }
-
-  /**
-   * Convolves multiple PMFs using linear convolution with automatic caching.
-   * Uses a left-to-right accumulation approach for maximum cache reuse.
-   * Each convolve() call automatically uses the convolution cache for performance.
-   *
-   * This linear approach provides better cache hits than pairwise because:
-   * - Intermediate results are more predictable and stable
-   * - Similar PMF lists share common prefixes (A+B, (A+B)+C, etc.)
-   * - Order-independent cache keys work better with consistent build patterns
-   */
-  static convolveMany(pmfList: PMF[], eps = EPS): PMF {
-    if (pmfList.length === 0) return PMF.empty(eps);
-    if (pmfList.length === 1) return pmfList[0];
-
-    // Linear combination with automatic intermediate caching: each prefix
-    // (A+B, (A+B)+C, ...) is a stable cache key, maximizing reuse.
-    return PMF.reduceConvolveLeft(pmfList, eps);
   }
 
   /**
