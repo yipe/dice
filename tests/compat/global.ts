@@ -9,7 +9,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestProject } from "vitest/node";
-import { FIXTURE_PATH, formatFixture, loadRetired, MODE, type FileRecords, type Fixture } from "./format";
+import { CROSS_RUNTIME_TOLERANCE, FIXTURE_PATH, formatFixture, loadRetired, MODE, NODE_MAJOR, readFixture, type FileRecords, type Fixture } from "./format";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -19,6 +19,12 @@ declare module "vitest" {
 
 export default function setup(project: TestProject): (() => void) | undefined {
   if (MODE === undefined) return undefined;
+  if (MODE === "check") {
+    const { capturedOn } = readFixture();
+    if (capturedOn !== NODE_MAJOR) {
+      console.log(`compat: Node v${NODE_MAJOR} differs from capture (v${capturedOn}); comparing at ${CROSS_RUNTIME_TOLERANCE} relative`);
+    }
+  }
   const dir = mkdtempSync(join(tmpdir(), "dice-compat-"));
   project.provide("compatDir", dir);
 
@@ -29,7 +35,7 @@ export default function setup(project: TestProject): (() => void) | undefined {
     rmSync(dir, { recursive: true, force: true });
 
     const ran = new Set(records.map(({ file }) => file));
-    const previous = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixture;
+    const previous = readFixture().files;
     const missing = Object.keys(previous).filter((file) => !ran.has(file));
     if (missing.length > 0) {
       // A filtered run must not replace the full fixture with a partial one. vitest logs a teardown throw but still
@@ -45,7 +51,7 @@ export default function setup(project: TestProject): (() => void) | undefined {
       for (const { file, tests } of records) {
         if (Object.keys(tests).length > 0) fixture[file] = tests;
       }
-      writeFileSync(FIXTURE_PATH, formatFixture(fixture));
+      writeFileSync(FIXTURE_PATH, formatFixture({ capturedOn: NODE_MAJOR, files: fixture }));
       const calls = Object.values(fixture).reduce(
         (sum, tests) => sum + Object.values(tests).reduce((n, entries) => n + entries.length, 0),
         0

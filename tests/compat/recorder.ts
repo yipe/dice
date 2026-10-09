@@ -8,19 +8,21 @@
  *
  * - `capture`: hands the records to the global teardown, which writes
  *   `tests/compat/fixtures-0.16.json`.
- * - `check`: compares each call bit-exactly to the fixture. A differing or unexpected
+ * - `check`: compares each call to the fixture, bit-exactly on the Node major it was captured
+ *   on (see `toleranceFor` for the readers and runtimes compared at 1e-12). A differing or unexpected
  *   call fails its test; a fixture call never reached fails the file. A test file with
  *   no entries in the fixture is not a 0.16 test (or never read a `Turn` under 0.16)
  *   and is skipped entirely: nothing is wrapped, recorded or failed. A test listed in
  *   `tests/compat/retired.json` is no longer required (see `loadRetired`).
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { afterAll, afterEach, expect, inject } from "vitest";
 import {
-  FIXTURE_PATH,
   loadRetired,
   MODE,
+  NODE_MAJOR,
+  readFixture,
   ROOT,
   recordsName,
   serializeLeaves,
@@ -28,9 +30,8 @@ import {
   stableJSON,
   unhex,
   type Entry,
-  type Fixture,
   type Serialized,
-  TOLERANCE,
+  toleranceFor,
   withinTolerance,
 } from "./format";
 import type { DiceQuery } from "../../src/pmf/query";
@@ -44,8 +45,10 @@ async function install(): Promise<void> {
   const file = relative(ROOT, testPath).split(sep).join("/");
 
   let expected: Record<string, readonly Entry[]> = {};
+  let sameRuntime = true;
   if (MODE === "check") {
-    const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixture;
+    const { capturedOn, files: fixture } = readFixture();
+    sameRuntime = capturedOn === NODE_MAJOR;
     const inFixture = fixture[file];
     if (inFixture === undefined) return;
     expected = { ...inFixture };
@@ -71,7 +74,7 @@ async function install(): Promise<void> {
       return;
     }
     if (stableJSON(want) === stableJSON(entry)) return;
-    const tolerance = TOLERANCE[entry.reader];
+    const tolerance = toleranceFor(entry.reader, sameRuntime);
     if (
       tolerance !== undefined &&
       want.reader === entry.reader &&

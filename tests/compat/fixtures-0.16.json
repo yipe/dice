@@ -1,4 +1,5 @@
 {
+  "capturedOn": 24,
   "src/builder/example.test.ts": {
     "": [
       {"args":[],"ordinal":0,"reader":"mean","value":"4033389b71758e24"},

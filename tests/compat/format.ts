@@ -1,7 +1,7 @@
 /**
  * Serialization shared by the compat recorder (worker side) and its global setup
  * (main process side). Every number a reader returns is stored as its float64 bit
- * pattern, so a comparison is bit-exact by construction, unless {@link TOLERANCE}
+ * pattern, so a comparison is bit-exact by construction, unless {@link toleranceFor}
  * gives its reader one.
  */
 import { createHash } from "node:crypto";
@@ -56,6 +56,24 @@ export interface Entry {
 
 /** file (repo-relative, posix) → full test name → calls in order. */
 export type Fixture = Record<string, Record<string, readonly Entry[]>>;
+
+/** The Node major version this process runs on. */
+export const NODE_MAJOR = Number(process.versions.node.split(".")[0]);
+
+/**
+ * The fixture file: its calls, and the Node major they were captured on. On disk `capturedOn` is a top-level key beside
+ * the file paths, so the per-call lines stay as captured.
+ */
+export interface FixtureFile {
+  readonly capturedOn: number;
+  readonly files: Fixture;
+}
+
+export function readFixture(): FixtureFile {
+  const { capturedOn, ...files } = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Record<string, unknown>;
+  if (typeof capturedOn !== "number") throw new Error("compat: the fixture has no capturedOn (the Node major it was captured on)");
+  return { capturedOn, files: files as Fixture };
+}
 
 /** What one test file's worker hands the global teardown. */
 export interface FileRecords {
@@ -122,10 +140,10 @@ export function stableJSON(value: unknown): string {
   );
 }
 
-/** The fixture file's text: sorted keys, one call per line so diffs stay readable. */
-export function formatFixture(fixture: Fixture): string {
+/** The fixture file's text: `capturedOn` first, then sorted keys, one call per line so diffs stay readable. */
+export function formatFixture({ capturedOn, files: fixture }: FixtureFile): string {
   const files = Object.keys(fixture).sort();
-  const lines = ["{"];
+  const lines = ["{", `  "capturedOn": ${capturedOn},`];
   files.forEach((file, fileIndex) => {
     lines.push(`  ${JSON.stringify(file)}: {`);
     const tests = Object.keys(fixture[file]).sort();
@@ -146,16 +164,28 @@ export function formatFixture(fixture: Fixture): string {
 /**
  * Per reader, the relative tolerance its numbers are compared at (|a − b| ≤ tol · max(1, |b|));
  * a reader not listed is bit-exact. These readers are read from the mass walk, not the
- * joint PMF walk, so they agree with 0.16 to rounding, not to the bit. `pmf` and `mean` stay
- * bit-exact.
+ * joint PMF walk, so they agree with 0.16 to rounding, not to the bit. `pmf`, `mean` and
+ * `toQuery` stay bit-exact.
  */
-export const TOLERANCE: Readonly<Record<string, number>> = {
+const TOLERANCE: Readonly<Record<string, number>> = {
   stepStats: 1e-12,
   fireProbability: 1e-12,
   expectedApplications: 1e-12,
 };
 
-/** Whether `got` matches `want` with every numeric leaf within `tolerance` (relative, see {@link TOLERANCE}). */
+/** The relative tolerance every reader is compared at on a Node major other than the capture's. */
+export const CROSS_RUNTIME_TOLERANCE = 1e-12;
+
+/**
+ * The relative tolerance `reader` is compared at, or `undefined` for bit-exact. Bit-exactness holds only on the Node
+ * major the fixture was captured on (V8's math functions differ by an ULP or two across majors), so on another major
+ * every reader is compared at {@link CROSS_RUNTIME_TOLERANCE}.
+ */
+export function toleranceFor(reader: string, sameRuntime: boolean): number | undefined {
+  return sameRuntime ? TOLERANCE[reader] : CROSS_RUNTIME_TOLERANCE;
+}
+
+/** Whether `got` matches `want` with every numeric leaf within `tolerance` (relative, see {@link toleranceFor}). */
 export function withinTolerance(want: Serialized, got: Serialized, tolerance: number): boolean {
   if (typeof want === "string" && typeof got === "string" && /^[0-9a-f]{16}$/.test(want) && /^[0-9a-f]{16}$/.test(got)) {
     const [a, b] = [unhex(got), unhex(want)];
