@@ -1,5 +1,6 @@
 import type { Check } from "../builder/types";
 import type { Bin, RollType } from "../common/types";
+import { DenseTotal } from "../pmf/dense-total";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
 import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Lasting, StartEffect, Transform } from "./effects";
@@ -230,14 +231,18 @@ interface Ledger<D> {
   convolve(damage: D, slice: PMF, step: Step, draw?: Draw): D;
 }
 
-function pmfLedger(eps: number): Ledger<PMF> {
+/**
+ * The joint walk's damage: a {@link DenseTotal}, the running PMF as flat arrays, so no bin
+ * objects are built between steps. Every operation is the PMF's, to the bit.
+ */
+function pmfLedger(eps: number): Ledger<DenseTotal> {
   return {
-    start: PMF.delta(0, eps),
+    start: DenseTotal.of(PMF.delta(0, eps), eps),
     mass: (damage) => damage.mass(),
     add: (a, b) => a.add(b),
-    scale: (damage, factor) => damage.scaleMass(factor),
+    scale: (damage, factor) => damage.scale(factor),
     // Uncached: a running total is convolved once and never seen again.
-    convolve: (damage, slice) => damage.convolveRaw(slice, eps),
+    convolve: (damage, slice) => damage.convolve(slice),
   };
 }
 
@@ -255,7 +260,10 @@ const massLedger: Ledger<number> = {
  */
 function marginalLedger(id: string, eps: number): Ledger<PMF> {
   return {
-    ...pmfLedger(eps),
+    start: PMF.delta(0, eps),
+    mass: (damage) => damage.mass(),
+    add: (a, b) => a.add(b),
+    scale: (damage, factor) => damage.scaleMass(factor),
     convolve: (damage, slice, step, draw) => {
       if (draw === undefined) return step.id === id ? damage.convolveRaw(slice, eps) : damage;
       if (step.id === id) return damage.convolveRaw(draw.own ?? slice, eps);
@@ -1467,11 +1475,11 @@ export class Turn {
     const { states, stateCounts } = this.walk(pmfLedger(eps), plan);
     inspections.set(this, { plan: () => this.plan, stateCounts });
 
-    let total: PMF | undefined;
+    let total: DenseTotal | undefined;
     for (const state of states.values()) {
       total = total ? total.add(state.damage) : state.damage;
     }
-    const pmf = total ?? PMF.delta(0, eps);
+    const pmf = total === undefined ? PMF.delta(0, eps) : total.toPMF();
     this.resolved = { pmf: needsNormalizing(pmf.mass(), eps) ? pmf.normalize() : pmf };
     return this.resolved;
   }
