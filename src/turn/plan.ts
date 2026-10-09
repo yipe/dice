@@ -3263,7 +3263,8 @@ export function buildPlan(
    * `fired` after `sourceId` lands: a first-hit rider with a payload per source is folded into its
    * sources' draws, so it is not a step and marks its fire slot only there. The look-ahead reads
    * the plain variant, which does not carry it, so it applies the slots itself: one that is still
-   * empty is the first landing among that rider's sources.
+   * empty is the first landing among that rider's sources; one a partner opens the row to marks
+   * only where that partner marks too.
    */
   const withFolded = (fired: readonly FireMode[], sourceId: string, draw?: Draw): readonly FireMode[] => {
     // A draw that is no landing marks nothing. A save row's draws are all "hit" and say whether they
