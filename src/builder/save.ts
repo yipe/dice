@@ -178,8 +178,9 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    */
   private resolveScaled(eps: number, failScale: 1 | 2): SaveResolution {
     const { pSuccess: psuccess, pFail: pfail } = this.check.saveProbabilities();
+    // Library epsilon, not `eps`: with `eps` 0 the halved payload normalizes on an ulp of drift.
     const failPMF = this.failureEffect ? payloadPMF(this.failureEffect, eps) : PMF.delta(0);
-    const onSuccess = this.saveOutcome ?? "half";
+    const onSuccess = this.saveOutcome;
 
     let successPMF: PMF = PMF.delta(0, eps);
     if (onSuccess === "half") successPMF = failPMF.scaleDamage(0.5, "floor");
@@ -194,10 +195,10 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
       .add(failLabel, failScale === 1 ? failPMF : failPMF.scaleDamage(failScale, "floor"), pfail);
 
     return {
-      pmf: mixture.buildPMF(eps) ?? PMF.delta(0, eps),
+      pmf: mixture.buildPMF(eps),
       check: this.check.toPMF(eps),
-      saveFail: failPMF ?? PMF.delta(0, eps),
-      saveSuccess: successPMF ?? PMF.delta(0, eps),
+      saveFail: failPMF,
+      saveSuccess: successPMF,
       weights: { success: psuccess, fail: pfail },
     };
   }

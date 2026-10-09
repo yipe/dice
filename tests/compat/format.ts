@@ -25,9 +25,10 @@ export interface Retired {
 }
 
 /**
- * The retired fixture tests of `fixture`, as `[file, test]` pairs. `check` mode does not require
- * a retired test: its fixture calls may go unreached. Every key must name a test the fixture has,
- * so a typo cannot silently retire nothing.
+ * The retired fixture tests of `fixture`, as `[file, test]` pairs. `check` mode neither requires
+ * nor compares a retired test: its fixture calls may go unreached, and a test still running
+ * under that name is not held to them. Every key must name a test the fixture has, so a typo
+ * cannot silently retire nothing.
  */
 export function loadRetired(fixture: Fixture): Array<readonly [file: string, test: string]> {
   const retired = JSON.parse(readFileSync(RETIRED_PATH, "utf8")) as readonly Retired[];
