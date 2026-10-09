@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.3] - 2026-10-09
+
+### Fixed
+
+- **A `dealing` condition reads the type a rider that lands on anything deals.** A rider with
+  `landing: 'any'` (a cast rider) was never counted toward a condition's `dealing` type, so a hit
+  it landed on with cold damage was not a cold hit: Cold Caster's Frostbite over such a rider never
+  put its penalty on the next save. Its dice are damage of the hit it lands on, so it now deals the
+  type with its `dealt` odds; on a crit it deals its plain payload, so its plain hit's odds apply.
+- **A rider landing that deals the `dealing` type also deals damage.** Where a condition damage ends
+  (an `until-damaged` Unconscious) and a `dealing` condition read the same rider landing, the two
+  were split independently, so the walk had landings that dealt the type without waking the
+  creature, and landings that woke it without the type more often than they happen. Each effect's
+  odds were right, but a later row's marginal mixed the states wrongly (a save after it, for one).
+  A rider's payload is now split with the type it deals: a landing that dealt the type dealt that
+  rider's damage above 0, one event. Every marginal is still exact.
+
 ## [0.18.2] - 2026-10-09
 
 ### Changed
