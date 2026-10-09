@@ -125,11 +125,11 @@ describe("target is taken by atStart and attacks only", () => {
   it("a trigger condition naming a target is a TurnSpecError", () => {
     const spec = {
       attacks: [sword],
-      conditions: [{ on: "first-hit" as const, target: "target", grants: [{ advantage: true, until: "end-of-turn" as const }] }],
+      conditions: [{ on: "first-hit" as const, target: "target", grants: [{ advantage: true as const, until: "end-of-turn" as const }] }],
     };
     expect(codeOf(() => Turn.from(spec))).toBe("unsupported-trigger");
     // @ts-expect-error -- trigger verbs take no target
-    expect(codeOf(() => turn([sword]).onFirstHit(prone().untilEndOfTurn(), { target: "target" }))).toBeDefined();
+    expect(codeOf(() => turn([sword]).onFirstHit(prone().untilEndOfTurn(), { target: "target" }))).toBe("unsupported-trigger");
   });
 
   it("atStart's target must be a creature some row is aimed at", () => {
