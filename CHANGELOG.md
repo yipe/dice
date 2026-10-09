@@ -57,9 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `condition(name, rule)`, `vulnerability().untilNextHit()`, `saveDisadvantage()` and `savePenalty(d4)`
   (`untilNextSave()` / `untilEndOfTurn()`), and `untilDamaged()` on a condition; `turn.atStart(effect)`,
   `onFirstCrit` (on the turn and attached) and `dc.onSaveFailure([damage, effect])`; trigger options
-  `save` (an `ability(...)` DC check, rolled as written in the target's state, or a list the target picks
-  from), `dealing` and `optional` (a trigger takes no `target`: its effects go on the creature of the row
-  that lands them; `atStart(effect, { target })` names one); and the row facts `melee()` / `ranged()` (within
+  `save` (a DC check, kept as written and rolled in the target's state, `saveDC(dc, { con: 2 })`, or a list the
+  target picks from), `dealing` and `optional` (a trigger takes no `target`: its effects go on the creature of
+  the row that lands them; `atStart(effect, { target })` names one); and the row facts `melee()` / `ranged()` (within
   5 feet / farther, for condition rules), `ability()` (`str` or `strength`, in saves and rule keys alike),
   `pinned()` and `alwaysFails()`.
   The guide's new section "Conditions: what the target has, and what it gets" and
@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An explicit `of: []` never lands**: a rider or condition with an empty `of` watches nothing (fire
   probability 0, a zero marginal). An omitted `of` keeps its default; with no attack to default to, it is
   still `unknown-id`.
+- **A DC check given as a trigger's `save` is rolled in the target's state** whether or not it names an
+  `ability`: save disadvantage and penalty dice in force apply to it, and in a turn whose rules read saves
+  by ability it is `save-without-ability` without one, as a save row is. With nothing in force its odds are
+  its own P(fail), bit for bit as in 0.16. Only `chance` is a fixed gate.
 
 ### Documentation
 

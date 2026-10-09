@@ -89,48 +89,6 @@ export function contextOf(check: RowCheck, key: number, penaltyDice: readonly Pe
   };
 }
 
-/** P(face) of a d20 rolled flat, with advantage, with disadvantage, or as three-die advantage. */
-function d20Faces(rollType: RollType): number[] {
-  const dice = rollType === "flat" ? 1 : rollType === "elven accuracy" ? 3 : 2;
-  return Array.from({ length: 20 }, (_, index) => {
-    const face = index + 1;
-    // The kept die is the highest of `dice` d20s, or the lowest with disadvantage.
-    return rollType === "disadvantage"
-      ? ((21 - face) / 20) ** dice - ((20 - face) / 20) ** dice
-      : (face / 20) ** dice - ((face - 1) / 20) ** dice;
-  });
-}
-
-/** The distribution of the sum of `dice` (value -> probability). */
-function penaltyDistribution(dice: readonly PenaltyDice[]): Map<number, number> {
-  let sum = new Map([[0, 1]]);
-  for (const { count, sides } of dice) {
-    for (let die = 0; die < count; die++) {
-      const next = new Map<number, number>();
-      for (const [total, p] of sum) {
-        for (let face = 1; face <= sides; face++) next.set(total + face, (next.get(total + face) ?? 0) + p / sides);
-      }
-      sum = next;
-    }
-  }
-  return sum;
-}
-
-/**
- * P(a save of d20 + `bonus` against `dc` fails) in `context`: always with `autoFail`, otherwise
- * the d20 of the context's roll type, less its penalty dice, falls short of the DC.
- */
-export function saveFailChance(bonus: number, dc: number, context: RowContext): number {
-  if (context.autoFail) return 1;
-  const faces = d20Faces(context.rollType);
-  const penalty = penaltyDistribution(context.penaltyDice);
-  let pass = 0;
-  faces.forEach((pFace, index) => {
-    for (const [lost, pLost] of penalty) if (index + 1 + bonus - lost >= dc) pass += pFace * pLost;
-  });
-  return 1 - pass;
-}
-
 /** A context as a string: two contexts with the same key roll the same PMF. */
 export function contextKey(context: RowContext): string {
   const dice = context.penaltyDice.map((die) => `${die.count}d${die.sides}`).join("+");

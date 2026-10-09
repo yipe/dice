@@ -1,5 +1,7 @@
 import { combine } from "../builder/ac";
 import type { AttachedCondition } from "../builder/attack";
+import { DCBuilder } from "../builder/dc";
+import { d20 } from "../builder/factory";
 import { ParsedRollBuilder } from "../builder/roll";
 import type { AttackResolution, Check } from "../builder/types";
 import { EPS } from "../common/types";
@@ -23,7 +25,6 @@ import {
   MOD_VULNERABLE,
   type PenaltyDice,
   rowCheckOf,
-  saveFailChance,
 } from "./context";
 import type { Lasting } from "./effects";
 import { effectSpec, gateFields, isGrant, isTransform } from "./effects";
@@ -2176,7 +2177,12 @@ export function buildPlan(
     if (savesAt[position] && rowFacts[position] !== undefined) checkAbility(entry.id, rowFacts[position]?.ability);
   });
   conditions.forEach((condition, index) => {
-    for (const option of saveOptionsOf(condition)) checkAbility(conditionIds[index], option.ability);
+    for (const option of saveOptionsOf(condition)) {
+      checkAbility(conditionIds[index], option.ability);
+      if ("rollType" in option && option.rollType === "elven accuracy") {
+        fail("unsupported-trigger", conditionIds[index], `Condition "${conditionIds[index]}" has a save rolled with Elven Accuracy, which only an attack roll can use.`);
+      }
+    }
   });
 
   // The creature each step is aimed at: a declared attack's `target`; a rider's, its first source's.
@@ -2566,12 +2572,13 @@ export function buildPlan(
           penaltyDice,
           joined: [],
         };
-        // An automatic failure never reaches a `failChance`.
+        // An automatic failure never reaches a `failChance`. A plain save rolls the DC check a fluent
+        // caller would have written, so its odds are the check's own PMF, as the 0.16 gate read them.
         const chance = context.autoFail
           ? 1
           : "failChance" in option
             ? option.failChance(context)
-            : saveFailChance(option.bonus, option.dc, context);
+            : new DCBuilder(d20.plus(option.bonus), { dc: option.dc }).rolledIn(context).toPMF(eps).pAt(1);
         if (!(chance >= 0 && chance <= 1)) {
           throw new RangeError(`Condition "${id}" has a save whose fail chance is ${chance}, not a probability.`);
         }

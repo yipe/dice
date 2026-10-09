@@ -339,12 +339,12 @@ describe("saves on a trigger", () => {
   const grant = advantage().untilEndOfTurn();
   const grants = [{ advantage: true, until: "end-of-turn" }];
 
-  it("a DC check without an ability is the 0.16 gate: a fixed chance", () => {
+  it("a DC check without an ability is a plain save, rolled in the target's state", () => {
     const { conditions } = specOf(() =>
       turn([sword]).onFirstHit(grant, { save: d20.plus(2).dc(15) }),
     );
     expect(conditions).toEqual([
-      { on: "first-hit", of: ["attack 1"], chance: 0.6, grants },
+      { on: "first-hit", of: ["attack 1"], save: { dc: 15, bonus: 2 }, grants },
     ]);
   });
 

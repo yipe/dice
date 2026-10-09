@@ -300,8 +300,8 @@ export function lastingForTurn(effect: StartEffect): Lasting {
 }
 
 /**
- * A trigger's save: a DC check (its `ability`, when it has one, decides what the target's state does
- * to it) or a {@link GrantSaveSpec} itself.
+ * A trigger's save: a DC check (rolled in the target's state; its `ability`, when it has one, is what
+ * a condition rule keyed by ability reads) or a {@link GrantSaveSpec} itself.
  */
 export type TriggerSave = DCBuilder | GrantSaveSpec;
 
@@ -309,8 +309,9 @@ export type TriggerSave = DCBuilder | GrantSaveSpec;
  * The {@link GrantSaveSpec} of a {@link TriggerSave}. A plain DC check (a d20 plus a flat bonus) is
  * `{ ability, dc, bonus, rollType }`; any other (bonus dice, a reroll, `pinned()`, `alwaysFails()`)
  * is a `failChance` that rolls the check itself in the target's state, so nothing it says is lost.
+ * Either way its odds are read off the check's own PMF at `eps`, as the 0.16 gate read them.
  */
-export function grantSaveSpec(save: TriggerSave): GrantSaveSpec {
+export function grantSaveSpec(save: TriggerSave, eps: number = 0): GrantSaveSpec {
   if (!isDCCheck(save)) return save;
   const ability = save.saveAbility;
   const named = ability === undefined ? {} : { ability };
@@ -323,11 +324,14 @@ export function grantSaveSpec(save: TriggerSave): GrantSaveSpec {
     ...named,
     // The walk's context carries the target's state over a flat roll: the check's own roll type joins it here.
     failChance: (context) =>
-      save.rolledIn({
-        rollType: pinned ? rollType : combineRollType(rollType, false, context.rollType === "disadvantage", false),
-        autoFail: context.autoFail,
-        penaltyDice: context.penaltyDice,
-      }).saveProbabilities().pFail,
+      save
+        .rolledIn({
+          rollType: pinned ? rollType : combineRollType(rollType, false, context.rollType === "disadvantage", false),
+          autoFail: context.autoFail,
+          penaltyDice: context.penaltyDice,
+        })
+        .toPMF(eps)
+        .pAt(1),
   };
 }
 
@@ -338,9 +342,8 @@ export function isDCCheck(save: unknown): save is DCBuilder {
 
 /**
  * The fields of a {@link ConditionSpec} that a trigger verb's options (or a builder's attached
- * gate) set, beside `on`, `of` and `grants`. A lone DC check with no ability is the 0.16 gate:
- * its P(fail), which the DC check's PMF puts at 1 (`vsAC` leaves it alone — it is the target's
- * save bonus, not its AC). Any other save is state-aware, rolled by the walk.
+ * gate) set, beside `on`, `of` and `grants`. Every save, a DC check included, is rolled by the walk
+ * in the target's state; `chance` is the only fixed gate.
  */
 export function gateFields(
   options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "optional">,
@@ -366,13 +369,10 @@ export function gateFields(
   if (saves.some((entry) => typeof entry !== "object" || entry === null)) {
     throw new Error("save must be a DC check such as d20.plus(2).dc(15), or a GrantSaveSpec.");
   }
-  const [lone] = saves;
-  const legacy = !Array.isArray(save) && isDCCheck(lone) && lone.saveAbility === undefined;
-  const probability = legacy && isDCCheck(lone) ? lone.toPMF(eps).pAt(1) : chance;
-  const grantSaves = legacy ? [] : saves.map(grantSaveSpec);
+  const grantSaves = saves.map((entry) => grantSaveSpec(entry, eps));
   const saved = (onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave]) as readonly Lasting[];
   return {
-    ...(probability === undefined ? {} : { chance: probability }),
+    ...(chance === undefined ? {} : { chance }),
     ...(landing === undefined ? {} : { landing }),
     ...(dealing === undefined ? {} : { dealing }),
     ...(grantSaves.length === 0 ? {} : { save: Array.isArray(save) ? grantSaves : grantSaves[0] }),
@@ -387,9 +387,10 @@ export function gateFields(
  */
 export interface ConditionOptions extends RiderOptions {
   /**
-   * The target's save. A DC check with no `ability` is the 0.16 gate: its P(fail) is the chance
-   * the grants take. One that names an ability, a plain {@link GrantSaveSpec}, or a list of
-   * them (the target picks the one it passes most) is rolled in the target's state.
+   * The target's save, rolled in its state (save disadvantage, penalty dice and, for a check that
+   * names an ability, the rules keyed by it): a DC check, a plain {@link GrantSaveSpec}, or a list of
+   * them (the target picks the one it passes most). With nothing in force a DC check is its own
+   * P(fail), as in 0.16.
    */
   save?: TriggerSave | readonly TriggerSave[];
   /** In `[0, 1]`; mutually exclusive with `save`. */

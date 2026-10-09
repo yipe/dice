@@ -860,7 +860,7 @@ caster.marginal("breath").pmf.mean(); // 10.5563
 
 | Option              | Meaning                                                                                   |
 | ------------------- | ----------------------------------------------------------------------------------------- |
-| `save`              | the target's save: a DC check with `ability(...)`, `saveDC(dc, { con: 2 })`, or a list it picks the likeliest pass from |
+| `save`              | the target's save, rolled in its state: a DC check, `saveDC(dc, { con: 2 })`, or a list it picks the likeliest pass from |
 | `chance`            | a fixed P(the effects take), instead of a save (`contestLossChance` for a contest)        |
 | `onSave`            | effects on the other branch: the save passed, or `1 - chance`                             |
 | `of`, `id`          | the rows or riders watched (a rider id: land with that rider), and a name to read it by   |
@@ -871,10 +871,12 @@ A trigger's effects go on the creature of the row that lands them (`attack(sourc
 a trigger takes no `target` (`unsupported-trigger`). Only `atStart(effect, { target })` names one, and it must be
 `"target"` or a creature some attack is aimed at (`unknown-id` otherwise).
 
-A DC check given as `save` keeps everything it says. A plain one (a d20 plus a flat bonus) is the save
-`{ ability, dc, bonus, rollType }`; one with bonus dice (Bless `.plus(d4)`), a reroll (`d20.reroll(1)`),
-`pinned()` or `alwaysFails()` is rolled as written, in the target's state. Abilities may be spelled `str` or
-`strength`, in a save and in a rule's `save` keys alike.
+A DC check given as `save` keeps everything it says and is rolled in the target's state (save disadvantage,
+penalty dice). A plain one (a d20 plus a flat bonus) is the save `{ ability, dc, bonus, rollType }`; one with
+bonus dice (Bless `.plus(d4)`), a reroll (`d20.reroll(1)`), `pinned()` or `alwaysFails()` is rolled as written.
+With nothing in force it is its own P(fail), the 0.16 gate. It needs an `ability(...)` only where a rule in the
+turn reads saves by ability (`save-without-ability` otherwise, as for a save row). Abilities may be spelled `str`
+or `strength`, in a save and in a rule's `save` keys alike.
 
 | Row fact                         | On                         | Means                                                                    |
 | -------------------------------- | -------------------------- | ------------------------------------------------------------------------ |

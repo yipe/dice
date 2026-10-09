@@ -22,13 +22,13 @@ describe("SaveBuilder verbs keep attached conditions", () => {
 });
 
 describe("a DC check's ability gates a condition by the target's state", () => {
-  const gated = (save: TriggerSave) =>
-    turn([sword, sword]).atStart(restrained()).onFirstHit(vulnerability().untilNextHit(), { save });
+  const gated = (gate: { save: TriggerSave } | { chance: number }) =>
+    turn([sword, sword]).atStart(restrained()).onFirstHit(vulnerability().untilNextHit(), gate);
 
   it("matches the plain-data spelling and differs from the fixed-chance gate", () => {
-    const fluent = gated(d20.plus(1).dc(15).ability("dex")).mean();
-    const plain = gated({ ability: "dexterity", dc: 15, bonus: 1 }).mean();
-    const fixed = gated(d20.plus(1).dc(15)).mean();
+    const fluent = gated({ save: d20.plus(1).dc(15).ability("dex") }).mean();
+    const plain = gated({ save: { ability: "dexterity", dc: 15, bonus: 1 } }).mean();
+    const fixed = gated({ chance: d20.plus(1).dc(15).toPMF().pAt(1) }).mean();
     expect(fluent).toBe(plain);
     expect(fluent).not.toBeCloseTo(fixed, 6);
   });
@@ -112,12 +112,13 @@ describe("a DC check used as a trigger's save keeps its own fail odds", () => {
   it("is rolled in the target's state: Restrained gives a Bless-boosted DEX save disadvantage", () => {
     const restrainedTurn = (save: TriggerSave) =>
       turn([sword, sword]).atStart(restrained()).onFirstHit(vulnerability().untilNextHit(), { save }).mean();
+    // Restrained leaves a CON save alone, so a CON check with its own roll is the comparator.
     const stateAware = restrainedTurn(d20.plus(1).plus(d4).dc(15).ability("dex"));
-    const fixedDisadvantage = restrainedTurn(d20.plus(1).plus(d4).withDisadvantage().dc(15));
+    const fixedDisadvantage = restrainedTurn(d20.plus(1).plus(d4).withDisadvantage().dc(15).ability("con"));
     expect(stateAware).toBeCloseTo(fixedDisadvantage, 12);
     // A pinned save keeps its own (flat) roll.
     const pinned = restrainedTurn(d20.plus(1).plus(d4).pinned().dc(15).ability("dex"));
-    expect(pinned).toBeCloseTo(restrainedTurn(d20.plus(1).plus(d4).dc(15)), 12);
+    expect(pinned).toBeCloseTo(restrainedTurn(d20.plus(1).plus(d4).dc(15).ability("con")), 12);
   });
 });
 
