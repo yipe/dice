@@ -346,18 +346,15 @@ describe("saves on a trigger", () => {
   });
 
   it("a DC check that names an ability is a state-aware GrantSaveSpec", () => {
-    // The adapter reads an `ability` string when present.
-    const con = Object.assign(d20.plus(2).dc(15), { ability: "con" });
-    const dex = Object.assign(d20.plus(1).withAdvantage().dc(14), {
-      ability: "dex",
-    });
+    const con = d20.plus(2).dc(15).ability("con");
+    const dex = d20.plus(1).withAdvantage().dc(14).ability("dex");
     expect(
       specOf(() => turn([sword]).onFirstHit(grant, { save: con })).conditions,
     ).toEqual([
       {
         on: "first-hit",
         of: ["attack 1"],
-        save: { ability: "con", dc: 15, bonus: 2 },
+        save: { ability: "constitution", dc: 15, bonus: 2 },
         grants,
       },
     ]);
@@ -369,8 +366,8 @@ describe("saves on a trigger", () => {
         on: "first-hit",
         of: ["attack 1"],
         save: [
-          { ability: "con", dc: 15, bonus: 2 },
-          { ability: "dex", dc: 14, bonus: 1, rollType: "advantage" },
+          { ability: "constitution", dc: 15, bonus: 2 },
+          { ability: "dexterity", dc: 14, bonus: 1, rollType: "advantage" },
         ],
         grants,
       },

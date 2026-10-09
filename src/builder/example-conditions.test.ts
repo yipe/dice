@@ -84,12 +84,18 @@ describe("Conditions examples, against the oracle", () => {
     ],
     [
       // The oracle rolls the contest itself (`contest`), so this checks `contestLossChance` too.
-      "grapple2014",
-      () => examples.grapple2014.mean(),
+      "shove2014",
+      () => examples.shove2014.mean(),
       {
-        attacks: [longsword, longsword],
+        attacks: [strike({ count: 0, sides: 1, flat: 0 }, { toHit: 0, autoHit: true, range: "melee" }), longsword],
         grants: [
-          firstHit([0, 1], { save: { ability: "strength", dc: 0, saveBonus: 7, contest: 5 }, effects: [advantageFor("turn")] }),
+          {
+            of: [0],
+            trigger: "hit",
+            cap: "unlimited",
+            save: { ability: "strength", dc: 0, saveBonus: 7, contest: 5 },
+            effects: [{ kind: "condition", condition: "prone" }],
+          },
         ],
       },
     ],

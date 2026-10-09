@@ -304,13 +304,13 @@ export function lastingForTurn(effect: StartEffect): Lasting {
  */
 export type TriggerSave = DCBuilder | GrantSaveSpec;
 
-/** The {@link GrantSaveSpec} of a {@link TriggerSave}. Reads an `ability` string off a DC check when it carries one. */
+/** The {@link GrantSaveSpec} of a {@link TriggerSave}: a DC check's stored ability (when set) and numbers. */
 export function grantSaveSpec(save: TriggerSave): GrantSaveSpec {
   if (!isDCCheck(save)) return save;
-  const ability = "ability" in save ? save.ability : undefined;
+  const ability = save.saveAbility;
   const rollType = save.rollType;
   return {
-    ...(typeof ability === "string" ? { ability } : {}),
+    ...(ability === undefined ? {} : { ability }),
     dc: save.saveDC,
     bonus: save.modifier,
     ...(rollType === "flat" ? {} : { rollType }),

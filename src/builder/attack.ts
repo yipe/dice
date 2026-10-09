@@ -416,12 +416,18 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     );
   }
 
-  /** A ranged attack, for a turn's condition rules keyed by range (Prone). A row fact; the PMF does not change. */
+  /**
+   * An attack from farther than 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on
+   * "within 5 feet"). A reach attack from 10 feet is `ranged()` for this purpose. A row fact; the PMF does not change.
+   */
   ranged(): AttackBuilder {
     return this.rebuilt(this.check.ranged());
   }
 
-  /** A melee attack, for a turn's condition rules keyed by range. A row fact; the PMF does not change. */
+  /**
+   * An attack from within 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on "within
+   * 5 feet"). A melee reach attack from farther away should be `ranged()`. A row fact; the PMF does not change.
+   */
   melee(): AttackBuilder {
     return this.rebuilt(this.check.melee());
   }

@@ -1,6 +1,6 @@
 // Conditions: what the target has, and what it gets. The same turns are pinned to the
 // brute-force oracle in src/builder/example.test.ts; docs/guide.md has the prose.
-import { advantage, d20, d4, d6, d8, roll, savePenalty, turn, vulnerability } from "../src/builder";
+import { advantage, d20, d4, d6, d8, flat, roll, savePenalty, turn, vulnerability } from "../src/builder";
 import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "../src/dnd5e";
 
 const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
@@ -28,9 +28,11 @@ show("Stunning Strike: P(fist 3 has advantage)", monk.stepStats("attack 3").live
 const saves = saveDC(15, { str: 5, dex: 1 });
 show("Grappler (2024): mean", turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { save: saves }).mean());
 
-// 2014 grapple: an Athletics contest, +5 against +7; ties go to the defender.
-const grappled = contestLossChance({ attacker: 5, defender: 7 });
-show("Grapple (2014): mean", turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { chance: grappled }).mean());
+// 2014 shove: an Athletics contest (+5 against +7; ties go to the defender) replaces the first attack and
+// knocks the target Prone, so the melee attack after it has advantage. (A 2014 grapple gives no advantage.)
+const shove = d20.alwaysHits().melee().onHit(flat(0))
+  .onEveryHit(prone().untilEndOfTurn(), { chance: contestLossChance({ attacker: 5, defender: 7 }) });
+show("Shove to Prone (2014), then a sword: mean", turn([shove, sword]).mean());
 
 // Cunning Strike (Knock Out): on the hit that carries Sneak Attack, a CON save or Unconscious until damaged.
 const rogue = turn([sword, sword, sword])

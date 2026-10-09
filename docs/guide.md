@@ -756,6 +756,11 @@ on a DC check, or `saveDC(15, { con: 2 })` from `@yipe/dice/dnd5e` for a trigger
 conditions sit plain effects on the target: `vulnerability()` for the next hit, and `saveDisadvantage()` /
 `savePenalty(d4)` for its saves.
 
+**`melee()` and `ranged()` stand for distance.** The rules key Prone, Paralyzed and Unconscious on whether the
+attacker is within 5 feet, and a turn does not model distance. For condition rules, `melee()` means an attack from
+within 5 feet and `ranged()` an attack from farther away: a reach attack made from 10 feet should be declared
+`ranged()` (no advantage against a Prone target, no automatic crit against a Paralyzed one).
+
 The verbs are the same ones the effects above use. `atStart` is what the target already has; a trigger verb
 (`onFirstHit`, `onEveryHit`, `onAnyCrit`, `onFirstCrit`) is what it gets, behind an optional save or chance. Each
 example below is exported from `src/builder/example.ts` and pinned in its test to the brute-force oracle
@@ -763,7 +768,7 @@ example below is exported from `src/builder/example.ts` and pinned in its test t
 them. All attacks are +8 vs AC 16.
 
 ```ts
-import { advantage, d20, d4, d6, d8, roll, savePenalty, turn, vulnerability } from "@yipe/dice/builder";
+import { advantage, d20, d4, d6, d8, flat, roll, savePenalty, turn, vulnerability } from "@yipe/dice/builder";
 import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "@yipe/dice/dnd5e";
 
 const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
@@ -790,9 +795,11 @@ monk.stepStats("attack 3").live.advantage; // 0.6175: the third fist rolls with 
 const saves = saveDC(15, { str: 5, dex: 1 });
 turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { save: saves }).mean(); // 12.1281
 
-// 2014 grapple: an Athletics contest, +5 against +7; ties go to the defender.
-const grappled = contestLossChance({ attacker: 5, defender: 7 });
-turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { chance: grappled }).mean(); // 12.0339
+// 2014 shove: an Athletics contest (+5 against +7; ties go to the defender) replaces the first attack and
+// knocks the target Prone, so the melee attack after it has advantage. (A 2014 grapple gives no advantage.)
+const shove = d20.alwaysHits().melee().onHit(flat(0))
+  .onEveryHit(prone().untilEndOfTurn(), { chance: contestLossChance({ attacker: 5, defender: 7 }) });
+turn([shove, sword]).mean(); // 6.5714
 
 // Cunning Strike (Knock Out): on the hit that carries Sneak Attack, a CON save or Unconscious until damaged.
 turn([sword, sword, sword])

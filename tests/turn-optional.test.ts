@@ -93,12 +93,18 @@ describe("optional conditions attached to a source", () => {
     const attached = Turn.from({
       attacks: [sword.onEveryHit(proneEffect().untilEndOfTurn(), { save, optional: true }), bow, bow],
     });
-    const turnLevel = Turn.from({
-      attacks: [sword, bow, bow],
-      conditions: [{ on: "every-hit", of: ["attack 1"], chance: save.toPMF().outcomeProbability?.("saveFail") ?? 0.65, optional: true, grants: [prone] }],
-    });
+    // A DC check's PMF puts a failed save at 1: d20 + 2 vs DC 15 fails on 1..12.
+    const fail = save.toPMF().pAt(1);
+    expect(fail).toBeCloseTo(0.6, 12);
+    const gate = (optional: boolean) =>
+      Turn.from({
+        attacks: [sword, bow, bow],
+        conditions: [{ on: "every-hit", of: ["attack 1"], chance: fail, optional, grants: [prone] }],
+      });
     const plain = Turn.from({ attacks: [sword, bow, bow] });
     expect(attached.mean()).toBeCloseTo(plain.mean(), 12);
-    expect(turnLevel.mean()).toBeCloseTo(plain.mean(), 12);
+    expect(gate(true).mean()).toBeCloseTo(plain.mean(), 12);
+    // Forced on, the Prone costs the bows: the search above declined something that mattered.
+    expect(gate(false).mean()).toBeLessThan(plain.mean() - 0.1);
   });
 });

@@ -89,17 +89,17 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
 
   /** The save's ability (`"con"` or `"constitution"`): see {@link DCBuilder.ability}. */
   ability(name: AbilityName): SaveBuilder {
-    return new SaveBuilder(this.check.ability(name), this.failureEffect, this.saveOutcome);
+    return new SaveBuilder(this.check.ability(name), this.failureEffect, this.saveOutcome, this.attached);
   }
 
   /** The save fails without rolling: see {@link DCBuilder.alwaysFails}. */
   alwaysFails(): SaveBuilder {
-    return new SaveBuilder(this.check.alwaysFails(), this.failureEffect, this.saveOutcome);
+    return new SaveBuilder(this.check.alwaysFails(), this.failureEffect, this.saveOutcome, this.attached);
   }
 
   /** No grant or condition in a turn changes this save's roll type: see {@link RollBuilder.pinned}. */
   pinned(): SaveBuilder {
-    return new SaveBuilder(this.check.pinned(), this.failureEffect, this.saveOutcome);
+    return new SaveBuilder(this.check.pinned(), this.failureEffect, this.saveOutcome, this.attached);
   }
 
   /**
@@ -147,7 +147,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
       const ability = this.check.saveAbility;
       if (ability !== undefined) check = check.ability(ability);
       if (autoFail) check = check.alwaysFails();
-      save = new SaveBuilder(check, this.failureEffect, this.saveOutcome);
+      save = new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
     }
     return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);
   }

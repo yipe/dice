@@ -83,12 +83,18 @@ export class ACBuilder extends RollBuilder {
     });
   }
 
-  /** A ranged attack, for a turn's condition rules keyed by range (Prone). A row fact; the PMF does not change. */
+  /**
+   * An attack from farther than 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on
+   * "within 5 feet"). A reach attack from 10 feet is `ranged()` for this purpose. A row fact; the PMF does not change.
+   */
   ranged(): ACBuilder {
     return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, range: "ranged" });
   }
 
-  /** A melee attack, for a turn's condition rules keyed by range. A row fact; the PMF does not change. */
+  /**
+   * An attack from within 5 feet, for a turn's condition rules (Prone, Paralyzed, Unconscious key on "within
+   * 5 feet"). A melee reach attack from farther away should be `ranged()`. A row fact; the PMF does not change.
+   */
   melee(): ACBuilder {
     return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, range: "melee" });
   }

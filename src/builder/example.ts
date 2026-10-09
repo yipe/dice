@@ -660,10 +660,19 @@ export const grappler = turn([longsword, longsword]).onFirstHit(advantage().unti
   save: saveDC(15, { str: 5, dex: 1 }),
 });
 
-/** 2014 grapple: an Athletics (+5) contest against the target's +7; a tie goes to the defender. */
-export const grapple2014 = turn([longsword, longsword]).onFirstHit(advantage().untilEndOfTurn(), {
-  chance: contestLossChance({ attacker: 5, defender: 7 }),
-});
+/**
+ * 2014 shove: the first attack is an Athletics (+5) contest against the target's +7 (a tie goes to the defender) that
+ * knocks it Prone; the second, a melee attack, then has advantage. The shove always "hits" for 0 and carries Prone with
+ * the contest's chance. (A 2014 grapple alone gives attackers no advantage.)
+ */
+export const shove2014 = turn([
+  d20
+    .alwaysHits()
+    .melee()
+    .onHit(flat(0))
+    .onEveryHit(prone().untilEndOfTurn(), { chance: contestLossChance({ attacker: 5, defender: 7 }) }),
+  longsword,
+]);
 
 /** Cunning Strike (Knock Out): on the hit that carries Sneak Attack, a CON save or Unconscious until damaged. */
 export const knockOut = turn([longsword, longsword, longsword])

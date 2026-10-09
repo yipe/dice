@@ -447,14 +447,13 @@ export class Turn {
    */
   attack(source: Source, options?: string | AttackOptions): Turn {
     this.refuseAttackAfterRider();
-    const { id, tag, chance, target } =
-      typeof options === "string"
-        ? { id: options, tag: undefined, chance: undefined, target: undefined }
-        : (options ?? {});
+    const opts: AttackOptions = typeof options === "string" ? { id: options } : (options ?? {});
+    const { id, tag, chance, ...rest } = opts;
+    const extra = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
     const entry: Attack =
-      id === undefined && tag === undefined && chance === undefined && target === undefined
+      id === undefined && tag === undefined && chance === undefined && Object.keys(extra).length === 0
         ? source
-        : { id, tag, chance, ...(target === undefined ? {} : { target }), source };
+        : { id, tag, chance, ...extra, source };
     return this.with({ attacks: [...this.state.attacks, entry] });
   }
 

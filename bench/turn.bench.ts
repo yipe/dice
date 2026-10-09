@@ -14,14 +14,6 @@ const readMarginals = (build: () => Turn): void => {
   const t = build();
   for (const id of ids(t)) t.marginal(id);
 };
-const refuses = (read: () => void): boolean => {
-  try {
-    read();
-    return false;
-  } catch {
-    return true;
-  }
-};
 const readPmf = (build: () => Turn): void => {
   build().pmf;
 };
@@ -36,7 +28,7 @@ const toppling = melee.onEveryHit(prone().untilEndOfTurn(), {
   save: d20.plus(3).dc(15).ability("con"),
   optional: true,
 });
-const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).onEveryHit(savePenalty(d4).untilNextSave(), { dealing: "cold" });
+const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold").onEveryHit(savePenalty(d4).untilNextSave(), { dealing: "cold" });
 const breath = d20.plus(5).dc(15).ability("dex").onSaveFailure(roll(4, d6)).saveHalf();
 
 const examples: Record<string, { build: () => Turn; joint: boolean }> = {
@@ -58,11 +50,16 @@ const examples: Record<string, { build: () => Turn; joint: boolean }> = {
       }),
     joint: true,
   },
-  grapple2014: {
+  shove2014: {
     build: () =>
-      turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), {
-        chance: contestLossChance({ attacker: 5, defender: 7 }),
-      }),
+      turn([
+        d20
+          .alwaysHits()
+          .melee()
+          .onHit(0)
+          .onEveryHit(prone().untilEndOfTurn(), { chance: contestLossChance({ attacker: 5, defender: 7 }) }),
+        melee,
+      ]),
     joint: true,
   },
   knockOut: {
@@ -72,7 +69,7 @@ const examples: Record<string, { build: () => Turn; joint: boolean }> = {
         .onFirstHit(unconscious().untilDamaged(), { of: ["sneak"], save: d20.plus(2).dc(15).ability("con") }),
     joint: true,
   },
-  // `dealing` has no joint pmf ('dealing-joint-unsupported'): marginals only. Skipped while this build refuses it.
+  // `dealing` has no joint pmf (`dealing-joint-unsupported`): marginals only.
   frostbite: { build: () => turn([ray, breath]), joint: false },
   pathToTheGrave: { build: () => turn([sword, sword]).atStart(vulnerability().untilNextHit()), joint: true },
   restrainedTwoTargets: {
@@ -83,10 +80,6 @@ const examples: Record<string, { build: () => Turn; joint: boolean }> = {
 
 describe("condition examples", () => {
   for (const [name, { build, joint }] of Object.entries(examples)) {
-    if (refuses(() => readMarginals(build))) {
-      bench.skip(`${name} (refused by this build)`, () => {});
-      continue;
-    }
     bench(`${name} marginals`, () => readMarginals(build));
     if (joint) bench(`${name} pmf`, () => readPmf(build));
   }

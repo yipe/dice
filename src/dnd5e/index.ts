@@ -8,7 +8,13 @@ import type { ConditionRule, GrantSaveSpec } from "../turn/types";
 
 const proneRule: ConditionRule = { attack: { melee: ["advantage"], ranged: ["disadvantage"] } };
 
-/** Each condition as data. Unconscious that ends on damage leaves the creature Prone for the rest of the turn (`onEnd`). */
+/**
+ * Each condition as data. Unconscious that ends on damage leaves the creature Prone for the rest of the turn (`onEnd`).
+ *
+ * The `melee`/`ranged` keys stand for the rules' distance test: `melee` is an attack from within 5 feet of the
+ * target, `ranged` one from farther away. A row declares which with `melee()` or `ranged()`; a reach attack made
+ * from 10 feet is `ranged()` here (no advantage against a Prone target, no automatic crit against a Paralyzed one).
+ */
 export const RULES: Readonly<
   Record<"blinded" | "paralyzed" | "prone" | "restrained" | "stunned" | "unconscious", ConditionRule>
 > = {

@@ -1,8 +1,9 @@
 /**
  * Global side of the compat recorder (see `recorder.ts`). Inert unless `COMPAT` is
  * `capture` or `check`. Hands each worker a scratch directory for its records; on
- * teardown, `capture` merges them into the fixture and `check` fails if a fixture file
- * was never run at all (per-call comparison happens in the workers).
+ * teardown, both modes fail if a fixture file was never run (so a filtered `capture`
+ * cannot overwrite the fixture with a partial one); otherwise `capture` writes the
+ * fixture from the records (per-call comparison happens in the workers).
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,18 @@ export default function setup(project: TestProject): (() => void) | undefined {
     );
     rmSync(dir, { recursive: true, force: true });
 
+    const ran = new Set(records.map(({ file }) => file));
+    const previous = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixture;
+    const missing = Object.keys(previous).filter((file) => !ran.has(file));
+    if (missing.length > 0) {
+      // A filtered run must not replace the full fixture with a partial one. vitest logs a teardown throw but still
+      // exits 0, so fail the run explicitly. A test file that is gone for good: delete its entry from the fixture.
+      const action = MODE === "capture" ? "not captured (run every test file)" : "never run";
+      console.error(`compat: ${action}; fixture files missing from this run:\n${missing.map((file) => `  ${file}`).join("\n")}`);
+      process.exitCode = 1;
+      return;
+    }
+
     if (MODE === "capture") {
       const fixture: Fixture = {};
       for (const { file, tests } of records) {
@@ -41,22 +54,13 @@ export default function setup(project: TestProject): (() => void) | undefined {
       return;
     }
 
-    const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Fixture;
     try {
-      loadRetired(fixture);
+      loadRetired(previous);
     } catch (error) {
       console.error(String(error));
       process.exitCode = 1;
       return;
     }
-    const ran = new Set(records.map(({ file }) => file));
-    const missing = Object.keys(fixture).filter((file) => !ran.has(file));
-    if (missing.length > 0) {
-      // vitest logs a teardown throw but still exits 0, so fail the run explicitly.
-      console.error(`compat: fixture files never run:\n${missing.map((file) => `  ${file}`).join("\n")}`);
-      process.exitCode = 1;
-      return;
-    }
-    console.log(`compat: checked ${ran.size} files against ${Object.keys(fixture).length} fixture files`);
+    console.log(`compat: checked ${ran.size} files against ${Object.keys(previous).length} fixture files`);
   };
 }
