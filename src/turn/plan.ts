@@ -1161,6 +1161,28 @@ export function isStateless(spec: TurnSpec): boolean {
   });
 }
 
+/** `unknown-ability` for a save made with an ability no 5e name matches. */
+function checkKnownAbility(owner: string, ability: string): void {
+  if (ABILITIES[ability] === undefined) {
+    throw new TurnSpecError(
+      "unknown-ability",
+      owner,
+      `"${owner}" saves with "${ability}", which is not a 5e ability (str, dex, con, int, wis, cha or the full name).`
+    );
+  }
+}
+
+/**
+ * The check every declared save row passes whatever the turn holds: its ability, if it names
+ * one, is a 5e ability. A save row with no ability fails only where a condition's rule reads
+ * saves by ability, which `buildPlan` checks.
+ */
+export function checkSaveRowAbility({ id, source, pmf, slices }: DeclaredAttack, eps: number): void {
+  if (slices !== null || !isSaveShaped(source, pmf, eps)) return;
+  const ability = rowCheckOf(source)?.ability;
+  if (ability !== undefined) checkKnownAbility(id, ability);
+}
+
 /**
  * The attached conditions a source carries, or `undefined` when it has none.
  * Duck-typed: the only sources that carry `attached` are `AttackBuilder`s, whose
@@ -2264,9 +2286,7 @@ export function buildPlan(
       }
       return;
     }
-    if (ABILITIES[ability] === undefined) {
-      fail("unknown-ability", owner, `"${owner}" saves with "${ability}", which is not a 5e ability (str, dex, con, int, wis, cha or the full name).`);
-    }
+    checkKnownAbility(owner, ability);
   };
   sequence.forEach((entry, position) => {
     if (savesAt[position] && rowFacts[position] !== undefined) checkAbility(entry.id, rowFacts[position]?.ability);
