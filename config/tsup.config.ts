@@ -2,7 +2,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/builder/index.ts"],
+  entry: ["src/index.ts", "src/builder/index.ts", "src/dnd5e/index.ts"],
   format: ["esm", "cjs"],
   // Declarations are emitted by the native TypeScript 7 compiler (see the
   // "types" script). tsup's rollup-plugin-dts path relies on the pre-7 tsc

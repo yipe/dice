@@ -22,7 +22,8 @@ describe("dice-match descriptors and the turns that read them are bit for bit wh
     expect(Object.keys(golden)).toHaveLength(400);
   });
 
-  it("moves none of them", () => {
+  // 400 full turn evaluations: well past vitest's 5 s default on a slow runner or under the compat recorder.
+  it("moves none of them", { timeout: 60_000 }, () => {
     const moved = Object.entries(golden)
       .filter(([index, digest]) => fingerprint(api, shapeAt(Number(index))) !== digest)
       .map(([index]) => index);

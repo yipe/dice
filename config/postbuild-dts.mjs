@@ -25,12 +25,16 @@ const distDir = resolve(fileURLToPath(import.meta.url), "../../dist");
 // Matches the relative specifier in the three forms tsc emits into .d.ts:
 //   export * from "./x"        import { T } from "./x"        import "./x"
 //   import("./x").T            (inferred import-type nodes)
-// The optional `(` after `import` captures the dynamic-import-type form.
-const SPECIFIER = /(\b(?:from|import)\s*\(?\s*)(["'])(\.\.?\/[^"']*)\2/g;
+// The optional `(` after `import` captures the dynamic-import-type form. A bare `..` (an
+// inferred import type of the package root) is a specifier too.
+const SPECIFIER = /(\b(?:from|import)\s*\(?\s*)(["'])(\.\.?(?:\/[^"']*)?)\2/g;
 
 function addExtension(specifier) {
   // Leave anything that already carries a recognized extension.
   if (/\.(js|cjs|mjs|json|d\.ts)$/.test(specifier)) return specifier;
+  // A directory (`..`, `../`, `./x/`) is its index file: node16 resolves no directory import.
+  if (/^\.\.?$/.test(specifier)) return `${specifier}/index.js`;
+  if (specifier.endsWith("/")) return `${specifier}index.js`;
   return `${specifier}.js`;
 }
 

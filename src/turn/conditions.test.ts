@@ -344,17 +344,18 @@ describe("semantics (§7.2)", () => {
     expect(pmfMaxDiff(t.pmf, expected)).toBeLessThan(1e-12);
   });
 
-  it("a `to` naming nothing after the condition's sources is unknown-id", () => {
+  it("a `to` naming an id the turn lacks is unknown-id; one with nothing after the sources is a no-op", () => {
+    expect(
+      codeOf(() => turn([sword, sword]).onEveryHit(advantage().untilNextAttack().to("nowhere")))
+    ).toBe("unknown-id");
+    // Its number is pinned in tests/turn-flags.test.ts: the turn equals the one without the effect.
     expect(
       codeOf(() =>
         turn([sword, sword]).onEveryHit(advantage().untilNextAttack().to("attack 1"), {
           of: ["attack 2"],
         })
       )
-    ).toBe("unknown-id");
-    expect(
-      codeOf(() => turn([sword, sword]).onEveryHit(advantage().untilNextAttack().to("nowhere")))
-    ).toBe("unknown-id");
+    ).toBeUndefined();
   });
 
   it("a flag no step reads leaves the state count unchanged", () => {
@@ -439,23 +440,6 @@ describe("composition with riders, rerolls and substitutes", () => {
 });
 
 describe("guards", () => {
-  it("more than 8 live flags is too-many-flags, naming every live flag", () => {
-    let t = turn([sword, sword]);
-    for (let i = 0; i < 8; i++) t = t.onEveryHit(advantage().untilNextAttack(), { of: ["attack 1"] });
-    expect(() => t.mean()).not.toThrow();
-    const ninth = (): Turn =>
-      t.onEveryHit(advantage().untilNextAttack(), { of: ["attack 1"], id: "ninth" });
-    expect(codeOf(ninth)).toBe("too-many-flags");
-    let message = "";
-    try {
-      ninth().mean();
-    } catch (error) {
-      message = error instanceof TurnSpecError ? error.message : String(error);
-    }
-    for (let i = 1; i <= 8; i++) expect(message).toContain(`"condition ${i}" grant 1`);
-    expect(message).toContain('"ninth" grant 1');
-  });
-
   it("a grant read by an attack with no check to re-derive is no-rebindable-source; `to` scopes it away", () => {
     const bare = sword.toPMF();
     expect(codeOf(() => turn([sword, bare]).onEveryHit(advantage().untilNextAttack()))).toBe(

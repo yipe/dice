@@ -1,5 +1,6 @@
 import { DiceQuery } from "../pmf/query";
-import { advantage, critOnHit, turn } from "../turn";
+import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "../dnd5e";
+import { advantage, critOnHit, savePenalty, turn, vulnerability } from "../turn";
 import type { Turn } from "../turn";
 
 import "./ac"; // for side effects of prototype augmentation
@@ -621,3 +622,86 @@ export function sometimesAttack(): Turn {
   return turn([sword, knife]).attack(sword, { chance: 0.5 });
 }
 export const sometimesAttackMeanExpected = 15.7481;
+
+// ------------------------------
+// Conditions: what the target has, and what it gets
+//
+// A condition is a rule (what it does to the rows that read it) plus a lifetime;
+// `@yipe/dice/dnd5e` names the six the rules use. The rows say what the rules key
+// on: `melee()` / `ranged()` for Prone, `ability()` or `saveDC()` on a save, `typed()` for a damage type. Every number below
+// is pinned to the brute-force oracle in example.test.ts. docs/guide.md has the prose.
+// ------------------------------
+
+const longsword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
+const longbow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
+
+/** Vex: a hit gives the next attack advantage. */
+export const vex = turn([longsword.onEveryHit(advantage().untilNextAttack()), longsword]);
+
+/**
+ * Topple: a toppling hit may knock the target Prone (CON save). Prone from the first toppling sword helps the two melee
+ * attacks after it and costs the bow; from the second it only costs the bow. With `optional` the player takes the first
+ * and declines the second, which beats both toppling every time ({@link toppleForced}) and never toppling. A function,
+ * not a constant: deciding an optional condition walks the turn, and that must not happen at import.
+ */
+export function topple(): Turn {
+  const toppling = longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
+  return turn([toppling, longsword, toppling, longbow]);
+}
+
+/** {@link topple} without the choice: every toppling hit tries to knock the target Prone. */
+export const toppleForced = turn([
+  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longsword,
+  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longbow,
+]);
+
+/** 2024 Stunning Strike: once a turn, a failed save stuns; a passed one still gives the next attack advantage. */
+export const stunningStrike = turn([smallFist, smallFist, smallFist]).onFirstHit(stunned().untilEndOfTurn(), {
+  id: "stun",
+  save: saveDC(15, { con: 2 }),
+  onSave: advantage().untilNextAttack(),
+});
+
+/** 2024 Grappler: the target saves with STR or DEX, whichever it passes more often. */
+export const grappler = turn([longsword, longsword]).onFirstHit(advantage().untilEndOfTurn(), {
+  save: saveDC(15, { str: 5, dex: 1 }),
+});
+
+/**
+ * 2014 shove: the first attack is an Athletics (+5) contest against the target's +7 (a tie goes to the defender) that
+ * knocks it Prone; the second, a melee attack, then has advantage. The shove always "hits" for 0 and carries Prone with
+ * the contest's chance. (A 2014 grapple alone gives attackers no advantage.)
+ */
+export const shove2014 = turn([
+  d20
+    .alwaysHits()
+    .melee()
+    .onHit(flat(0))
+    .onEveryHit(prone().untilEndOfTurn(), { chance: contestLossChance({ attacker: 5, defender: 7 }) }),
+  longsword,
+]);
+
+/** Cunning Strike (Knock Out): on the hit that carries Sneak Attack, a CON save or Unconscious until damaged. */
+export const knockOut = turn([longsword, longsword, longsword])
+  .onFirstHit(roll(3, d6), { id: "sneak" })
+  .onFirstHit(unconscious().untilDamaged(), { of: ["sneak"], save: saveDC(15, { con: 2 }) });
+
+/**
+ * Cold Caster's Frostbite: once a turn, a hit that deals cold damage takes 1d4 off the target's next save. `typed()`
+ * says the ray's whole damage is cold. A turn with `dealing` reads through `mean()` and `marginal(id)`; its joint
+ * `pmf` is `dealing-joint-unsupported`.
+ */
+const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold");
+const breath = d20.plus(5).dc(15).ability("dex").onSaveFailure(roll(4, d6)).saveHalf();
+export const frostbite = turn()
+  .attack(ray, "ray")
+  .attack(breath, "breath")
+  .onFirstHit(savePenalty(d4).untilNextSave(), { of: ["ray"], dealing: "cold" });
+
+/** 2014 Path to the Grave: the cursed creature is vulnerable to the next hit's whole damage. */
+export const pathToTheGrave = turn([longsword, longsword]).atStart(vulnerability().untilNextHit());
+
+/** The target starts the turn Restrained; a second creature has its own state. */
+export const startsRestrained = turn().attacks(2, longsword).attack(longsword, { target: "second" }).atStart(restrained());

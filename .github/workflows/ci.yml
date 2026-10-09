@@ -72,5 +72,9 @@ jobs:
         if: matrix.node != '18'
         run: yarn test
 
+      - name: Compat (0.16 fixture)
+        if: matrix.node != '18'
+        run: yarn compat:check
+
       - name: Pack (sanity)
         run: npm pack --dry-run

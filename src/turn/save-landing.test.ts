@@ -192,10 +192,8 @@ describe("watching a save is refused unless the rider says how it lands", () => 
     );
   });
 
-  it("refuses a landing kind on a call it cannot apply to: a grant, or a transform", () => {
-    expect(codeOf(() => turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { landing: "fail" }))).toBe(
-      "unsupported-trigger"
-    );
+  it("refuses a landing kind on a transform; on a grant it is a condition field 0.17 evaluates", () => {
+    expect(codeOf(() => turn([sword, sword]).onFirstHit(advantage().untilEndOfTurn(), { landing: "fail" }))).toBeUndefined();
     expect(codeOf(() => turn([sword, sword]).onFirstHit(keepBestDamage(), { landing: "fail" }))).toBe(
       "unsupported-trigger"
     );

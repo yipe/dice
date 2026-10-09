@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { Dice } from "../src/parser/dice";
+import { Dice, type DicePrivateData } from "../src/parser/dice";
 
 describe("Dice Advanced Methods", () => {
   let d6: Dice;
@@ -344,7 +344,7 @@ describe("Dice Advanced Methods", () => {
     });
 
     it("should preserve private data", () => {
-      d6.privateData = { test: "value" };
+      d6.privateData = { test: "value" } as DicePrivateData;
       const normalized = d6.normalize(2);
 
       expect(normalized.privateData).toEqual({ test: "value" });
@@ -538,7 +538,7 @@ describe("Dice Advanced Methods", () => {
       });
 
       it("should preserve private and outcome data", () => {
-        d6.privateData = { test: "value" };
+        d6.privateData = { test: "value" } as DicePrivateData;
         d6.setOutcomeDistribution("crit", { 6: 1.0 });
 
         const result = d6.deleteFace(3);
