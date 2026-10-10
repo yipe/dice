@@ -114,6 +114,18 @@ export class PMF {
   private readonly _identifier?: string;
   private _cumulative?: { values: number[]; below: number[]; above: number[] };
   private _frozen = false;
+  /** {@link filterOutcome} results by outcome; a PMF is immutable, so each slice is built once. */
+  private _outcomeSlices?: Map<string, PMF>;
+  /** {@link splitByDealt}'s halves, built once. */
+  private _dealtSplit?: [PMF, PMF];
+  /** {@link outcomes}, built once. */
+  private _outcomes?: string[];
+  /**
+   * {@link convolve}'s shared-cache key by operand identity, under `"RAW"|"N"@epsilon`: the key
+   * is a function of the operands' content, so a repeat of the same two instances skips rebuilding
+   * it. Weak on the operand, so a partner this PMF outlives is not held.
+   */
+  private _convolveKeys?: Map<string, WeakMap<PMF, string>>;
 
   /**
    * @param map Damage value → bin. Typed read-only: a PMF is immutable once built. A PMF returned
@@ -845,8 +857,8 @@ export class PMF {
   addScaled(branch: PMF, probability: number): PMF {
     if (probability === 0) return this;
 
-    // `x * 1` is `x`: an unscaled branch merges its bins as they are.
-    const scaled = (bin: Bin): Bin => (probability === 1 ? bin : PMF.scaleBin(bin, probability));
+    // `x * 1` is `x`: an unscaled branch merges its bins as they are. A scaled one has each value
+    // multiplied as it is read — the same product `scaleBin` would store, without the bin it would build.
     const resultMap = new Map<number, Bin>();
     for (const [dmg, bin] of this.map) {
       const added = branch.map.get(dmg);
@@ -854,22 +866,23 @@ export class PMF {
         resultMap.set(dmg, PMF.cloneBin(bin));
         continue;
       }
-      const addedBin = scaled(added);
       const count: OutcomeLabelMap = { ...bin.count };
-      for (const labelKey in addedBin.count) {
-        count[labelKey] = (count[labelKey] || 0) + (addedBin.count[labelKey] as number);
+      for (const labelKey in added.count) {
+        const value = probability === 1 ? (added.count[labelKey] as number) : (added.count[labelKey] as number) * probability;
+        count[labelKey] = (count[labelKey] || 0) + value;
       }
       let attr = bin.attr ? { ...bin.attr } : undefined;
-      if (addedBin.attr) {
+      if (added.attr) {
         attr ??= {};
-        for (const labelKey in addedBin.attr) {
-          attr[labelKey] = (attr[labelKey] || 0) + (addedBin.attr[labelKey] as number);
+        for (const labelKey in added.attr) {
+          const value = probability === 1 ? (added.attr[labelKey] as number) : (added.attr[labelKey] as number) * probability;
+          attr[labelKey] = (attr[labelKey] || 0) + value;
         }
       }
-      resultMap.set(dmg, { p: bin.p + addedBin.p, count, attr });
+      resultMap.set(dmg, { p: bin.p + (probability === 1 ? added.p : added.p * probability), count, attr });
     }
     for (const [dmg, bin] of branch.map) {
-      if (!this.map.has(dmg)) resultMap.set(dmg, PMF.cloneBin(scaled(bin)));
+      if (!this.map.has(dmg)) resultMap.set(dmg, probability === 1 ? PMF.cloneBin(bin) : PMF.scaleBin(bin, probability));
     }
 
     return new PMF(resultMap, this.epsilon, false);
@@ -941,6 +954,16 @@ export class PMF {
       new PMF(a, this.epsilon, false),
       new PMF(b, this.epsilon, false),
     ];
+  }
+
+  /**
+   * {@link splitByFactor} by whether damage was dealt: `[above 0, at or below 0]`, each bin whole in
+   * one half. Memoized: a turn plan splits the same slice at every fold block and every plan over it.
+   */
+  splitByDealt(): [PMF, PMF] {
+    const [dealt, none] = (this._dealtSplit ??= this.splitByFactor((damage) => (damage > 0 ? 1 : 0)));
+    // The halves are shared (immutable PMFs); the tuple is the caller's own.
+    return [dealt, none];
   }
 
   /**
@@ -1127,6 +1150,19 @@ export class PMF {
   convolve(other: PMF, eps?: number, raw = false): PMF {
     const epsilon = eps ?? this.epsilon;
 
+    // The shared cache's key for these two operands is a function of their content, so it is
+    // remembered by operand identity: a turn plan convolves the same slice with the same payloads
+    // once per fold block, and a sweep repeats the same operands at every AC, so a repeat skips
+    // normalizing, fingerprinting and building (and re-hashing) the key. The shared cache stays
+    // the one place results live: its eviction and the caching toggle are unchanged.
+    const identityKey = `${raw ? "RAW" : "N"}@${epsilon}`;
+    let byOperand = this._convolveKeys?.get(identityKey);
+    let cacheKey = byOperand?.get(other);
+    if (cacheKey !== undefined) {
+      const cached = pmfCache.get(cacheKey);
+      if (cached) return cached;
+    }
+
     // Normalize-by-value on non-raw path
     const norm = (x: PMF) =>
       raw ? x : Math.abs(x.mass() - 1) <= epsilon ? x : x.normalize();
@@ -1134,9 +1170,13 @@ export class PMF {
     const B0 = norm(other);
 
     const [A, B] = A0.fingerprint() <= B0.fingerprint() ? [A0, B0] : [B0, A0];
-    const cacheKey = `v5:${raw ? "RAW" : "N"}@${epsilon}|${A.fingerprint()}|${B.fingerprint()}`;
-    const cached = pmfCache.get(cacheKey);
-    if (cached) return cached;
+    if (cacheKey === undefined) {
+      cacheKey = `v5:${raw ? "RAW" : "N"}@${epsilon}|${A.fingerprint()}|${B.fingerprint()}`;
+      if (byOperand === undefined) (this._convolveKeys ??= new Map()).set(identityKey, (byOperand = new WeakMap()));
+      byOperand.set(other, cacheKey);
+      const cached = pmfCache.get(cacheKey);
+      if (cached) return cached;
+    }
 
     const result = PMF.convolveOrdered(A, B, epsilon, raw);
     pmfCache.set(cacheKey, result);
@@ -1641,6 +1681,7 @@ export class PMF {
 
   /** Get all outcome types present in this PMF. */
   outcomes(): string[] {
+    if (this._outcomes !== undefined) return this._outcomes.slice();
     const outcomeSet = new Set<string>();
     for (const [, bin] of this.map) {
       for (const outcome in bin.count) {
@@ -1649,7 +1690,9 @@ export class PMF {
         }
       }
     }
-    return Array.from(outcomeSet).sort();
+    // Memoized (a PMF is immutable); each call hands out its own copy, as it always has.
+    this._outcomes = Array.from(outcomeSet).sort();
+    return this._outcomes.slice();
   }
 
   /** Get total probability of an outcome across all damage values. */
@@ -1999,20 +2042,31 @@ export class PMF {
    * Returns a new PMF containing only bins where the specified outcome has non-zero probability.
    * This creates a marginal distribution for the given outcome type, with probabilities
    * scaled to represent the unconditional mass attributable to that outcome.
+   *
+   * Memoized: a PMF is immutable, and a turn plan slices the same source PMF by its outcomes
+   * once per build (a DPR sweep builds thousands of plans over a few hundred PMFs). The first
+   * call slices every outcome the bins carry in one pass; each slice is what a pass for that
+   * outcome alone builds, bin by bin, in the same order. An outcome no bin carries is empty.
    */
   filterOutcome(outcome: string): PMF {
-    const filteredMap = new Map<number, Bin>();
+    const memo = (this._outcomeSlices ??= this.sliceEveryOutcome());
+    let known = memo.get(outcome);
+    if (known === undefined) memo.set(outcome, (known = new PMF(new Map(), this.epsilon, false)));
+    return known;
+  }
 
+  private sliceEveryOutcome(): Map<string, PMF> {
+    const maps = new Map<string, Map<number, Bin>>();
     for (const [damageValue, bin] of this.map) {
-      const outcomeCount = (bin.count[outcome] as number) ?? 0;
-
+      const count = bin.count;
       // total paths that reached this bin (sum across labels)
-      const totalCount = Object.values(bin.count ?? {}).reduce(
-        (a, b) => (a ?? 0) + ((b as number) ?? 0),
-        0
-      );
+      let totalCount = 0;
+      for (const k in count) totalCount += (count[k] as number) ?? 0;
+      if (!(totalCount > 0)) continue;
+      for (const outcome in count) {
+        const outcomeCount = (count[outcome] as number) ?? 0;
+        if (!(outcomeCount > 0)) continue;
 
-      if (outcomeCount > 0 && totalCount !== undefined && totalCount > 0) {
         // proportion of this bin's mass attributable to the outcome
         const proportion = outcomeCount / totalCount;
 
@@ -2028,19 +2082,14 @@ export class PMF {
           newAttr = { [outcome]: (bin.attr[outcome] as number) * proportion };
         }
 
-        filteredMap.set(damageValue, {
-          p: newP,
-          count: newCount,
-          attr: newAttr,
-        });
+        let filteredMap = maps.get(outcome);
+        if (filteredMap === undefined) maps.set(outcome, (filteredMap = new Map()));
+        filteredMap.set(damageValue, { p: newP, count: newCount, attr: newAttr });
       }
     }
-
-    return new PMF(
-      filteredMap,
-      this.epsilon,
-      false // don't normalize by default
-    );
+    const slices = new Map<string, PMF>();
+    for (const [outcome, filteredMap] of maps) slices.set(outcome, new PMF(filteredMap, this.epsilon, false));
+    return slices;
   }
   /**
    * Calculates probabilities for first-success outcomes across n independent attempts.
