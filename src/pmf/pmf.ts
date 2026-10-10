@@ -961,7 +961,9 @@ export class PMF {
    * one half. Memoized: a turn plan splits the same slice at every fold block and every plan over it.
    */
   splitByDealt(): [PMF, PMF] {
-    return (this._dealtSplit ??= this.splitByFactor((damage) => (damage > 0 ? 1 : 0)));
+    const [dealt, none] = (this._dealtSplit ??= this.splitByFactor((damage) => (damage > 0 ? 1 : 0)));
+    // The halves are shared (immutable PMFs); the tuple is the caller's own.
+    return [dealt, none];
   }
 
   /**
