@@ -159,6 +159,8 @@ export function naturalRollIndex(configs: readonly RollConfig[]): number {
 // Fluent builder for dice to create PMFs with an AST
 export class RollBuilder {
   protected readonly subRollConfigs: readonly RollConfig[];
+  /** {@link cacheKey}, built once: the configs are copied in at construction and never written. */
+  private _cacheKey?: string | null;
 
   constructor(countOrConfigs: number | readonly RollConfig[] = 1) {
     if (typeof countOrConfigs === "number") {
@@ -199,9 +201,9 @@ export class RollBuilder {
    */
   cacheKey(): string | null {
     // Non-finite numbers are kept distinct: JSON.stringify alone writes ±Infinity and NaN as null.
-    return JSON.stringify(this.subRollConfigs, (_key, value: unknown) =>
+    return (this._cacheKey ??= JSON.stringify(this.subRollConfigs, (_key, value: unknown) =>
       typeof value === "number" && !Number.isFinite(value) ? `#${value}` : value
-    );
+    ));
   }
 
   // for testing

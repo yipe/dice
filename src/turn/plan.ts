@@ -252,7 +252,7 @@ function scaleDraw(draw: Draw, factor: number): Draw {
  */
 function splitWounded(draw: Draw): Draw[] {
   if (draw.outcome === "none") return [{ ...draw, wounded: false }];
-  const byDealt = (pmf: PMF): [PMF, PMF] => pmf.splitByFactor((damage) => (damage > 0 ? 1 : 0)) as [PMF, PMF];
+  const byDealt = (pmf: PMF): [PMF, PMF] => pmf.splitByDealt();
   const pieces: Draw[] = [];
   if (draw.own === undefined || draw.riders === undefined) {
     const [dealt, none] = byDealt(draw.slice);
@@ -279,7 +279,7 @@ function splitWounded(draw: Draw): Draw[] {
     });
     // What the riders dealt together, where that was more than 0, beside the own roll's.
     const together = riders.reduce((all, [, payload]) => all.convolve(payload, 0, true), PMF.delta(0, 0));
-    const dealt = together.splitByFactor((value) => (value > 0 ? 1 : 0))[0];
+    const dealt = together.splitByDealt()[0];
     pieces.push({ ...draw, own: ownNone.scaleMass(1 - allZero), riders: loud, slice: ownNone.convolve(dealt, 0, true), wounded: true });
   }
   if (allZero > 0) {
@@ -892,12 +892,6 @@ function sliceSource(
   damage?: Damage | readonly Damage[],
   eps: number = EPS
 ): SourceSlices | null {
-  if (damage === undefined) {
-    // A PMF slices the same way every time: a row in several contexts, or on several rows, reuses it.
-    let known = slicesOfPmf.get(pmf);
-    if (known === undefined) slicesOfPmf.set(pmf, (known = slicePmf(pmf, pmf.outcomes(), pmf.outcomes())));
-    return known;
-  }
   const labels = pmf.outcomes();
   let shapeLabels = labels;
   if (damage !== undefined) {
@@ -906,9 +900,14 @@ function sliceSource(
     const others = parts.filter((part) => !(part instanceof ParsedRollBuilder && part.canDoubleDice()));
     if (others.length < parts.length) {
       shapeLabels = others.length === 0 ? [] : toPMF(others, eps).outcomes();
+      return slicePmf(pmf, labels, shapeLabels);
     }
   }
-  return slicePmf(pmf, labels, shapeLabels);
+  // A PMF slices the same way every time its own labels are the shape: a row in several contexts, on
+  // several rows, or in every plan built over it, reuses it.
+  let known = slicesOfPmf.get(pmf);
+  if (known === undefined) slicesOfPmf.set(pmf, (known = slicePmf(pmf, labels, labels)));
+  return known;
 }
 
 const slicesOfPmf = new WeakMap<PMF, SourceSlices | null>();
@@ -974,16 +973,38 @@ const CLASS_OUTCOMES: readonly ByKind[] = CLASS_LANDS.map((lands) => ({
   damage: lands.damage ? "hit" : "miss",
 }));
 
+/** {@link saveClasses} by PMF: a PMF is immutable, and every plan built over a save row's PMF classes it the same way. */
+const saveClassesMemo = new WeakMap<PMF, SaveClasses>();
+
 function saveClasses(pmf: PMF): SaveClasses {
+  const known = saveClassesMemo.get(pmf);
+  if (known !== undefined) return known;
   const labels = pmf.outcomes();
   const label = (name: string): PMF => (labels.includes(name) ? pmf.filterOutcome(name) : PMF.emptyMass());
-  const dealt = (part: PMF): [PMF, PMF] => part.splitByFactor((value) => (value > 0 ? 1 : 0));
+  const dealt = (part: PMF): [PMF, PMF] => part.splitByDealt();
   const [failed, failedForNothing] = dealt(label("saveFail"));
   const [passed, passedForNothing] = dealt(label("saveHalf"));
   const rest = labels
     .filter((name) => name !== "saveFail" && name !== "saveHalf")
     .reduce((all, name) => all.add(pmf.filterOutcome(name)), passedForNothing);
-  return [failed, failedForNothing, passed, rest];
+  const classes: SaveClasses = [failed, failedForNothing, passed, rest];
+  saveClassesMemo.set(pmf, classes);
+  return classes;
+}
+
+/** The slices a rider reading a save row under a landing kind sees, per class set (one per PMF, see {@link saveClasses}). */
+const saveSlicesMemo = new WeakMap<SaveClasses, Map<SaveLanding, SourceSlices>>();
+
+function saveSlicesByLanding(classes: SaveClasses, landing: SaveLanding): SourceSlices {
+  let byLanding = saveSlicesMemo.get(classes);
+  if (byLanding === undefined) saveSlicesMemo.set(classes, (byLanding = new Map()));
+  const known = byLanding.get(landing);
+  if (known !== undefined) return known;
+  const sum = (wanted: boolean): PMF =>
+    classes.reduce((all, part, index) => (CLASS_LANDS[index][landing] === wanted ? all.add(part) : all), PMF.emptyMass());
+  const slices: SourceSlices = { hit: sum(true), crit: PMF.emptyMass(), miss: sum(false) };
+  byLanding.set(landing, slices);
+  return slices;
 }
 
 /**
@@ -1738,13 +1759,7 @@ export function buildPlan(
     const kinds = landingKinds.get(sourceId) ?? new Set<SaveLanding>();
     kinds.add(landing);
     landingKinds.set(sourceId, kinds);
-    const classes = classesOf(sourceId);
-    const sum = (wanted: boolean): PMF =>
-      classes.reduce(
-        (all, part, index) => (CLASS_LANDS[index][landing] === wanted ? all.add(part) : all),
-        PMF.emptyMass()
-      );
-    return { hit: sum(true), crit: PMF.emptyMass(), miss: sum(false) };
+    return saveSlicesByLanding(classesOf(sourceId), landing);
   };
   /**
    * Per rider: whether its payload is a list of more than one attack (a flurry's two
@@ -3146,7 +3161,7 @@ export function buildPlan(
     if (byOdds === undefined) typedPayloads.set(paid, (byOdds = new Map()));
     let known = byOdds.get(odds);
     if (known === undefined) {
-      const [above, none] = paid.splitByFactor((damage) => (damage > 0 ? 1 : 0));
+      const [above, none] = paid.splitByDealt();
       const mass = paid.mass();
       const dealtShare = mass > 0 ? above.mass() / mass : 0;
       const t = Math.min(odds, dealtShare);
@@ -3311,7 +3326,7 @@ export function buildPlan(
           ];
         }
         const whole = own(part);
-        const [dealt, none] = whole.splitByFactor((damage) => (damage > 0 ? 1 : 0));
+        const [dealt, none] = whole.splitByDealt();
         // A part that is all of it stays the very PMF.
         const pieces: [PMF, boolean][] =
           none.mass() <= 0 ? [[whole, true]] : dealt.mass() <= 0 ? [[whole, false]] : [[dealt, true], [none, false]];
@@ -3643,22 +3658,35 @@ export function buildPlan(
     };
 
     /**
-     * One roll context's variants for every cap mask, block by block: variant `cap * size + i`
-     * is `tableAt`'s variant `i` with the riders of `cap` folded in. A block is chosen by which
-     * capped counters are still below their cap, so variant 0 (cap 0) applies no capped rider.
-     * An uncapped step is one block, `tableAt` itself.
+     * One roll context's variants for every cap mask, block by block: variant `offset + cap * size
+     * + i` of `target` is `tableAt`'s variant `i` with the riders of `cap` folded in, finished. A
+     * block is chosen by which capped counters are still below their cap, so variant 0 (cap 0)
+     * applies no capped rider. An uncapped step is one block, `tableAt` itself.
+     *
+     * Block 0 is built now (it validates the row, and `laterLandings` reads a step's first variant);
+     * every other block the first time a walk selects it. A walk reaches few of the `2^n` cap masks a
+     * step has, and the blocks it never reaches cost nothing. `select` returns the index into `target`.
      */
     const blocked = (
-      make: (cap: number) => { variants: StepVariant[]; select: Step["select"] }
-    ): { variants: StepVariant[]; select: Step["select"] } => {
-      const blocks = Array.from({ length: 1 << (capped.length + coined.length) }, (_, cap) => make(cap));
-      if (blocks.length === 1) return blocks[0];
+      make: (cap: number) => { variants: StepVariant[]; select: Step["select"] },
+      target: StepVariant[],
+      offset: number
+    ): { select: Step["select"] } => {
+      const blockCount = 1 << (capped.length + coined.length);
+      const first = make(0);
       // Every block has the same hold choices (they read the base payload, not the fold), so
       // block 0's variant count and choice rule serve for all.
-      const size = blocks[0].variants.length;
-      const local = blocks[0].select;
+      const size = first.variants.length;
+      const local = first.select;
+      const built: boolean[] = new Array<boolean>(blockCount).fill(false);
+      target.length = offset + blockCount * size;
+      const fill = (cap: number, block: { variants: StepVariant[] }): void => {
+        for (let i = 0; i < size; i++) target[offset + cap * size + i] = finish(block.variants[i]);
+        built[cap] = true;
+      };
+      fill(0, first);
+      if (blockCount === 1) return { select: (codes, fired, flags, counts) => offset + local(codes, fired, flags, counts) };
       return {
-        variants: blocks.flatMap((block) => block.variants),
         select: (codes, fired, flags, counts) => {
           let cap = 0;
           capped.forEach((counter, bit) => {
@@ -3667,17 +3695,20 @@ export function buildPlan(
           coined.forEach((node, k) => {
             if (flags & (1 << (coinFlags[node] as Flag).bit)) cap |= 1 << (capped.length + k);
           });
-          return cap * size + local(codes, fired, flags, counts);
+          if (!built[cap]) fill(cap, make(cap));
+          return offset + cap * size + local(codes, fired, flags, counts);
         },
       };
     };
     const table = (
       contextSlices: SourceSlices,
+      target: StepVariant[],
+      offset: number,
       vulnerable = false,
       joined: readonly string[] = [],
       rowContext: RowContext | undefined = baseContext
-    ): { variants: StepVariant[]; select: Step["select"] } =>
-      blocked((cap) => tableAt(contextSlices, cap, vulnerable, joined, rowContext));
+    ): { select: Step["select"] } =>
+      blocked((cap) => tableAt(contextSlices, cap, vulnerable, joined, rowContext), target, offset);
 
     // A watched save row draws by class (one set per cap mask, no hold choice); any other row by
     // its hit / crit / miss slices (an unwatched save row is one "hit" draw of its whole PMF).
@@ -3694,19 +3725,24 @@ export function buildPlan(
     const contextVulnerable: boolean[] = ownPmf === undefined ? [] : [false];
     const contextRollTypes: RollType[] = ownPmf === undefined ? [] : [baseRollType];
     let contextIndexOf: Step["contextIndexOf"] = () => 0;
+    /** The row's table in a context, its finished variants written into `target` from `offset` on (see {@link blocked}). */
     const tableOf = (
       pmf: PMF | undefined,
+      target: StepVariant[],
+      offset: number,
       vulnerable = false,
       joined: readonly string[] = [],
       rowContext: RowContext | undefined = baseContext
-    ): { variants: StepVariant[]; select: Step["select"] } => {
+    ): { select: Step["select"] } => {
       if (watchedKinds !== undefined) {
         const classes = pmf === undefined ? undefined : saveClasses(pmf);
-        return blocked((cap) => ({ variants: [saveRowDraws(entry.id, cap, classes)], select: plainSelect }));
+        return blocked((cap) => ({ variants: [saveRowDraws(entry.id, cap, classes)], select: plainSelect }), target, offset);
       }
-      if (pmf === undefined) return table(slices as SourceSlices);
+      if (pmf === undefined) return table(slices as SourceSlices, target, offset);
       return table(
         unwatchedSave ? { hit: pmf, crit: PMF.emptyMass(), miss: PMF.emptyMass() } : (sliceSource(pmf) as SourceSlices),
+        target,
+        offset,
         vulnerable,
         joined,
         rowContext
@@ -3744,7 +3780,8 @@ export function buildPlan(
       (rider.joins ?? []).includes(entry.id) && sourceIdsByNode[index].includes(entry.id) ? [index] : []
     );
     if ((watchedKinds !== undefined || slices) && readMask === 0 && joiners.length === 0) {
-      ({ variants, select } = tableOf(undefined));
+      ({ select } = tableOf(undefined, variants, 0));
+      finished = true;
     } else if (watchedKinds !== undefined || slices) {
       // Read flags select a roll context. A contextual source rolls under it; a builder is
       // re-derived through `withCheck` with the granted modifiers combined into its own roll
@@ -3837,11 +3874,9 @@ export function buildPlan(
       });
       // The base context's table is built now (it validates the row); every other context's the
       // first time a state rolls in it, as the engine compiles a context only where one is reached.
-      const base = tableOf(undefined);
-      const tables: ({ variants: StepVariant[]; select: Step["select"] } | undefined)[] = [base];
-      const offsets: number[] = [0];
+      const base = tableOf(undefined, variants, 0);
+      const tables: ({ select: Step["select"] } | undefined)[] = [base];
       finished = true;
-      variants.push(...base.variants.map(finish));
       const tableByContext = new Map([[plain as string, 0]]);
       const tableOfKey = new Map<number, number>();
       /** Per context index past the base, the key it was first reached with and its re-derivation. */
@@ -3866,7 +3901,6 @@ export function buildPlan(
         if (index === undefined) {
           index = tables.length;
           tables.push(undefined);
-          offsets.push(-1);
           pending.set(index, { key, variant });
           contextVulnerable.push(rowContextOf(key)?.vulnerable ?? false);
           contextRollTypes.push(rollTypeIn(key, variant.signature));
@@ -3876,7 +3910,7 @@ export function buildPlan(
       }
       contextPmfs.length = tables.length;
       /** Context `index`'s table, built (and its variants appended) the first time it is asked for. */
-      const tableIn = (index: number): { variants: StepVariant[]; select: Step["select"] } => {
+      const tableIn = (index: number): { select: Step["select"] } => {
         const known = tables[index];
         if (known !== undefined) return known;
         const { key, variant } = pending.get(index) as { key: number; variant: { pmf: () => PMF; signature: string } };
@@ -3887,10 +3921,8 @@ export function buildPlan(
         let pmf = bySignature.get(variant.signature);
         if (pmf === undefined) bySignature.set(variant.signature, (pmf = variant.pmf()));
         contextPmfs[index] = pmf;
-        const built = tableOf(pmf, rowContext?.vulnerable ?? false, joinedOf(key), rowContext);
+        const built = tableOf(pmf, variants, variants.length, rowContext?.vulnerable ?? false, joinedOf(key), rowContext);
         tables[index] = built;
-        offsets[index] = variants.length;
-        variants.push(...built.variants.map(finish));
         return built;
       };
       const keyIn = (fired: readonly FireMode[], flags: number, counts: readonly number[]): number => {
@@ -3901,11 +3933,7 @@ export function buildPlan(
         });
         return key;
       };
-      select = (codes, fired, flags, counts) => {
-        const index = tableOfKey.get(keyIn(fired, flags, counts)) as number;
-        const built = tableIn(index);
-        return offsets[index] + built.select(codes, fired, flags, counts);
-      };
+      select = (codes, fired, flags, counts) => tableIn(tableOfKey.get(keyIn(fired, flags, counts)) as number).select(codes, fired, flags, counts);
       contextIndexOf = (_codes, fired, flags, counts) => tableOfKey.get(keyIn(fired, flags, counts)) as number;
     } else if (readMask !== 0) {
       fail(
