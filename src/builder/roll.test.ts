@@ -589,12 +589,15 @@ describe("RollBuilder", () => {
 
       // Issue #12: roll(0, n) once computed as one die ("d6", mean 3.5) while d("0d6") was 0.
       it("rolls zero dice for a count of 0, matching the parser", () => {
+        const faces = (pmf: { support(): number[]; pAt(x: number): number }) =>
+          pmf.support().map((x) => [x, pmf.pAt(x)]);
         expect(roll(0, 6).toExpression()).toBe("0");
-        expect(roll(0, 6).toPMF().mean()).toBe(0);
-        expect(roll(0, 6).toPMF().mean()).toBe(d("0d6").toPMF().mean());
+        expect(faces(roll(0, 6).toPMF())).toEqual([[0, 1]]);
+        expect(faces(roll(0, 6).toPMF())).toEqual(faces(d("0d6").toPMF()));
         // The grammar's `+` adds only to a non-zero total; `~+` always adds, like the builder's plus.
-        expect(roll(0, 6, 3).toPMF().mean()).toBe(d("0d6 ~+ 3").toPMF().mean());
-        expect(roll(0, d6).toPMF().mean()).toBe(0);
+        expect(faces(roll(0, 6, 3).toPMF())).toEqual([[3, 1]]);
+        expect(faces(roll(0, 6, 3).toPMF())).toEqual(faces(d("0d6 ~+ 3").toPMF()));
+        expect(faces(roll(0, d6).toPMF())).toEqual([[0, 1]]);
       });
     });
 
