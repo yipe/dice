@@ -384,17 +384,6 @@ yarn example basic   # also: stats, turn, misc
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🧱 Roadmap
-
-- [ ] Create a **web playground** with live examples
-- [x] Higher-level `Turn` API for conditional damage riders (0.9.0)
-- [ ] Add more comprehensive 5e rule examples
-- [ ] Performance improvements for DPR-only calculations
-- [ ] Multi-round and sustained vs nova simulations
-- [ ] Deeper integration with [dprcalc.com](https://dprcalc.com)
-- [ ] Blog posts and documentation
-- [ ] Grammar refinements and new YACC parsing
-
 ## 💬 Community
 
 Questions, ideas, or builds you want to model? Join the [Discord](https://dprcalc.com/discord) or
@@ -427,7 +416,7 @@ an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for any user-visib
 
 ## 📜 License
 
-2025 MIT © [Michael Margolis](https://github.com/yipe)
+2026 MIT © [Michael Margolis](https://github.com/yipe)
 
 ## ⚖️ Legal / Trademarks
 
