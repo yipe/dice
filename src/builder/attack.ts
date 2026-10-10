@@ -1154,6 +1154,18 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * (auto-double the hit dice) are distinct crit states, encoded separately.
    */
   private cacheKey(eps: number): string | null {
+    // Every field this reads is readonly, so the key is built once per `eps`.
+    const memo = (this._cacheKeys ??= new Map<number, string | null>());
+    const known = memo.get(eps);
+    if (known !== undefined) return known;
+    const key = this.buildCacheKey(eps);
+    memo.set(eps, key);
+    return key;
+  }
+
+  private _cacheKeys?: Map<number, string | null>;
+
+  private buildCacheKey(eps: number): string | null {
     const checkKey = this.check.cacheKey();
     if (checkKey === null) return null;
 
