@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.4] - 2026-10-10
+
+### Changed
+
+- **A DPR sweep rebuilds less of what it already built.** dprcalc builds a `Turn` per condition
+  group at every AC of a 21-AC, 4-scenario sweep (and per optional-grant subset), over the same few
+  hundred PMFs. Work that depends only on an immutable PMF is now done once per PMF and remembered
+  on it: `filterOutcome` slices every outcome the bins carry in one pass and keeps the slices;
+  `outcomes()` is memoized (each call still hands out its own array); the dealt / not-dealt split a
+  save row's classes and a `damage` condition read is one memoized `splitByDealt()`; a save row's
+  four classes, and the slices a rider reading it under a landing kind sees, are kept per PMF; a
+  source's hit / crit / miss slices are shared by every plan over the PMF whose own labels are the
+  shape; `convolve` remembers its shared-cache key by operand identity (the key is a function of
+  content, so the shared cache's eviction and the caching toggle are unchanged); and `RollBuilder`
+  / `AttackBuilder` build their `cacheKey` once, as every field it reads is readonly. A step's fold
+  blocks (one per cap mask, `2^n` of them) are built the first time a walk selects them rather
+  than all up front, since a walk reaches few; block 0 is still built with the plan, so the row is
+  validated at the same moment. `addScaled` reads a scaled branch's values as it merges them
+  instead of building the scaled bin first. Every number is the same product or sum in the same
+  order, so every result is bit for bit what it was (the whole suite, the compat fixtures and the
+  oracle cases pass unchanged). On dprcalc's 214-canary sweep the library's share runs about 1.3×
+  faster overall and 2× on caster builds (Gale, Grave Cleric, Light Show).
+
 ## [0.18.3] - 2026-10-09
 
 ### Fixed
