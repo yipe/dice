@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { d10, d20, d4, d6, d8, roll } from "../builder";
+import { d, d10, d20, d4, d6, d8, roll } from "../builder";
 import { parse } from "../parser/parser";
 import { builderPMFCache } from "./factory";
 import { AmbiguousKeepError, HalfRollBuilder, RollBuilder, sumRolls } from "./roll";
@@ -585,6 +585,16 @@ describe("RollBuilder", () => {
         expect(pmf.mean()).toBeCloseTo(50.5, 5);
         expect(pmf.min()).toBe(1);
         expect(pmf.max()).toBe(100);
+      });
+
+      // Issue #12: roll(0, n) once computed as one die ("d6", mean 3.5) while d("0d6") was 0.
+      it("rolls zero dice for a count of 0, matching the parser", () => {
+        expect(roll(0, 6).toExpression()).toBe("0");
+        expect(roll(0, 6).toPMF().mean()).toBe(0);
+        expect(roll(0, 6).toPMF().mean()).toBe(d("0d6").toPMF().mean());
+        // The grammar's `+` adds only to a non-zero total; `~+` always adds, like the builder's plus.
+        expect(roll(0, 6, 3).toPMF().mean()).toBe(d("0d6 ~+ 3").toPMF().mean());
+        expect(roll(0, d6).toPMF().mean()).toBe(0);
       });
     });
 
