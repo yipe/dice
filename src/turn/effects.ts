@@ -382,8 +382,7 @@ export function save(
   check: TriggerSave | readonly TriggerSave[],
   outcomes: { fail: Lasting | readonly Lasting[]; pass?: Lasting | readonly Lasting[] }
 ): SaveGated {
-  // `Array.isArray` does not narrow a readonly array out of the union.
-  const checks = Array.isArray(check) ? [...(check as readonly TriggerSave[])] : [check as TriggerSave];
+  const checks = listOf(check);
   // Without a check, gateFields would drop the save and the `fail` effects would always apply.
   if (checks.length === 0 || checks.some((entry) => typeof entry !== "object" || entry === null)) {
     throw new TypeError("save() needs a DC check such as d20.plus(2).dc(15), a GrantSaveSpec, or a non-empty list of them.");
@@ -421,10 +420,15 @@ export function unpackSave<O extends Pick<ConditionOptions, "save" | "chance" | 
   };
 }
 
+/** One value or a list of them, as a fresh list. */
+function listOf<T>(value: T | readonly T[]): T[] {
+  // `Array.isArray` does not narrow a readonly array out of the union.
+  return Array.isArray(value) ? [...(value as readonly T[])] : [value as T];
+}
+
 /** `effects` as a fresh list, each one checked to be an effect with a lifetime (not damage). */
 function asList(effects: Lasting | readonly Lasting[]): readonly Lasting[] {
-  // `Array.isArray` does not narrow a readonly array out of the union.
-  const list = Array.isArray(effects) ? [...(effects as readonly Lasting[])] : [effects as Lasting];
+  const list = listOf(effects);
   if (!list.every(isGrant)) {
     throw new TypeError("save() takes effects with a lifetime, such as advantage().untilNextAttack(); damage goes in its own call.");
   }
@@ -455,13 +459,12 @@ export function gateFields(
   if (onSave !== undefined && save === undefined && chance === undefined) {
     throw new Error("onSave needs a save or a chance: without one there is no other branch to apply it on.");
   }
-  // `Array.isArray` does not narrow a readonly array out of the union.
-  const saves = (save === undefined ? [] : Array.isArray(save) ? save : [save]) as readonly TriggerSave[];
+  const saves = save === undefined ? [] : listOf(save);
   if (saves.some((entry) => typeof entry !== "object" || entry === null)) {
     throw new Error("save must be a DC check such as d20.plus(2).dc(15), or a GrantSaveSpec.");
   }
   const grantSaves = saves.map((entry) => grantSaveSpec(entry, eps));
-  const saved = (onSave === undefined ? [] : Array.isArray(onSave) ? onSave : [onSave]) as readonly Lasting[];
+  const saved = onSave === undefined ? [] : listOf(onSave);
   return {
     ...(chance === undefined ? {} : { chance }),
     ...(landing === undefined ? {} : { landing }),
