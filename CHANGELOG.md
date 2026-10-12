@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-12
+
+### Added
+
+- **Tags on the attack**: `attack.tagged("finesse", …)` names an attack for `of` and `.to(...)` the way a
+  declaration `{ tag }` does (both match; each attack once), and survives every rebuilding method and `vsAC`.
+  A tagged reroll (`onFirstMiss` / `onAnyMiss` with an attack) is named by its tags too: for a rider, only the
+  rerolls declared before it, as an omitted `of` includes them. A non-string tag is `non-string-id`.
+- **`of` takes one name**: `{ of: "finesse" }` is `{ of: ["finesse"] }` on `onFirstHit`, `onEveryHit`,
+  `onAnyCrit`, `onFirstCrit`, `onAnyMiss` and `onFirstMiss`.
+- **`save(check, { fail, pass? })`**: a trigger's save and both outcomes as one value. Every trigger verb that
+  takes effects takes it in their place, `AttackBuilder.onEveryHit` / `onAnyCrit` / `onFirstCrit` included
+  (Topple: `sword.onEveryHit(save(dc, { fail: prone().untilEndOfTurn() }))`). Passing `save`, `chance` or
+  `onSave` beside it throws, and so does a `save()` with no check.
+- **`@yipe/dice/dnd5e`**: `vex()` (`advantage().untilNextAttack()`), `stunningStrike(check)` (Stunned for
+  the rest of the turn on a failed save, advantage on the next attack on a pass), and `TAGS` / `Tag`, the
+  tags its rules use.
+
+### Changed
+
+- **A condition rule's types keep each modifier on its side**: `ConditionRule.attack` takes
+  `AttackRuleModifier`s and `ConditionRule.save` takes `SaveRuleModifier`s keyed by `AbilityName`, so
+  `attack: { melee: ["autoFail"] }` or `save: { strenght: [...] }` no longer type-checks. Types only:
+  every rule that resolved before resolves the same.
+
 ## [0.18.4] - 2026-10-10
 
 ### Changed

@@ -158,7 +158,16 @@ describe("ability names are normalised", () => {
   });
 
   it("a rule keyed by no known ability is unknown-ability", () => {
+    // @ts-expect-error the type refuses it; the check is for plain-JS callers.
     expect(codeOf(() => turn([save]).atStart(condition("mad", { save: { sanity: ["autoFail"] } })).mean())).toBe("unknown-ability");
+  });
+
+  it("a rule's types keep each modifier on its side", () => {
+    // @ts-expect-error autoFail is a save modifier, not an attack one.
+    condition("odd", { attack: { melee: ["autoFail"] } });
+    // @ts-expect-error critOnHit is an attack modifier, not a save one.
+    condition("odd", { save: { strength: ["critOnHit"] } });
+    condition("fine", { attack: { melee: ["advantage", "vulnerable"] }, save: { str: ["autoFail"], dexterity: ["disadvantage"] } });
   });
 });
 

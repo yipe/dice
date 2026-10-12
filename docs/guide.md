@@ -641,9 +641,18 @@ const base = turn([sword, sword]).onFirstHit(roll(3, d6));
 [12, 14, 16, 18].map((ac) => base.vsAC(ac).mean());
 ```
 
-`attack(source, { tag })` and `attacks(n, source, { tag })` name a group of attacks, and an `of`
-entry that is not an id expands to every attack with that tag — so reordering a turn cannot
-silently retarget a rider the way a positional `attack 2` can.
+`attack(source, { tag })` and `attacks(n, source, { tag })` name a group of attacks, and so does
+`attack.tagged(...tags)` on the attack itself. An `of` entry that is not an id expands to every
+attack with that tag — so reordering a turn cannot silently retarget a rider the way a positional
+`attack 2` can. `of` takes one name or a list: `{ of: "finesse" }` is `{ of: ["finesse"] }`. Tags
+are free-form; `TAGS` in `@yipe/dice/dnd5e` lists the ones its rules use (`finesse`, `unarmed`,
+`monk-weapon`, `spell`, …).
+
+```ts
+const sword = d20.plus(7).ac(15).onHit(d8.plus(4)).tagged("finesse");
+const fist = d20.plus(7).ac(15).onHit(d8.plus(4)).tagged("unarmed");
+turn([sword, sword, fist, fist]).onFirstHit(d6, { of: "finesse" }).mean(); // Sneak Attack on a sword only
+```
 
 An attack also takes a `chance` — the probability it happens at all, in `[0, 1]`. With
 `1 − chance` probability it does not happen: no damage, and it is **not** a miss (`any-miss` /
@@ -768,28 +777,26 @@ example below is exported from `src/builder/example.ts` and pinned in its test t
 them. All attacks are +8 vs AC 16.
 
 ```ts
-import { advantage, d20, d4, d6, d8, flat, roll, savePenalty, turn, vulnerability } from "@yipe/dice/builder";
-import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "@yipe/dice/dnd5e";
+import { advantage, d20, d4, d6, d8, flat, roll, save, savePenalty, turn, vulnerability } from "@yipe/dice/builder";
+import { contestLossChance, prone, restrained, saveDC, stunningStrike, unconscious, vex } from "@yipe/dice/dnd5e";
 
 const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
 const bow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
 const fist = d20.plus(8).ac(16).onHit(d6.plus(4));
 
 // Vex: a hit gives the next attack advantage.
-turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean(); // 12.8959
+turn([sword.onEveryHit(vex()), sword]).mean(); // 12.8959
 
 // Topple: a toppling hit may knock the target Prone (CON save). Prone helps the swords after it and
 // costs the bow, so with `optional` the player topples with the first sword and not with the third.
-const topple = (optional: boolean) =>
-  sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), ...(optional ? { optional: true as const } : {}) });
+const toppleOnFail = save(saveDC(15, { con: 3 }), { fail: prone().untilEndOfTurn() });
+const topple = (optional: boolean) => sword.onEveryHit(toppleOnFail, optional ? { optional: true } : {});
 turn([topple(true), sword, topple(true), bow]).mean(); // 23.7677
 turn([topple(false), sword, topple(false), bow]).mean(); // 23.2745: toppling every time
 turn([sword, sword, sword, bow]).mean(); // 23.0000: never toppling
 
 // 2024 Stunning Strike: once a turn, a failed save stuns; a pass still gives the next attack advantage.
-const monk = turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {
-  id: "stun", save: saveDC(15, { con: 2 }), onSave: advantage().untilNextAttack(),
-});
+const monk = turn([fist, fist, fist]).onFirstHit(stunningStrike(saveDC(15, { con: 2 })), { id: "stun" });
 monk.mean(); // 17.5234
 monk.fireProbability("stun"); // 0.5265: stunned where a later fist reads it
 monk.stepStats("attack 3").live.advantage; // 0.6175: the third fist rolls with advantage
@@ -822,6 +829,76 @@ hit that wakes it still reads it, and the swings after read Prone. An `optional`
 with up to three in a turn, every subset is tried and the best mean kept (the full set wins a tie); past three,
 each is tried where the later attacks on its creature lean melee.
 
+### Tags and named features: a whole Monk/Rogue turn
+
+Three things keep a whole turn readable: **tags** say what each attack is, so a feature names the attacks it
+applies to by kind, not by position; **`save(check, { fail, pass })`** is a trigger's save and both of its
+outcomes as one value; and `@yipe/dice/dnd5e` names the features built from them.
+
+```ts
+import { d20, d6, d8, turn } from "@yipe/dice/builder";
+import { saveDC, stunningStrike, vex } from "@yipe/dice/dnd5e";
+
+const prof = +3;
+const mod = +4;
+const monkDie = d8;
+const attack = d20.plus(prof + mod).ac(15);
+
+const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(vex());
+const scimitar   = attack.onHit(monkDie).tagged("finesse");            // Nick: no Dex mod
+const fist       = attack.onHit(monkDie.plus(mod)).tagged("unarmed");  // Flurry of Blows
+
+const myTurn = turn([shortsword, shortsword, scimitar, fist, fist])
+  .onFirstHit(d6, { of: "finesse" })                                        // Sneak Attack
+  .onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" });  // Stunning Strike
+
+myTurn.mean(); // 33.5367
+```
+
+- **`attack.tagged(...tags)`** adds names an `of` or a grant's `.to(...)` can match. Tags are free-form strings;
+  `TAGS` in `@yipe/dice/dnd5e` lists the ones its rules use (`weapon`, `finesse`, `light`, `unarmed`,
+  `monk-weapon`, `spell`, …). An `of` entry matches every attack carrying any of the names listed, so
+  `{ of: ["finesse", "ranged-weapon"] }` is Sneak Attack's "finesse or ranged weapon". A tagged reroll
+  (`onFirstMiss(attack)`) is named by its tags too; for a rider, only the rerolls declared before it, as an
+  omitted `of` includes them. A tag that matches nothing is `unknown-id`.
+- **`of` takes one name or a list** on `onFirstHit`, `onEveryHit`, `onAnyCrit`, `onFirstCrit`, `onAnyMiss` and
+  `onFirstMiss`: `{ of: "finesse" }` is `{ of: ["finesse"] }`.
+- **`save(check, { fail, pass? })`** takes the place of the effects in any trigger verb, `AttackBuilder.onEveryHit`
+  included. It is the same as passing `fail` as the effects with `save: check` and `onSave: pass`, and passing
+  `save`, `chance` or `onSave` in the options beside it throws. Other options (`of`, `id`, `optional`) still apply.
+- **`vex()`** is `advantage().untilNextAttack()`. **`stunningStrike(check)`** is
+  `save(check, { fail: stunned().untilEndOfTurn(), pass: advantage().untilNextAttack() })`.
+
+The same turn using only `@yipe/dice/builder`, with the condition rule written out:
+
+```ts
+import { advantage, condition, d20, d6, d8, save, turn } from "@yipe/dice/builder";
+
+const stunned = condition("stunned", {
+  attack: { melee: ["advantage"], ranged: ["advantage"] },
+  save: { strength: ["autoFail"], dexterity: ["autoFail"] },
+});
+
+const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(advantage().untilNextAttack());
+// scimitar and fist as above
+
+turn([shortsword, shortsword, scimitar, fist, fist])
+  .onFirstHit(d6, { of: "finesse" })
+  .onFirstHit(
+    save(d20.plus(3).dc(14).ability("con"), {
+      fail: stunned.untilEndOfTurn(),
+      pass: advantage().untilNextAttack(),
+    }),
+    { of: "unarmed" },
+  )
+  .mean(); // 33.5367
+```
+
+A condition rule's types keep each modifier on its side: `attack` takes `advantage`, `disadvantage`, `critOnHit`
+and `vulnerable`; `save` takes `autoFail` and `saveDisadvantage`, keyed by ability. `attack: { melee: ["autoFail"] }`
+or `save: { strenght: … }` does not compile. `src/dnd5e/index.test.ts` pins the tagged turn to the same turn
+written with `attack 1` … `attack 5`, bit for bit.
+
 ### Conditions that need a damage type
 
 `dealing: "cold"` lands only where the hit dealt cold damage. The turn asks the row for the odds it did through
@@ -849,6 +926,8 @@ caster.marginal("breath").pmf.mean(); // 10.5563
 | `blinded()`, `paralyzed()`, `prone()`, `restrained()`, `stunned()`, `unconscious()` | `untilEndOfTurn()`, `untilDamaged()`       | from `@yipe/dice/dnd5e`, each rule in `RULES`; `condition(name, rule)` for any other |
 | `vulnerability()`                                                                | `untilNextHit()`                              | the hit's whole damage doubles, riders included          |
 | `saveDisadvantage()`, `savePenalty(d4)`                                          | `untilNextSave()`, `untilEndOfTurn()`         | `savePenalty` takes one plain die group; `.to(...)`      |
+| `save(check, { fail, pass? })`                                                   | those of its effects                          | one value for `save` + `onSave`; any trigger verb, `AttackBuilder` ones too |
+| `vex()`, `stunningStrike(check)`                                                 | built in                                      | from `@yipe/dice/dnd5e`: `advantage().untilNextAttack()`; `save(check, { fail: stunned().untilEndOfTurn(), pass: advantage().untilNextAttack() })` |
 
 A `next-save` effect is used up by the target's next save row. A trigger's own save (`save: …`) is no row: it
 reads the effects that last the turn on its creature (a condition's rule, `untilEndOfTurn()` save effects not
