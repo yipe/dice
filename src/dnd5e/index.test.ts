@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { contestLossChance, RULES } from "./index";
+import { advantage, d20, d6, d8, turn, type Turn } from "../builder";
+import { contestLossChance, RULES, saveDC, stunned, stunningStrike, TAGS, vex } from "./index";
+
+const faces = (t: Turn) => t.pmf.support().map((x) => [x, t.pmf.pAt(x)]);
 
 /** The contest enumerated independently: P(d20 + defender < d20 + attacker), ties to the defender. */
 function enumerated(attacker: number, defender: number): number {
@@ -52,5 +55,39 @@ describe("@yipe/dice/dnd5e", () => {
         expect(contestLossChance({ attacker, defender })).toBe(closedForm(attacker, defender));
       }
     }
+  });
+
+  it("the README turn: tags, vex() and stunningStrike() are the id-based turn they stand for", () => {
+    const prof = +3;
+    const mod = +4;
+    const monkDie = d8;
+    const attack = d20.plus(prof + mod).ac(15);
+
+    const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(vex());
+    const scimitar = attack.onHit(monkDie).tagged("finesse"); // Nick: no Dex mod
+    const fist = attack.onHit(monkDie.plus(mod)).tagged("unarmed"); // Flurry of Blows
+
+    const myTurn = turn([shortsword, shortsword, scimitar, fist, fist])
+      .onFirstHit(d6, { of: "finesse" }) // Sneak Attack
+      .onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" }); // Stunning Strike
+
+    const plainSword = attack.onHit(d8.plus(4)).onEveryHit(advantage().untilNextAttack());
+    const plainScimitar = attack.onHit(d8);
+    const plainFist = attack.onHit(d8.plus(4));
+    const spelled = turn([plainSword, plainSword, plainScimitar, plainFist, plainFist])
+      .onFirstHit(d6, { of: ["attack 1", "attack 2", "attack 3"] })
+      .onFirstHit(stunned().untilEndOfTurn(), {
+        of: ["attack 4", "attack 5"],
+        save: saveDC(14, { con: +3 }),
+        onSave: advantage().untilNextAttack(),
+      });
+
+    expect(faces(myTurn)).toEqual(faces(spelled));
+    expect(myTurn.mean()).toBeCloseTo(33.5367, 4);
+  });
+
+  it("names the tags its rules use, once each", () => {
+    expect(new Set(TAGS).size).toBe(TAGS.length);
+    expect(TAGS).toEqual(expect.arrayContaining(["finesse", "unarmed", "monk-weapon", "weapon", "spell"]));
   });
 });

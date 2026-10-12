@@ -341,6 +341,97 @@ export function isDCCheck(save: unknown): save is DCBuilder {
 }
 
 /**
+ * Effects that hang on the target's save: `fail` on a failed save, `pass` on a passed one. Built
+ * only by {@link save}, so its checks always ran; any trigger verb takes it in place of its
+ * effects, as if given `save` and `onSave`.
+ */
+export interface SaveGated {
+  readonly kind: "save-gated";
+  readonly check: TriggerSave | readonly TriggerSave[];
+  readonly fail: readonly Lasting[];
+  readonly pass: readonly Lasting[];
+}
+
+class SaveGatedValue implements SaveGated {
+  readonly kind = "save-gated";
+  constructor(
+    readonly check: TriggerSave | readonly TriggerSave[],
+    readonly fail: readonly Lasting[],
+    readonly pass: readonly Lasting[]
+  ) {
+    Object.freeze(this);
+  }
+}
+
+/**
+ * The target saves against `check`; `fail` applies on a failure, `pass` (if given) on a success.
+ * Stunning Strike, as one value a trigger verb takes:
+ *
+ * ```ts
+ * turn([fist, fist]).onFirstHit(
+ *   save(d20.plus(3).dc(14).ability("con"), {
+ *     fail: stunned().untilEndOfTurn(),
+ *     pass: advantage().untilNextAttack(),
+ *   })
+ * );
+ * ```
+ *
+ * @throws {TypeError} on no check (an empty list, or none at all), or a `fail` with no effect.
+ */
+export function save(
+  check: TriggerSave | readonly TriggerSave[],
+  outcomes: { fail: Lasting | readonly Lasting[]; pass?: Lasting | readonly Lasting[] }
+): SaveGated {
+  // `Array.isArray` does not narrow a readonly array out of the union.
+  const checks = Array.isArray(check) ? [...(check as readonly TriggerSave[])] : [check as TriggerSave];
+  // Without a check, gateFields would drop the save and the `fail` effects would always apply.
+  if (checks.length === 0 || checks.some((entry) => typeof entry !== "object" || entry === null)) {
+    throw new TypeError("save() needs a DC check such as d20.plus(2).dc(15), a GrantSaveSpec, or a non-empty list of them.");
+  }
+  const fail = asList(outcomes.fail);
+  if (fail.length === 0) throw new TypeError("save() needs at least one effect on a failed save.");
+  return new SaveGatedValue(
+    Array.isArray(check) ? checks : checks[0],
+    fail,
+    outcomes.pass === undefined ? [] : asList(outcomes.pass)
+  );
+}
+
+/** True for a value built by {@link save}; a look-alike object is not one. */
+export function isSaveGated(value: unknown): value is SaveGated {
+  return value instanceof SaveGatedValue;
+}
+
+/**
+ * The options a trigger verb's `effect` and `options` stand for once a {@link save} value is
+ * unpacked into them: its `fail` as the effects, its check and `pass` as `save` and `onSave`.
+ *
+ * @throws {Error} where `options` already gates the call (`save`, `chance` or `onSave`).
+ */
+export function unpackSave<O extends Pick<ConditionOptions, "save" | "chance" | "onSave">>(
+  gated: SaveGated,
+  options: O
+): { effects: readonly Lasting[]; options: O } {
+  if (options.save !== undefined || options.chance !== undefined || options.onSave !== undefined) {
+    throw new Error("A save() value carries its own save and pass effects: drop save, chance and onSave from the options.");
+  }
+  return {
+    effects: gated.fail,
+    options: { ...options, save: gated.check, ...(gated.pass.length === 0 ? {} : { onSave: gated.pass }) },
+  };
+}
+
+/** `effects` as a fresh list, each one checked to be an effect with a lifetime (not damage). */
+function asList(effects: Lasting | readonly Lasting[]): readonly Lasting[] {
+  // `Array.isArray` does not narrow a readonly array out of the union.
+  const list = Array.isArray(effects) ? [...(effects as readonly Lasting[])] : [effects as Lasting];
+  if (!list.every(isGrant)) {
+    throw new TypeError("save() takes effects with a lifetime, such as advantage().untilNextAttack(); damage goes in its own call.");
+  }
+  return list;
+}
+
+/**
  * The fields of a {@link ConditionSpec} that a trigger verb's options (or a builder's attached
  * gate) set, beside `on`, `of` and `grants`. Every save, a DC check included, is rolled by the walk
  * in the target's state; `chance` is the only fixed gate.
