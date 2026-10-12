@@ -21,7 +21,8 @@ import {
   type RerollUpToOptions,
 } from "./roll";
 import type { AttackRange, AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
-import type { ConditionOptions, Lasting } from "../turn/effects";
+import type { ConditionOptions, Lasting, SaveGated } from "../turn/effects";
+import { isSaveGated, unpackSave } from "../turn/effects";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
 import { IGNORES_JOINED } from "../turn/context";
 
@@ -98,7 +99,9 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // branch, whose dice double while the budget does not), so it never depends on call order.
     private readonly rerollPool?: RerollPoolSpec,
     /** The one damage type of the whole row, set by {@link typed}. */
-    readonly damageType?: string
+    readonly damageType?: string,
+    /** Names a turn's `of` and `to` can watch this attack by, set by {@link tagged}. */
+    readonly tags: readonly string[] = []
   ) {
     if (damageType !== undefined) this.dealt = this.dealtOdds.bind(this);
   }
@@ -136,7 +139,40 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      damageType
+      damageType,
+      this.tags
+    );
+  }
+
+  /**
+   * Names this attack for a turn's `of` and `to`: an entry that is not an id matches every
+   * attack carrying it. Free-form; `@yipe/dice/dnd5e` lists the names its rules use (`TAGS`).
+   * Repeated calls add to the tags. Changes no number the attack resolves. The receiver is unchanged.
+   *
+   * ```ts
+   * const fist = d20.plus(7).ac(15).onHit(d8.plus(4)).tagged("unarmed");
+   * turn([fist, fist]).onFirstHit(d6, { of: "unarmed" });
+   * ```
+   *
+   * @throws {TypeError} on no tag, or one that is not a non-empty string.
+   */
+  tagged(...tags: string[]): AttackBuilder {
+    if (tags.length === 0) throw new TypeError("tagged() takes at least one tag, such as \"finesse\".");
+    const bad = tags.findIndex((tag) => typeof tag !== "string" || tag.length === 0);
+    if (bad !== -1) throw new TypeError(`tagged() takes non-empty strings, got ${String(JSON.stringify(tags[bad]))}.`);
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      this.attached,
+      this.rerollPool,
+      this.damageType,
+      [...new Set([...this.tags, ...tags])]
     );
   }
 
@@ -176,7 +212,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -205,7 +242,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -221,7 +259,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -243,7 +282,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -283,7 +323,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -318,7 +359,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -361,7 +403,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       spec,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -389,7 +432,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       true,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -416,7 +460,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.halfOnMissFlag,
       this.attached,
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 
@@ -511,16 +556,16 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
 
   /**
    * Carries a condition into a turn: every time this attack lands, the grants apply
-   * to later attack rolls (optionally gated by a save or a chance). The receiver is
-   * unchanged; the result is a new builder. `Turn` reads each attached condition as
-   * one `ConditionSpec` with `of` = this attack's id.
+   * to later attack rolls (optionally gated by a save or a chance, or given as one
+   * `save()` value). The receiver is unchanged; the result is a new builder. `Turn`
+   * reads each attached condition as one `ConditionSpec` with `of` = this attack's id.
    *
    * ```ts
    * const sword = d20.plus(5).ac(15).onHit(d8);
    * turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean();
    * ```
    */
-  onEveryHit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
+  onEveryHit(grants: Lasting | readonly Lasting[] | SaveGated, gate?: ConditionGate): AttackBuilder {
     return this.attach("every-hit", grants, gate);
   }
 
@@ -528,7 +573,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * Carries a condition into a turn: every time this attack crits, the grants apply
    * to later attack rolls. The receiver is unchanged; the result is a new builder.
    */
-  onAnyCrit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
+  onAnyCrit(grants: Lasting | readonly Lasting[] | SaveGated, gate?: ConditionGate): AttackBuilder {
     return this.attach("any-crit", grants, gate);
   }
 
@@ -536,21 +581,25 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * Carries a condition into a turn: the first time this attack crits, the effects apply.
    * The receiver is unchanged; the result is a new builder.
    */
-  onFirstCrit(grants: Lasting | readonly Lasting[], gate?: ConditionGate): AttackBuilder {
+  onFirstCrit(grants: Lasting | readonly Lasting[] | SaveGated, gate?: ConditionGate): AttackBuilder {
     return this.attach("first-crit", grants, gate);
   }
 
   /**
-   * The shared implementation of the two attachment verbs. The `grants` array and
+   * The shared implementation of the attachment verbs. The `grants` array and
    * the gate (its `onSave` array included) are caller-owned and mutable, so they are
    * copied here: the returned builder must not change if the caller mutates them
-   * before `Turn` reads the attachment.
+   * before `Turn` reads the attachment. A `save()` value is unpacked into grants and gate.
    */
   private attach(
     on: AttachedCondition["on"],
-    grants: Lasting | readonly Lasting[],
+    grants: Lasting | readonly Lasting[] | SaveGated,
     gate?: ConditionGate
   ): AttackBuilder {
+    if (isSaveGated(grants)) {
+      const unpacked = unpackSave(grants, gate ?? {});
+      return this.attach(on, unpacked.effects, unpacked.options);
+    }
     return new AttackBuilder(
       this.check,
       this.hitEffect,
@@ -575,7 +624,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
         },
       ],
       this.rerollPool,
-      this.damageType
+      this.damageType,
+      this.tags
     );
   }
 

@@ -1,10 +1,10 @@
 /**
  * The D&D 5e rules the generic turn contract leaves out: what each condition does to a row,
- * a target's saves by ability, and the chance a target loses a contest.
+ * a target's saves by ability, the chance a target loses a contest, and the features built from them.
  */
 import type { AbilityName } from "../builder/types";
-import type { ConditionEffect } from "../turn/effects";
-import { condition } from "../turn/effects";
+import type { ConditionEffect, Grant, SaveGated, TriggerSave } from "../turn/effects";
+import { advantage, condition, save } from "../turn/effects";
 import type { ConditionRule, GrantSaveSpec } from "../turn/types";
 
 export type { AbilityName, ConditionEffect, ConditionRule, GrantSaveSpec };
@@ -68,6 +68,64 @@ export function stunned(): ConditionEffect {
 /** Unconscious, as {@link RULES} has it; `untilDamaged()` leaves the creature Prone. */
 export function unconscious(): ConditionEffect {
   return condition("unconscious", RULES.unconscious);
+}
+
+/**
+ * The tags these rules name, for `AttackBuilder.tagged()` and a trigger's `of`. Tags are free-form:
+ * this is the expected vocabulary, not a limit. `monk-weapon` is a simple melee weapon, or a martial
+ * melee weapon with the Light property.
+ *
+ * ```ts
+ * const fist = d20.plus(7).ac(15).onHit(d8.plus(4)).tagged("unarmed");
+ * ```
+ */
+export const TAGS = [
+  "weapon",
+  "unarmed",
+  "spell",
+  "cantrip",
+  "simple",
+  "martial",
+  "melee-weapon",
+  "ranged-weapon",
+  "monk-weapon",
+  "ammunition",
+  "finesse",
+  "heavy",
+  "light",
+  "loading",
+  "reach",
+  "thrown",
+  "two-handed",
+  "versatile",
+] as const;
+
+/** One of {@link TAGS}. */
+export type Tag = (typeof TAGS)[number];
+
+/**
+ * Vex (2024 weapon mastery): a hit gives advantage on your next attack roll.
+ * `sword.onEveryHit(vex())` is `sword.onEveryHit(advantage().untilNextAttack())`.
+ */
+export function vex(): Grant {
+  return advantage().untilNextAttack();
+}
+
+/**
+ * Stunning Strike (2024 Monk), once per turn: the target saves against `check`; a failure leaves it
+ * Stunned for the rest of the turn, a pass still gives the next attack advantage.
+ *
+ * ```ts
+ * turn([fist, fist]).onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" });
+ * // is
+ * turn([fist, fist]).onFirstHit(
+ *   save(saveDC(14, { con: +3 }), { fail: stunned().untilEndOfTurn(), pass: advantage().untilNextAttack() }),
+ *   { of: "unarmed" }
+ * );
+ * ```
+ */
+export function stunningStrike(check: TriggerSave | readonly TriggerSave[]): SaveGated {
+  return save(check, { fail: stunned().untilEndOfTurn(), pass: advantage().untilNextAttack() });
 }
 
 /**
