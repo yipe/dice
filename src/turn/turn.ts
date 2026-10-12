@@ -3,8 +3,8 @@ import type { Bin, RollType } from "../common/types";
 import { DenseTotal } from "../pmf/dense-total";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
-import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Lasting, StartEffect, Transform } from "./effects";
-import { effectSpec, gateFields, isGrant, isTransform, lastingForTurn, substituteFields } from "./effects";
+import type { ConditionOptions, EveryHitOptions, FirstHitOptions, Lasting, SaveGated, StartEffect, Transform } from "./effects";
+import { effectSpec, gateFields, isGrant, isSaveGated, isTransform, lastingForTurn, substituteFields, unpackSave } from "./effects";
 import type { Draw, EffectSource, FireMode, Step, TurnPlan } from "./plan";
 import { ReaderTally, canonicalCodes, cappedPmf, codeNeeds, readerLedger, EFFECT_NAMES } from "./readers";
 import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./readers";
@@ -50,8 +50,8 @@ interface TurnState {
   last: { kind: "rider" | "substitute"; index: number } | null;
 }
 
-/** What a trigger verb accepts: damage, effects with a lifetime, or both in one list. */
-type Effect = RiderDamage | Lasting | readonly (Damage | Lasting)[];
+/** What a trigger verb accepts: damage, effects with a lifetime, or both in one list; or a `save()` value. */
+type Effect = RiderDamage | Lasting | readonly (Damage | Lasting)[] | SaveGated;
 
 /**
  * Per-step statistics of a turn's walk, for one attack or attack-shaped rider.
@@ -363,6 +363,12 @@ function needsNormalizing(totalMass: number, eps: number): boolean {
   return Math.abs(totalMass - 1) > eps && totalMass > 0;
 }
 
+/** A verb's options with `of` as the list a spec holds: `of: "finesse"` is `of: ["finesse"]`. */
+function listed<T extends { of?: string | readonly string[] }>(options: T): Omit<T, "of"> & { of?: readonly string[] } {
+  const { of, ...rest } = options;
+  return of === undefined ? rest : { ...rest, of: typeof of === "string" ? [of] : of };
+}
+
 /**
  * A turn of attacks plus conditional damage riders, resolved to one **exact**
  * joint distribution.
@@ -604,7 +610,11 @@ export class Turn {
    * names the rider and the condition takes the default `condition N`.
    */
   private addEffect(on: AttackTriggerOn | "first-crit", effect: Effect, options: EveryHitOptions): Turn {
-    const { save, chance, onSave, dealing, optional, happens, ...riderOptions } = options;
+    if (isSaveGated(effect)) {
+      const unpacked = unpackSave(effect, options);
+      return this.addEffect(on, unpacked.effects, unpacked.options);
+    }
+    const { save, chance, onSave, dealing, optional, happens, ...riderOptions } = listed(options);
     const parts: readonly unknown[] = Array.isArray(effect) ? effect : [effect];
     const grants = parts.filter(isGrant);
     const damage = parts.filter((part) => !isGrant(part)) as Damage[];
@@ -668,7 +678,7 @@ export class Turn {
    * Applies effects on the first crit among `of` only — beside {@link Turn.onAnyCrit}, which
    * applies them on every crit. Damage on a crit is `onAnyCrit`.
    */
-  onFirstCrit(effect: Lasting | readonly Lasting[], options: ConditionOptions = {}): Turn {
+  onFirstCrit(effect: Lasting | readonly Lasting[] | SaveGated, options: ConditionOptions = {}): Turn {
     return this.addEffect("first-crit", effect, options);
   }
 
@@ -751,7 +761,7 @@ export class Turn {
     const substitute: SubstituteSpec = {
       ...(options.id === undefined ? {} : { id: options.id }),
       on: "first-hit",
-      of: options.of ?? this.defaultOf(),
+      of: listed(options).of ?? this.defaultOf(),
       ...substituteFields(effect),
     };
     return this.with({
@@ -782,7 +792,7 @@ export class Turn {
    * condition's grants throws `unsupported-trigger`: use {@link Turn.onFirstMiss}.
    */
   onAnyMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
-    return this.rider({ ...options, damage, on: "any-miss" });
+    return this.rider({ ...listed(options), damage, on: "any-miss" });
   }
 
   /**
@@ -792,7 +802,7 @@ export class Turn {
    * miss, you may reroll": Kensei's Unerring Accuracy, Lucky.
    */
   onFirstMiss(damage: RiderDamage, options: RiderOptions = {}): Turn {
-    return this.rider({ ...options, damage, on: "first-miss" });
+    return this.rider({ ...listed(options), damage, on: "first-miss" });
   }
 
   /**
