@@ -1067,16 +1067,26 @@ function keepBetterOfFresh(spend: PMF, base: PMF): { kept: PMF; beaten: PMF } {
 /** The keys a declared-attack wrapper may carry. */
 const ATTACK_KEYS: Record<string, true> = { source: true, id: true, tag: true, chance: true, target: true, after: true };
 
-/** A declared attack, unwrapped. */
+/** The tags a source carries itself (`AttackBuilder.tagged()`); `id` names it in the error for a non-string one. */
+function sourceTags(source: unknown, id: string): readonly string[] {
+  if (typeof source !== "object" || source === null || !("tags" in source) || !Array.isArray(source.tags)) return [];
+  const tags: readonly unknown[] = source.tags;
+  if (tags.some((tag) => typeof tag !== "string")) {
+    throw new TurnSpecError("non-string-id", id, `"${id}" carries a non-string tag.`);
+  }
+  return tags as readonly string[];
+}
+
+/** A declared attack, unwrapped. Its tags are the wrapper's `tag` and the source's own, once each. */
 function attackEntry(
   entry: Attack,
   index: number
-): { id: string; tag?: string; source: Damage; chance: number } {
+): { id: string; tags: readonly string[]; source: Damage; chance: number } {
   const id = `attack ${index + 1}`;
   // A wrapper with no source falls through as a would-be source, so it fails
   // `not-an-attack` in toPMF rather than as a bare TypeError.
   if (!("source" in entry) || entry.source === undefined) {
-    return { id, source: entry as Damage, chance: 1 };
+    return { id, tags: sourceTags(entry, id), source: entry as Damage, chance: 1 };
   }
 
   const wrapper = entry as unknown as Record<string, unknown>;
@@ -1096,9 +1106,12 @@ function attackEntry(
     throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string tag.`);
   }
 
+  const ownId = (wrapper.id as string | undefined) ?? id;
+  const tag = wrapper.tag as string | undefined;
+  const own = sourceTags(wrapper.source, ownId);
   return {
-    id: (wrapper.id as string) ?? id,
-    tag: wrapper.tag as string | undefined,
+    id: ownId,
+    tags: [...new Set(tag === undefined ? own : [tag, ...own])],
     source: wrapper.source as Damage,
     chance: (wrapper.chance as number) ?? 1,
   };
@@ -1107,7 +1120,7 @@ function attackEntry(
 /** A declared attack, validated and resolved: what `buildPlan` and the stateless path both read. */
 export interface DeclaredAttack {
   id: string;
-  tag?: string;
+  tags: readonly string[];
   source: Damage;
   chance: number;
   /** The source's PMF in its own context. */
@@ -1133,7 +1146,7 @@ export function checkStateLimit(stateLimit: number | undefined): void {
 export function declaredAttacks(spec: TurnSpec, eps: number): DeclaredAttack[] {
   const resolvedSources = new Map<Damage, { pmf: PMF; slices: SourceSlices | null }>();
   return spec.attacks.map((entry, index) => {
-    const { id, tag, source, chance } = attackEntry(entry, index);
+    const { id, tags, source, chance } = attackEntry(entry, index);
     if (!(chance >= 0 && chance <= 1)) {
       throw new RangeError(`Attack "${id}" needs a chance in [0, 1], got ${chance}.`);
     }
@@ -1159,7 +1172,7 @@ export function declaredAttacks(spec: TurnSpec, eps: number): DeclaredAttack[] {
       throw new TurnSpecError("non-string-id", id, `Attack "${id}" has a non-string target.`);
     }
     const after = typeof entry === "object" && entry !== null && "source" in entry && "after" in entry ? entry.after : undefined;
-    return { id, tag, source, chance, pmf: resolved.pmf, slices: resolved.slices, target: target ?? DEFAULT_CREATURE, after };
+    return { id, tags, source, chance, pmf: resolved.pmf, slices: resolved.slices, target: target ?? DEFAULT_CREATURE, after };
   });
 }
 
@@ -1414,13 +1427,13 @@ export function buildPlan(
   const attackSingles: PMF[] = [];
   const attackSlices: (SourceSlices | null)[] = [];
   const attackChances: number[] = [];
-  const attackIdsByTag = new Map<string, string[]>();
+  const idsByTag = new Map<string, string[]>();
   /** The creature each declared attack is aimed at (`AttackOptions.target`). */
   const attackTargets: string[] = [];
   /** Per declared attack, the earlier attack whose landing gates it (`AttackOptions.after`). */
   const attackAfters: (AttackOptions["after"] | undefined)[] = [];
 
-  for (const { id, tag, source, chance, pmf, slices, target, after } of declaredAttacks(spec, eps)) {
+  for (const { id, tags, source, chance, pmf, slices, target, after } of declaredAttacks(spec, eps)) {
     attackIds.push(id);
     attackSources.push(source);
     attackPMFs.push(pmf);
@@ -1432,10 +1445,10 @@ export function buildPlan(
     attackChances.push(chance);
     attackTargets.push(target);
     attackAfters.push(after);
-    if (tag !== undefined) {
-      const tagged = attackIdsByTag.get(tag);
+    for (const tag of tags) {
+      const tagged = idsByTag.get(tag);
       if (tagged) tagged.push(id);
-      else attackIdsByTag.set(tag, [id]);
+      else idsByTag.set(tag, [id]);
     }
   }
 
@@ -1824,8 +1837,16 @@ export function buildPlan(
           entry,
           `"${ownerId}" watches "${entry}", a ${kind}. A ${kind} ${effect}; it rolls no attack to watch.`
         );
-      } else if (attackIdsByTag.has(entry)) {
-        sourceIds.push(...(attackIdsByTag.get(entry) as string[]));
+      } else if (idsByTag.has(entry)) {
+        // For a rider, a tag reaches the rerolls declared before it, as an omitted `of` does: never
+        // itself, and never a later reroll that could watch it back (a cycle).
+        const ownerIndex = riderIndexById.get(ownerId);
+        sourceIds.push(
+          ...(idsByTag.get(entry) as string[]).filter((id) => {
+            const index = riderIndexById.get(id);
+            return ownerIndex === undefined || index === undefined || index < ownerIndex;
+          })
+        );
       } else {
         fail("unknown-id", entry, `"${ownerId}" depends on "${entry}", which is not in this turn.`);
       }
@@ -1909,6 +1930,17 @@ export function buildPlan(
       (rider.on === "any-miss" || rider.on === "first-miss") && slicesOf(riderIds[index]) !== null
   );
   const rerollIds = riderIds.filter((_, index) => isReroll[index]);
+  // A reroll's own tags name it, as a declared attack's do: the rerolls are what an omitted `of` adds.
+  // A reroll given as a list holds one attack, beside damage that carries no tags.
+  riders.forEach((rider, index) => {
+    if (!isReroll[index]) return;
+    const parts: readonly unknown[] = Array.isArray(rider.damage) ? rider.damage : [rider.damage];
+    for (const tag of new Set(parts.flatMap((part) => sourceTags(part, riderIds[index])))) {
+      const tagged = idsByTag.get(tag);
+      if (tagged) tagged.push(riderIds[index]);
+      else idsByTag.set(tag, [riderIds[index]]);
+    }
+  });
   /**
    * An omitted `of`: every declared attack, plus the rerolls among the first `before`
    * riders — for a rider, those listed before it, as `Turn`'s chaining methods snapshot.
@@ -2372,7 +2404,7 @@ export function buildPlan(
           : new Set(
               to.flatMap((entry) => {
                 if (attackIndexById.has(entry) || riderIndexById.has(entry)) return [entry];
-                const tagged = attackIdsByTag.get(entry);
+                const tagged = idsByTag.get(entry);
                 if (tagged) return tagged;
                 return resolveSources(id, [entry], false);
               })

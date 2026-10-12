@@ -1,7 +1,7 @@
 // Conditions: what the target has, and what it gets. The same turns are pinned to the
 // brute-force oracle in src/builder/example.test.ts; docs/guide.md has the prose.
-import { advantage, d20, d4, d6, d8, flat, roll, savePenalty, turn, vulnerability } from "../src/builder";
-import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "../src/dnd5e";
+import { advantage, d20, d4, d6, d8, flat, roll, save, savePenalty, turn, vulnerability } from "../src/builder";
+import { contestLossChance, prone, restrained, saveDC, stunningStrike, unconscious, vex } from "../src/dnd5e";
 
 const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
 const bow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
@@ -9,22 +9,33 @@ const fist = d20.plus(8).ac(16).onHit(d6.plus(4));
 const show = (label: string, value: number) => console.log(`${label.padEnd(48)} ${value.toFixed(4)}`);
 
 // Vex: a hit gives the next attack advantage.
-show("Vex: mean", turn([sword.onEveryHit(advantage().untilNextAttack()), sword]).mean());
+show("Vex: mean", turn([sword.onEveryHit(vex()), sword]).mean());
 
 // Topple: a toppling hit may knock the target Prone (CON save). Prone helps the swords after it and
 // costs the bow, so the player topples with the first sword and not with the third.
-const topple = (optional: boolean) =>
-  sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), ...(optional ? { optional: true as const } : {}) });
+const toppleOnFail = save(saveDC(15, { con: 3 }), { fail: prone().untilEndOfTurn() });
+const topple = (optional: boolean) => sword.onEveryHit(toppleOnFail, optional ? { optional: true } : {});
 show("Topple (optional): mean", turn([topple(true), sword, topple(true), bow]).mean());
 show("Topple (every time): mean", turn([topple(false), sword, topple(false), bow]).mean());
 
 // 2024 Stunning Strike: once a turn, a failed save stuns; a pass still gives the next attack advantage.
-const monk = turn([fist, fist, fist]).onFirstHit(stunned().untilEndOfTurn(), {
-  id: "stun", save: saveDC(15, { con: 2 }), onSave: advantage().untilNextAttack(),
-});
+const monk = turn([fist, fist, fist]).onFirstHit(stunningStrike(saveDC(15, { con: 2 })), { id: "stun" });
 show("Stunning Strike: mean", monk.mean());
 show("Stunning Strike: P(stun read by a later fist)", monk.fireProbability("stun"));
 show("Stunning Strike: P(fist 3 has advantage)", monk.stepStats("attack 3").live.advantage);
+
+// Tags name attacks by what they are: Sneak Attack on a finesse weapon, Stunning Strike on an unarmed strike.
+const prof = +3;
+const mod = +4;
+const monkDie = d8;
+const attack = d20.plus(prof + mod).ac(15);
+const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(vex());
+const scimitar = attack.onHit(monkDie).tagged("finesse"); // Nick: no Dex mod
+const unarmed = attack.onHit(monkDie.plus(mod)).tagged("unarmed"); // Flurry of Blows
+const monkRogue = turn([shortsword, shortsword, scimitar, unarmed, unarmed])
+  .onFirstHit(d6, { of: "finesse" }) // Sneak Attack
+  .onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" }); // Stunning Strike
+show("Monk/Rogue, tagged: mean", monkRogue.mean());
 
 // 2024 Grappler: the target saves with STR or DEX, whichever it passes more often.
 const saves = saveDC(15, { str: 5, dex: 1 });

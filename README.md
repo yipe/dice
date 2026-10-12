@@ -254,6 +254,33 @@ const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
 turn().attacks(2, sword).attack(sword, { target: "second" }).atStart(restrained()).mean(); // 21.545
 ```
 
+### Tags and named features: a Monk/Rogue turn
+
+Tag an attack with what it is, and name it in `of` by that tag instead of by position. `vex()`,
+`stunningStrike()` and the list of expected tags (`TAGS`) come from `@yipe/dice/dnd5e`; the core
+`save(check, { fail, pass })` they build on works with any effect. The
+[guide](docs/guide.md#tags-and-named-features-a-whole-monkrogue-turn) has the rules and the same turn without `dnd5e`.
+
+```ts
+import { d20, d6, d8, turn } from "@yipe/dice/builder";
+import { saveDC, stunningStrike, vex } from "@yipe/dice/dnd5e";
+
+const prof = +3;
+const mod = +4;
+const monkDie = d8;
+const attack = d20.plus(prof + mod).ac(15);
+
+const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(vex());
+const scimitar   = attack.onHit(monkDie).tagged("finesse");            // Nick: no Dex mod
+const fist       = attack.onHit(monkDie.plus(mod)).tagged("unarmed");  // Flurry of Blows
+
+const myTurn = turn([shortsword, shortsword, scimitar, fist, fist])
+  .onFirstHit(d6, { of: "finesse" })                                        // Sneak Attack
+  .onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" });  // Stunning Strike
+
+myTurn.mean(); // 33.5367
+```
+
 ### Once-per-turn rerolls such as Savage Attacker
 
 ```ts
