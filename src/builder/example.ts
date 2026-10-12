@@ -1,6 +1,6 @@
 import { DiceQuery } from "../pmf/query";
-import { contestLossChance, prone, restrained, saveDC, stunned, unconscious } from "../dnd5e";
-import { advantage, critOnHit, savePenalty, turn, vulnerability } from "../turn";
+import { contestLossChance, prone, restrained, saveDC, stunningStrike as stun, unconscious, vex as vexGrant } from "../dnd5e";
+import { advantage, critOnHit, save, savePenalty, turn, vulnerability } from "../turn";
 import type { Turn } from "../turn";
 
 import "./ac"; // for side effects of prototype augmentation
@@ -636,7 +636,10 @@ const longsword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
 const longbow = d20.plus(8).ac(16).ranged().onHit(d8.plus(4));
 
 /** Vex: a hit gives the next attack advantage. */
-export const vex = turn([longsword.onEveryHit(advantage().untilNextAttack()), longsword]);
+export const vex = turn([longsword.onEveryHit(vexGrant()), longsword]);
+
+/** Topple's mastery: a CON save, or Prone for the rest of the turn. */
+const toppleOnFail = save(saveDC(15, { con: 3 }), { fail: prone().untilEndOfTurn() });
 
 /**
  * Topple: a toppling hit may knock the target Prone (CON save). Prone from the first toppling sword helps the two melee
@@ -645,24 +648,20 @@ export const vex = turn([longsword.onEveryHit(advantage().untilNextAttack()), lo
  * not a constant: deciding an optional condition walks the turn, and that must not happen at import.
  */
 export function topple(): Turn {
-  const toppling = longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }), optional: true });
+  const toppling = longsword.onEveryHit(toppleOnFail, { optional: true });
   return turn([toppling, longsword, toppling, longbow]);
 }
 
 /** {@link topple} without the choice: every toppling hit tries to knock the target Prone. */
 export const toppleForced = turn([
-  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longsword.onEveryHit(toppleOnFail),
   longsword,
-  longsword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) }),
+  longsword.onEveryHit(toppleOnFail),
   longbow,
 ]);
 
 /** 2024 Stunning Strike: once a turn, a failed save stuns; a passed one still gives the next attack advantage. */
-export const stunningStrike = turn([smallFist, smallFist, smallFist]).onFirstHit(stunned().untilEndOfTurn(), {
-  id: "stun",
-  save: saveDC(15, { con: 2 }),
-  onSave: advantage().untilNextAttack(),
-});
+export const stunningStrike = turn([smallFist, smallFist, smallFist]).onFirstHit(stun(saveDC(15, { con: 2 })), { id: "stun" });
 
 /** 2024 Grappler: the target saves with STR or DEX, whichever it passes more often. */
 export const grappler = turn([longsword, longsword]).onFirstHit(advantage().untilEndOfTurn(), {

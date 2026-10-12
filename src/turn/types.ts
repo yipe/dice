@@ -1,5 +1,6 @@
 import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
+import type { AbilityName } from "../builder/types";
 
 export type { DiceMatchInfo, HasDiceMatchInfo };
 
@@ -216,11 +217,11 @@ export interface RiderOptions {
   /** Required only if another rider names this one in `of`. */
   id?: string;
   /**
-   * Which attacks to watch: attack ids, attack-shaped rider ids, or declaration tags.
-   * Defaults to the attacks declared so far, plus any attack-shaped `any-miss` /
-   * `first-miss` rider declared so far (see {@link Trigger}).
+   * Which attacks to watch: attack ids, attack-shaped rider ids, or tags (declared, or set by
+   * `AttackBuilder.tagged()`); one name or a list. Defaults to the attacks declared so far, plus
+   * any attack-shaped `any-miss` / `first-miss` rider declared so far (see {@link Trigger}).
    */
-  of?: readonly string[];
+  of?: string | readonly string[];
   /**
    * Defaults to `damage` with its dice doubled (builders and `d("…")` strings that can double);
    * an attack or save builder or string, or a bare `PMF` part, is added as-is. A rider that
@@ -379,8 +380,14 @@ export interface GrantSpec {
   to?: readonly string[];
 }
 
+/** What a condition does to an attack roll against the creature. */
+export type AttackRuleModifier = "advantage" | "disadvantage" | "critOnHit" | "vulnerable";
+
+/** What a condition does to the creature's save; `disadvantage` is `saveDisadvantage`. */
+export type SaveRuleModifier = "autoFail" | "saveDisadvantage" | "disadvantage";
+
 /** What a condition does to a row it applies to. */
-export type Modifier = "advantage" | "disadvantage" | "critOnHit" | "autoFail" | "saveDisadvantage" | "vulnerable";
+export type Modifier = AttackRuleModifier | SaveRuleModifier;
 
 /**
  * A condition's effect on rows, as data: the modifiers an attack against the creature gets
@@ -388,9 +395,9 @@ export type Modifier = "advantage" | "disadvantage" | "critOnHit" | "autoFail" |
  */
 export interface ConditionRule {
   /** Modifiers on attack rolls against the creature, by the attack's range. */
-  attack?: { melee?: readonly Modifier[]; ranged?: readonly Modifier[] };
-  /** Modifiers on the creature's saves, keyed by ability. */
-  save?: Readonly<Record<string, readonly Modifier[]>>;
+  attack?: { melee?: readonly AttackRuleModifier[]; ranged?: readonly AttackRuleModifier[] };
+  /** Modifiers on the creature's saves, keyed by ability (its full name or three-letter form). */
+  save?: Readonly<Partial<Record<AbilityName, readonly SaveRuleModifier[]>>>;
   /** The condition the creature is left with when this one ends early (Unconscious leaves Prone). */
   onEnd?: { condition: string; rule: ConditionRule };
 }
