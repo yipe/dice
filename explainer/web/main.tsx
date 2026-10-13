@@ -212,7 +212,7 @@ const PartSection: React.FC<{ part: Part; index: number }> = ({ part, index }) =
         <p className="lede">{withTerms(part.lede)}</p>
       </div>
       {reducedMotion ? (
-        <div className="still">
+        <div className="still" ref={scrollyRef}>
           <div className="stage">{stage}</div>
           <ol className="steps">{part.captions.map((c, i) => <li key={i}>{withTerms(c.text)}</li>)}</ol>
         </div>
