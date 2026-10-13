@@ -6,15 +6,16 @@ const sword = attack.onHit(d8.plus(4)).tagged("finesse");
 const vexSword = sword.onEveryHit(vex());
 const scimitar = attack.onHit(d8).tagged("finesse");
 const fist = attack.onHit(d8.plus(4)).tagged("unarmed");
+const flurry = [fist, fist];
 
 const sneak = [d6, { of: "finesse" }] as const;
 const stun = [stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" }] as const;
 
-const normal = turn([sword, sword, scimitar, fist, fist]);
-const vexed = turn([vexSword, vexSword, scimitar, fist, fist]);
-const fistsFirst = turn([fist, fist, vexSword, vexSword, scimitar]);
+const normal = turn([sword, sword, scimitar, ...flurry]);
+const vexed = turn([vexSword, vexSword, scimitar, ...flurry]);
+const flurryFirst = turn([...flurry, vexSword, vexSword, scimitar]);
 
-normal.onFirstHit(...sneak).mean();                         // 29.7576
-vexed.onFirstHit(...sneak).mean();                          // 32.1409
-vexed.onFirstHit(...sneak).onFirstHit(...stun).mean();      // 33.5367
-fistsFirst.onFirstHit(...sneak).onFirstHit(...stun).mean(); // 35.3698
+normal.onFirstHit(...sneak).mean();                          // 29.7576
+vexed.onFirstHit(...sneak).mean();                           // 32.1409
+vexed.onFirstHit(...sneak).onFirstHit(...stun).mean();       // 33.5367
+flurryFirst.onFirstHit(...sneak).onFirstHit(...stun).mean(); // 35.3698
