@@ -13,7 +13,8 @@ const typeAwareLanguageOptions = {
 
 export default [
   // Global ignores (a config object with only `ignores` applies repo-wide).
-  { ignores: ["dist/**", "node_modules/**", ".yarn/**"] },
+  // explainer/ is a separate site project (its own package.json, deps and checks); see explainer/README.md.
+  { ignores: ["dist/**", "node_modules/**", ".yarn/**", "explainer/**"] },
   {
     files: ["src/**/*.{ts,tsx}"],
     languageOptions: typeAwareLanguageOptions,

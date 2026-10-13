@@ -23,6 +23,8 @@ probability, and which outcome (hit, crit, miss, failed save) produced it.
 
 **[Build a turn in your browser at dprcalc.com/dice →](https://dprcalc.com/dice)**
 
+**[See how it works, step by step: How Dice Become DPR →](https://yipe.github.io/dice/)**
+
 ```ts
 import { d20, d4, d6, roll, turn } from "@yipe/dice/builder";
 
