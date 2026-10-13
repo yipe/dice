@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#06080f">
+<title>How Dice Become DPR</title>
+<meta name="description" content="How @yipe/dice computes exact damage per round for a D&amp;D 5e Monk 5 / Rogue 1, one step at a time: buckets, probability, convolution, Vex, Sneak Attack and Stunning Strike.">
+<meta property="og:title" content="How Dice Become DPR">
+<meta property="og:description" content="An exact, step-by-step look at how @yipe/dice turns dice into damage per round.">
+<meta property="og:type" content="article">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>">
+<script>
+  // Inside another page's frame (for example an app's in-page viewer), a phone app may float its nav bar over the top.
+  try { if (window.self !== window.top) document.documentElement.classList.add("embedded"); } catch (e) { document.documentElement.classList.add("embedded"); }
+</script>
+<style>
+  /* Layout: one centered reading column; each part pins a 16:9 stage to the viewport while scroll drives its frames. */
+  :root {
+    /* room kept clear above anything pinned to the top: the notch, plus (on phones, below) an app's translucent nav bar */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --canvas: #06080f;
+    --elevated: #0c1525;
+    --fg: #d6deec;
+    --muted: #a8b8d6;
+    --border: #2b3f62;
+    --accent: #6e9bc6;
+    --hot: #ffc078;
+    --stamp: #ff4d4d;
+    --display: Georgia, "Iowan Old Style", Gelasio, serif;
+    --body: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: SFMono-Regular, Menlo, "DPR Mono", monospace;
+    color-scheme: dark;
+  }
+  @font-face { font-family: "Inter"; src: url("fonts/inter.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
+  @font-face { font-family: "Gelasio"; src: url("fonts/gelasio.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
+  @font-face { font-family: "DPR Mono"; src: url("fonts/dejavu-mono.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+  @font-face { font-family: "DPR Mono"; src: url("fonts/dejavu-mono-bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+
+  body {
+    background: radial-gradient(ellipse 80% 50% at 50% 0%, var(--elevated), var(--canvas) 70%) var(--canvas) no-repeat;
+    color: var(--fg);
+    font-family: var(--body);
+    font-size: 18px;
+    line-height: 1.6;
+    padding-inline: max(12px, 1.5vw);
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--hot); outline-offset: 3px; border-radius: 4px; }
+
+  .eyebrow { font-family: var(--mono); font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin: 0; }
+  h1, h2 { font-family: var(--display); font-weight: 700; text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(44px, 8vw, 104px); line-height: 1.02; }
+  h2 { font-size: clamp(34px, 5.5vw, 68px); line-height: 1.05; }
+  .lede { font-size: clamp(19px, 1.7vw, 24px); color: var(--muted); max-width: 36em; margin: 0; }
+
+  /* ---------- hero ---------- */
+  .hero { display: grid; gap: 28px; justify-items: center; text-align: center; padding-block: 18vh 12vh; }
+  .hero .lede { max-width: 32em; }
+  .hero-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 36px; margin: 8px 0 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hero-stats b { color: var(--hot); font-weight: 700; }
+  .cue { font-family: var(--mono); font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); display: grid; justify-items: center; gap: 10px; margin-top: 4vh; }
+  .cue::after { content: ""; width: 1px; height: 56px; background: linear-gradient(var(--accent), transparent); }
+
+  /* ---------- parts ---------- */
+  .part { max-width: 1920px; margin-inline: auto; padding-top: 12vh; }
+  /* "Part X of Y" and the title stay pinned for the whole part; the stage pins just below them */
+  /* hidden term popovers near the edge must not widen the page on phones (clip, unlike hidden, keeps sticky working) */
+  .hero, .joke, #prologue, #parts, .outro { overflow-x: clip; }
+  .intro {
+    position: sticky; top: var(--safe-top); z-index: 5; display: grid; gap: 4px; justify-items: center; text-align: center;
+    padding: 18px 0 16px; isolation: isolate;
+  }
+  /* the header's backdrop: translucent, fading out at its top and bottom edges so it never reads as a solid bar.
+     It lives on a pseudo-element so the mask does not clip the title's popovers. */
+  .intro::before {
+    content: ""; position: absolute; inset: calc(-1 * var(--safe-top)) 0 -28px; z-index: -1; pointer-events: none;
+    background: color-mix(in srgb, var(--canvas) 85%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 62%, transparent 100%), linear-gradient(to right, transparent 0, #000 12%, #000 88%, transparent 100%);
+    -webkit-mask-composite: source-in;
+    mask-image: linear-gradient(to bottom, transparent 0, #000 26px, #000 62%, transparent 100%), linear-gradient(to right, transparent 0, #000 12%, #000 88%, transparent 100%);
+    mask-composite: intersect;
+  }
+  .intro h2 { font-size: clamp(28px, 3.8vw, 54px); }
+  .part-lede { display: grid; justify-items: center; text-align: center; padding: 10px 0 6vh; }
+  .scrolly { position: relative; }
+  .sticky { position: sticky; top: calc(var(--safe-top) + var(--hdr, 0px)); height: calc(100svh - var(--safe-top) - var(--hdr, 0px)); display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  .caption {
+    margin: 0 auto; max-width: 42ch; min-height: 2.6em; text-align: center; text-wrap: balance;
+    font-size: clamp(21px, 2.4vw, 36px); font-weight: 600; line-height: 1.3; letter-spacing: -0.01em;
+    animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .caption { position: relative; z-index: 2; }
+  /* a title's popover must open over the intro text below it */
+  .intro > h2 { position: relative; z-index: 3; }
+  .part-lede > .lede { position: relative; z-index: 2; }
+
+  /* ---------- the joke ---------- */
+  /* KaTeX 0.16.11 stylesheet, inlined; fonts bundled under katex/fonts */
+  @font-face{font-family:KaTeX_AMS;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_AMS-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Caligraphic;font-style:normal;font-weight:700;src:url(katex/fonts/KaTeX_Caligraphic-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Caligraphic;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Caligraphic-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Fraktur;font-style:normal;font-weight:700;src:url(katex/fonts/KaTeX_Fraktur-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Fraktur;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Fraktur-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:normal;font-weight:700;src:url(katex/fonts/KaTeX_Main-Bold.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:italic;font-weight:700;src:url(katex/fonts/KaTeX_Main-BoldItalic.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:italic;font-weight:400;src:url(katex/fonts/KaTeX_Main-Italic.woff2) format("woff2")}@font-face{font-family:KaTeX_Main;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Main-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Math;font-style:italic;font-weight:700;src:url(katex/fonts/KaTeX_Math-BoldItalic.woff2) format("woff2")}@font-face{font-family:KaTeX_Math;font-style:italic;font-weight:400;src:url(katex/fonts/KaTeX_Math-Italic.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:normal;font-weight:700;src:url(katex/fonts/KaTeX_SansSerif-Bold.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:italic;font-weight:400;src:url(katex/fonts/KaTeX_SansSerif-Italic.woff2) format("woff2")}@font-face{font-family:"KaTeX_SansSerif";font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_SansSerif-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Script;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Script-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size1;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Size1-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size2;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Size2-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size3;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Size3-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Size4;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Size4-Regular.woff2) format("woff2")}@font-face{font-family:KaTeX_Typewriter;font-style:normal;font-weight:400;src:url(katex/fonts/KaTeX_Typewriter-Regular.woff2) format("woff2")}.katex{font:normal 1.21em KaTeX_Main,Times New Roman,serif;line-height:1.2;text-indent:0;text-rendering:auto}.katex *{-ms-high-contrast-adjust:none!important;border-color:currentColor}.katex .katex-version:after{content:"0.16.11"}.katex .katex-mathml{clip:rect(1px,1px,1px,1px);border:0;height:1px;overflow:hidden;padding:0;position:absolute;width:1px}.katex .katex-html>.newline{display:block}.katex .base{position:relative;white-space:nowrap;width:-webkit-min-content;width:-moz-min-content;width:min-content}.katex .base,.katex .strut{display:inline-block}.katex .textbf{font-weight:700}.katex .textit{font-style:italic}.katex .textrm{font-family:KaTeX_Main}.katex .textsf{font-family:KaTeX_SansSerif}.katex .texttt{font-family:KaTeX_Typewriter}.katex .mathnormal{font-family:KaTeX_Math;font-style:italic}.katex .mathit{font-family:KaTeX_Main;font-style:italic}.katex .mathrm{font-style:normal}.katex .mathbf{font-family:KaTeX_Main;font-weight:700}.katex .boldsymbol{font-family:KaTeX_Math;font-style:italic;font-weight:700}.katex .amsrm,.katex .mathbb,.katex .textbb{font-family:KaTeX_AMS}.katex .mathcal{font-family:KaTeX_Caligraphic}.katex .mathfrak,.katex .textfrak{font-family:KaTeX_Fraktur}.katex .mathboldfrak,.katex .textboldfrak{font-family:KaTeX_Fraktur;font-weight:700}.katex .mathtt{font-family:KaTeX_Typewriter}.katex .mathscr,.katex .textscr{font-family:KaTeX_Script}.katex .mathsf,.katex .textsf{font-family:KaTeX_SansSerif}.katex .mathboldsf,.katex .textboldsf{font-family:KaTeX_SansSerif;font-weight:700}.katex .mathitsf,.katex .textitsf{font-family:KaTeX_SansSerif;font-style:italic}.katex .mainrm{font-family:KaTeX_Main;font-style:normal}.katex .vlist-t{border-collapse:collapse;display:inline-table;table-layout:fixed}.katex .vlist-r{display:table-row}.katex .vlist{display:table-cell;position:relative;vertical-align:bottom}.katex .vlist>span{display:block;height:0;position:relative}.katex .vlist>span>span{display:inline-block}.katex .vlist>span>.pstrut{overflow:hidden;width:0}.katex .vlist-t2{margin-right:-2px}.katex .vlist-s{display:table-cell;font-size:1px;min-width:2px;vertical-align:bottom;width:2px}.katex .vbox{align-items:baseline;display:inline-flex;flex-direction:column}.katex .hbox{width:100%}.katex .hbox,.katex .thinbox{display:inline-flex;flex-direction:row}.katex .thinbox{max-width:0;width:0}.katex .msupsub{text-align:left}.katex .mfrac>span>span{text-align:center}.katex .mfrac .frac-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .hdashline,.katex .hline,.katex .mfrac .frac-line,.katex .overline .overline-line,.katex .rule,.katex .underline .underline-line{min-height:1px}.katex .mspace{display:inline-block}.katex .clap,.katex .llap,.katex .rlap{position:relative;width:0}.katex .clap>.inner,.katex .llap>.inner,.katex .rlap>.inner{position:absolute}.katex .clap>.fix,.katex .llap>.fix,.katex .rlap>.fix{display:inline-block}.katex .llap>.inner{right:0}.katex .clap>.inner,.katex .rlap>.inner{left:0}.katex .clap>.inner>span{margin-left:-50%;margin-right:50%}.katex .rule{border:0 solid;display:inline-block;position:relative}.katex .hline,.katex .overline .overline-line,.katex .underline .underline-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .hdashline{border-bottom-style:dashed;display:inline-block;width:100%}.katex .sqrt>.root{margin-left:.2777777778em;margin-right:-.5555555556em}.katex .fontsize-ensurer.reset-size1.size1,.katex .sizing.reset-size1.size1{font-size:1em}.katex .fontsize-ensurer.reset-size1.size2,.katex .sizing.reset-size1.size2{font-size:1.2em}.katex .fontsize-ensurer.reset-size1.size3,.katex .sizing.reset-size1.size3{font-size:1.4em}.katex .fontsize-ensurer.reset-size1.size4,.katex .sizing.reset-size1.size4{font-size:1.6em}.katex .fontsize-ensurer.reset-size1.size5,.katex .sizing.reset-size1.size5{font-size:1.8em}.katex .fontsize-ensurer.reset-size1.size6,.katex .sizing.reset-size1.size6{font-size:2em}.katex .fontsize-ensurer.reset-size1.size7,.katex .sizing.reset-size1.size7{font-size:2.4em}.katex .fontsize-ensurer.reset-size1.size8,.katex .sizing.reset-size1.size8{font-size:2.88em}.katex .fontsize-ensurer.reset-size1.size9,.katex .sizing.reset-size1.size9{font-size:3.456em}.katex .fontsize-ensurer.reset-size1.size10,.katex .sizing.reset-size1.size10{font-size:4.148em}.katex .fontsize-ensurer.reset-size1.size11,.katex .sizing.reset-size1.size11{font-size:4.976em}.katex .fontsize-ensurer.reset-size2.size1,.katex .sizing.reset-size2.size1{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size2.size2,.katex .sizing.reset-size2.size2{font-size:1em}.katex .fontsize-ensurer.reset-size2.size3,.katex .sizing.reset-size2.size3{font-size:1.1666666667em}.katex .fontsize-ensurer.reset-size2.size4,.katex .sizing.reset-size2.size4{font-size:1.3333333333em}.katex .fontsize-ensurer.reset-size2.size5,.katex .sizing.reset-size2.size5{font-size:1.5em}.katex .fontsize-ensurer.reset-size2.size6,.katex .sizing.reset-size2.size6{font-size:1.6666666667em}.katex .fontsize-ensurer.reset-size2.size7,.katex .sizing.reset-size2.size7{font-size:2em}.katex .fontsize-ensurer.reset-size2.size8,.katex .sizing.reset-size2.size8{font-size:2.4em}.katex .fontsize-ensurer.reset-size2.size9,.katex .sizing.reset-size2.size9{font-size:2.88em}.katex .fontsize-ensurer.reset-size2.size10,.katex .sizing.reset-size2.size10{font-size:3.4566666667em}.katex .fontsize-ensurer.reset-size2.size11,.katex .sizing.reset-size2.size11{font-size:4.1466666667em}.katex .fontsize-ensurer.reset-size3.size1,.katex .sizing.reset-size3.size1{font-size:.7142857143em}.katex .fontsize-ensurer.reset-size3.size2,.katex .sizing.reset-size3.size2{font-size:.8571428571em}.katex .fontsize-ensurer.reset-size3.size3,.katex .sizing.reset-size3.size3{font-size:1em}.katex .fontsize-ensurer.reset-size3.size4,.katex .sizing.reset-size3.size4{font-size:1.1428571429em}.katex .fontsize-ensurer.reset-size3.size5,.katex .sizing.reset-size3.size5{font-size:1.2857142857em}.katex .fontsize-ensurer.reset-size3.size6,.katex .sizing.reset-size3.size6{font-size:1.4285714286em}.katex .fontsize-ensurer.reset-size3.size7,.katex .sizing.reset-size3.size7{font-size:1.7142857143em}.katex .fontsize-ensurer.reset-size3.size8,.katex .sizing.reset-size3.size8{font-size:2.0571428571em}.katex .fontsize-ensurer.reset-size3.size9,.katex .sizing.reset-size3.size9{font-size:2.4685714286em}.katex .fontsize-ensurer.reset-size3.size10,.katex .sizing.reset-size3.size10{font-size:2.9628571429em}.katex .fontsize-ensurer.reset-size3.size11,.katex .sizing.reset-size3.size11{font-size:3.5542857143em}.katex .fontsize-ensurer.reset-size4.size1,.katex .sizing.reset-size4.size1{font-size:.625em}.katex .fontsize-ensurer.reset-size4.size2,.katex .sizing.reset-size4.size2{font-size:.75em}.katex .fontsize-ensurer.reset-size4.size3,.katex .sizing.reset-size4.size3{font-size:.875em}.katex .fontsize-ensurer.reset-size4.size4,.katex .sizing.reset-size4.size4{font-size:1em}.katex .fontsize-ensurer.reset-size4.size5,.katex .sizing.reset-size4.size5{font-size:1.125em}.katex .fontsize-ensurer.reset-size4.size6,.katex .sizing.reset-size4.size6{font-size:1.25em}.katex .fontsize-ensurer.reset-size4.size7,.katex .sizing.reset-size4.size7{font-size:1.5em}.katex .fontsize-ensurer.reset-size4.size8,.katex .sizing.reset-size4.size8{font-size:1.8em}.katex .fontsize-ensurer.reset-size4.size9,.katex .sizing.reset-size4.size9{font-size:2.16em}.katex .fontsize-ensurer.reset-size4.size10,.katex .sizing.reset-size4.size10{font-size:2.5925em}.katex .fontsize-ensurer.reset-size4.size11,.katex .sizing.reset-size4.size11{font-size:3.11em}.katex .fontsize-ensurer.reset-size5.size1,.katex .sizing.reset-size5.size1{font-size:.5555555556em}.katex .fontsize-ensurer.reset-size5.size2,.katex .sizing.reset-size5.size2{font-size:.6666666667em}.katex .fontsize-ensurer.reset-size5.size3,.katex .sizing.reset-size5.size3{font-size:.7777777778em}.katex .fontsize-ensurer.reset-size5.size4,.katex .sizing.reset-size5.size4{font-size:.8888888889em}.katex .fontsize-ensurer.reset-size5.size5,.katex .sizing.reset-size5.size5{font-size:1em}.katex .fontsize-ensurer.reset-size5.size6,.katex .sizing.reset-size5.size6{font-size:1.1111111111em}.katex .fontsize-ensurer.reset-size5.size7,.katex .sizing.reset-size5.size7{font-size:1.3333333333em}.katex .fontsize-ensurer.reset-size5.size8,.katex .sizing.reset-size5.size8{font-size:1.6em}.katex .fontsize-ensurer.reset-size5.size9,.katex .sizing.reset-size5.size9{font-size:1.92em}.katex .fontsize-ensurer.reset-size5.size10,.katex .sizing.reset-size5.size10{font-size:2.3044444444em}.katex .fontsize-ensurer.reset-size5.size11,.katex .sizing.reset-size5.size11{font-size:2.7644444444em}.katex .fontsize-ensurer.reset-size6.size1,.katex .sizing.reset-size6.size1{font-size:.5em}.katex .fontsize-ensurer.reset-size6.size2,.katex .sizing.reset-size6.size2{font-size:.6em}.katex .fontsize-ensurer.reset-size6.size3,.katex .sizing.reset-size6.size3{font-size:.7em}.katex .fontsize-ensurer.reset-size6.size4,.katex .sizing.reset-size6.size4{font-size:.8em}.katex .fontsize-ensurer.reset-size6.size5,.katex .sizing.reset-size6.size5{font-size:.9em}.katex .fontsize-ensurer.reset-size6.size6,.katex .sizing.reset-size6.size6{font-size:1em}.katex .fontsize-ensurer.reset-size6.size7,.katex .sizing.reset-size6.size7{font-size:1.2em}.katex .fontsize-ensurer.reset-size6.size8,.katex .sizing.reset-size6.size8{font-size:1.44em}.katex .fontsize-ensurer.reset-size6.size9,.katex .sizing.reset-size6.size9{font-size:1.728em}.katex .fontsize-ensurer.reset-size6.size10,.katex .sizing.reset-size6.size10{font-size:2.074em}.katex .fontsize-ensurer.reset-size6.size11,.katex .sizing.reset-size6.size11{font-size:2.488em}.katex .fontsize-ensurer.reset-size7.size1,.katex .sizing.reset-size7.size1{font-size:.4166666667em}.katex .fontsize-ensurer.reset-size7.size2,.katex .sizing.reset-size7.size2{font-size:.5em}.katex .fontsize-ensurer.reset-size7.size3,.katex .sizing.reset-size7.size3{font-size:.5833333333em}.katex .fontsize-ensurer.reset-size7.size4,.katex .sizing.reset-size7.size4{font-size:.6666666667em}.katex .fontsize-ensurer.reset-size7.size5,.katex .sizing.reset-size7.size5{font-size:.75em}.katex .fontsize-ensurer.reset-size7.size6,.katex .sizing.reset-size7.size6{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size7.size7,.katex .sizing.reset-size7.size7{font-size:1em}.katex .fontsize-ensurer.reset-size7.size8,.katex .sizing.reset-size7.size8{font-size:1.2em}.katex .fontsize-ensurer.reset-size7.size9,.katex .sizing.reset-size7.size9{font-size:1.44em}.katex .fontsize-ensurer.reset-size7.size10,.katex .sizing.reset-size7.size10{font-size:1.7283333333em}.katex .fontsize-ensurer.reset-size7.size11,.katex .sizing.reset-size7.size11{font-size:2.0733333333em}.katex .fontsize-ensurer.reset-size8.size1,.katex .sizing.reset-size8.size1{font-size:.3472222222em}.katex .fontsize-ensurer.reset-size8.size2,.katex .sizing.reset-size8.size2{font-size:.4166666667em}.katex .fontsize-ensurer.reset-size8.size3,.katex .sizing.reset-size8.size3{font-size:.4861111111em}.katex .fontsize-ensurer.reset-size8.size4,.katex .sizing.reset-size8.size4{font-size:.5555555556em}.katex .fontsize-ensurer.reset-size8.size5,.katex .sizing.reset-size8.size5{font-size:.625em}.katex .fontsize-ensurer.reset-size8.size6,.katex .sizing.reset-size8.size6{font-size:.6944444444em}.katex .fontsize-ensurer.reset-size8.size7,.katex .sizing.reset-size8.size7{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size8.size8,.katex .sizing.reset-size8.size8{font-size:1em}.katex .fontsize-ensurer.reset-size8.size9,.katex .sizing.reset-size8.size9{font-size:1.2em}.katex .fontsize-ensurer.reset-size8.size10,.katex .sizing.reset-size8.size10{font-size:1.4402777778em}.katex .fontsize-ensurer.reset-size8.size11,.katex .sizing.reset-size8.size11{font-size:1.7277777778em}.katex .fontsize-ensurer.reset-size9.size1,.katex .sizing.reset-size9.size1{font-size:.2893518519em}.katex .fontsize-ensurer.reset-size9.size2,.katex .sizing.reset-size9.size2{font-size:.3472222222em}.katex .fontsize-ensurer.reset-size9.size3,.katex .sizing.reset-size9.size3{font-size:.4050925926em}.katex .fontsize-ensurer.reset-size9.size4,.katex .sizing.reset-size9.size4{font-size:.462962963em}.katex .fontsize-ensurer.reset-size9.size5,.katex .sizing.reset-size9.size5{font-size:.5208333333em}.katex .fontsize-ensurer.reset-size9.size6,.katex .sizing.reset-size9.size6{font-size:.5787037037em}.katex .fontsize-ensurer.reset-size9.size7,.katex .sizing.reset-size9.size7{font-size:.6944444444em}.katex .fontsize-ensurer.reset-size9.size8,.katex .sizing.reset-size9.size8{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size9.size9,.katex .sizing.reset-size9.size9{font-size:1em}.katex .fontsize-ensurer.reset-size9.size10,.katex .sizing.reset-size9.size10{font-size:1.2002314815em}.katex .fontsize-ensurer.reset-size9.size11,.katex .sizing.reset-size9.size11{font-size:1.4398148148em}.katex .fontsize-ensurer.reset-size10.size1,.katex .sizing.reset-size10.size1{font-size:.2410800386em}.katex .fontsize-ensurer.reset-size10.size2,.katex .sizing.reset-size10.size2{font-size:.2892960463em}.katex .fontsize-ensurer.reset-size10.size3,.katex .sizing.reset-size10.size3{font-size:.337512054em}.katex .fontsize-ensurer.reset-size10.size4,.katex .sizing.reset-size10.size4{font-size:.3857280617em}.katex .fontsize-ensurer.reset-size10.size5,.katex .sizing.reset-size10.size5{font-size:.4339440694em}.katex .fontsize-ensurer.reset-size10.size6,.katex .sizing.reset-size10.size6{font-size:.4821600771em}.katex .fontsize-ensurer.reset-size10.size7,.katex .sizing.reset-size10.size7{font-size:.5785920926em}.katex .fontsize-ensurer.reset-size10.size8,.katex .sizing.reset-size10.size8{font-size:.6943105111em}.katex .fontsize-ensurer.reset-size10.size9,.katex .sizing.reset-size10.size9{font-size:.8331726133em}.katex .fontsize-ensurer.reset-size10.size10,.katex .sizing.reset-size10.size10{font-size:1em}.katex .fontsize-ensurer.reset-size10.size11,.katex .sizing.reset-size10.size11{font-size:1.1996142719em}.katex .fontsize-ensurer.reset-size11.size1,.katex .sizing.reset-size11.size1{font-size:.2009646302em}.katex .fontsize-ensurer.reset-size11.size2,.katex .sizing.reset-size11.size2{font-size:.2411575563em}.katex .fontsize-ensurer.reset-size11.size3,.katex .sizing.reset-size11.size3{font-size:.2813504823em}.katex .fontsize-ensurer.reset-size11.size4,.katex .sizing.reset-size11.size4{font-size:.3215434084em}.katex .fontsize-ensurer.reset-size11.size5,.katex .sizing.reset-size11.size5{font-size:.3617363344em}.katex .fontsize-ensurer.reset-size11.size6,.katex .sizing.reset-size11.size6{font-size:.4019292605em}.katex .fontsize-ensurer.reset-size11.size7,.katex .sizing.reset-size11.size7{font-size:.4823151125em}.katex .fontsize-ensurer.reset-size11.size8,.katex .sizing.reset-size11.size8{font-size:.578778135em}.katex .fontsize-ensurer.reset-size11.size9,.katex .sizing.reset-size11.size9{font-size:.6945337621em}.katex .fontsize-ensurer.reset-size11.size10,.katex .sizing.reset-size11.size10{font-size:.8336012862em}.katex .fontsize-ensurer.reset-size11.size11,.katex .sizing.reset-size11.size11{font-size:1em}.katex .delimsizing.size1{font-family:KaTeX_Size1}.katex .delimsizing.size2{font-family:KaTeX_Size2}.katex .delimsizing.size3{font-family:KaTeX_Size3}.katex .delimsizing.size4{font-family:KaTeX_Size4}.katex .delimsizing.mult .delim-size1>span{font-family:KaTeX_Size1}.katex .delimsizing.mult .delim-size4>span{font-family:KaTeX_Size4}.katex .nulldelimiter{display:inline-block;width:.12em}.katex .delimcenter,.katex .op-symbol{position:relative}.katex .op-symbol.small-op{font-family:KaTeX_Size1}.katex .op-symbol.large-op{font-family:KaTeX_Size2}.katex .accent>.vlist-t,.katex .op-limits>.vlist-t{text-align:center}.katex .accent .accent-body{position:relative}.katex .accent .accent-body:not(.accent-full){width:0}.katex .overlay{display:block}.katex .mtable .vertical-separator{display:inline-block;min-width:1px}.katex .mtable .arraycolsep{display:inline-block}.katex .mtable .col-align-c>.vlist-t{text-align:center}.katex .mtable .col-align-l>.vlist-t{text-align:left}.katex .mtable .col-align-r>.vlist-t{text-align:right}.katex .svg-align{text-align:left}.katex svg{fill:currentColor;stroke:currentColor;fill-rule:nonzero;fill-opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;display:block;height:inherit;position:absolute;width:100%}.katex svg path{stroke:none}.katex img{border-style:none;max-height:none;max-width:none;min-height:0;min-width:0}.katex .stretchy{display:block;overflow:hidden;position:relative;width:100%}.katex .stretchy:after,.katex .stretchy:before{content:""}.katex .hide-tail{overflow:hidden;position:relative;width:100%}.katex .halfarrow-left{left:0;overflow:hidden;position:absolute;width:50.2%}.katex .halfarrow-right{overflow:hidden;position:absolute;right:0;width:50.2%}.katex .brace-left{left:0;overflow:hidden;position:absolute;width:25.1%}.katex .brace-center{left:25%;overflow:hidden;position:absolute;width:50%}.katex .brace-right{overflow:hidden;position:absolute;right:0;width:25.1%}.katex .x-arrow-pad{padding:0 .5em}.katex .cd-arrow-pad{padding:0 .55556em 0 .27778em}.katex .mover,.katex .munder,.katex .x-arrow{text-align:center}.katex .boxpad{padding:0 .3em}.katex .fbox,.katex .fcolorbox{border:.04em solid;box-sizing:border-box}.katex .cancel-pad{padding:0 .2em}.katex .cancel-lap{margin-left:-.2em;margin-right:-.2em}.katex .sout{border-bottom-style:solid;border-bottom-width:.08em}.katex .angl{border-right:.049em solid;border-top:.049em solid;box-sizing:border-box;margin-right:.03889em}.katex .anglpad{padding:0 .03889em}.katex .eqn-num:before{content:"(" counter(katexEqnNo) ")";counter-increment:katexEqnNo}.katex .mml-eqn-num:before{content:"(" counter(mmlEqnNo) ")";counter-increment:mmlEqnNo}.katex .mtr-glue{width:50%}.katex .cd-vert-arrow{display:inline-block;position:relative}.katex .cd-label-left{display:inline-block;position:absolute;right:calc(50% + .3em);text-align:left}.katex .cd-label-right{display:inline-block;left:calc(50% + .3em);position:absolute;text-align:right}.katex-display{display:block;margin:1em 0;text-align:center}.katex-display>.katex{display:block;text-align:center;white-space:nowrap}.katex-display>.katex>.katex-html{display:block;position:relative}.katex-display>.katex>.katex-html>.tag{position:absolute;right:0}.katex-display.leqno>.katex>.katex-html>.tag{left:0;right:auto}.katex-display.fleqn>.katex{padding-left:2em;text-align:left}body{counter-reset:katexEqnNo mmlEqnNo}
+
+  .formula .katex { font-size: 1.15em; }
+  .joke { display: grid; justify-items: center; text-align: center; padding-block: 0 10vh; }
+  /* the question and formula pin to the screen; scrolling on while pinned is "trying to scroll past it", which drops the stamp */
+  .joke-track { width: 100%; height: 175vh; }
+  .joke-pin { position: sticky; top: var(--safe-top); min-height: calc(100vh - var(--safe-top)); box-sizing: border-box; padding-block: 4vh; display: grid; gap: 30px; align-content: center; justify-items: center; }
+  .joke-q { margin: 0; font-family: var(--display); font-weight: 700; font-size: clamp(28px, 4.2vw, 56px); line-height: 1.1; text-wrap: balance; }
+  .formula { position: relative; max-width: 100%; overflow-x: auto; box-sizing: border-box; padding: 28px 34px; background: var(--elevated); border: 1px solid var(--border); border-radius: 16px; font-size: clamp(13px, 1.5vw, 23px); color: var(--fg); }
+  .formula math { font-size: 1em; }
+  .joke-a { margin: 0; font-size: clamp(22px, 2.6vw, 36px); font-weight: 600; color: var(--hot); text-wrap: balance; }
+  /* the "Just kidding" rubber stamp slams onto the formula once it is mostly in view (main.tsx adds .stamped) */
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .formula-wrap { position: relative; max-width: 100%; min-width: 0; }
+  .formula-wrap .formula { transition: opacity 0.3s 0.15s, filter 0.3s 0.15s; }
+  .formula-wrap.stamped .formula { opacity: 0.45; filter: blur(0.6px); }
+  .stamp {
+    position: absolute; left: 50%; top: 50%; z-index: 2; pointer-events: none; white-space: nowrap;
+    padding: 0.12em 0.45em; border: 0.09em solid var(--stamp); border-radius: 0.14em; outline: 0.035em solid var(--stamp); outline-offset: 0.07em;
+    font-family: var(--body); font-weight: 900; text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.05;
+    font-size: clamp(28px, 8vw, 128px); color: var(--stamp);
+    background: color-mix(in srgb, var(--canvas) 35%, transparent);
+    /* worn rubber: speckle the ink with turbulence */
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.2 1.75'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.2 1.75'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0; transform: translate(-50%, -50%) rotate(-12deg) scale(2.4);
+  }
+  .formula-wrap.stamped .stamp { animation: stamp 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.25) both; }
+  @keyframes stamp {
+    0% { opacity: 0; transform: translate(-50%, -50%) rotate(-6deg) scale(2.4); }
+    60% { opacity: 0.95; transform: translate(-50%, -50%) rotate(-12deg) scale(0.94); }
+    100% { opacity: 0.92; transform: translate(-50%, -50%) rotate(-12deg) scale(1); }
+  }
+  /* hoverable definitions */
+  .term { position: relative; border-bottom: 2px dotted var(--accent); cursor: help; outline: none; }
+  .term:focus-visible { border-radius: 4px; box-shadow: 0 0 0 2px var(--hot); }
+  .term .tip {
+    position: absolute; top: calc(100% + 12px); left: 50%; transform: translate(calc(-50% + var(--tip-dx, 0px)), -6px); z-index: 10;
+    box-sizing: border-box; width: min(360px, calc(100vw - 56px)); padding: 14px 16px; border-radius: 12px; text-align: left; text-wrap: pretty;
+    background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 18px 40px -12px #000d;
+    font-family: var(--body); font-size: 16px; font-weight: 400; line-height: 1.5; letter-spacing: 0; color: var(--fg);
+    opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+  }
+  .term .tip b { color: var(--hot); }
+  .term:hover .tip, .term:focus .tip, .term:focus-within .tip { opacity: 1; visibility: visible; transform: translate(calc(-50% + var(--tip-dx, 0px)), 0); }
+  .stage {
+    width: min(100%, calc((100svh - var(--safe-top) - var(--hdr, 0px) - 120px) * 1920 / 880)); max-width: 100%; aspect-ratio: 1920 / 880; margin-inline: auto;
+    border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--canvas);
+    box-shadow: 0 30px 80px -30px #000c;
+  }
+  .meter { display: flex; gap: 5px; width: min(100%, 520px); margin-inline: auto; }
+  .meter span { height: 3px; border-radius: 2px; background: var(--border); transition: background 0.3s; }
+  .meter .done { background: var(--accent); }
+  .meter .on { background: var(--hot); }
+
+  .still { display: grid; gap: 24px; padding-bottom: 8vh; }
+  .steps { max-width: 40em; margin: 0 auto; color: var(--muted); display: grid; gap: 8px; }
+
+  /* ---------- code ---------- */
+  .code { margin: 0 auto; padding-block: 5vh 2vh; max-width: 980px; display: grid; gap: 10px; }
+  .code figcaption { font-family: var(--mono); font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .code pre { margin: 0; overflow-x: auto; padding: 22px 24px; background: var(--elevated); border: 1px solid var(--border); border-radius: 14px; font-family: var(--mono); font-size: 16px; line-height: 1.65; color: var(--fg); tab-size: 2; }
+  .code .tc { color: var(--muted); font-style: italic; }
+  .code .ts { color: var(--hot); }
+  .code .tk { color: var(--accent); }
+
+  /* ---------- outro ---------- */
+  .outro { display: grid; gap: 24px; justify-items: center; align-content: center; text-align: center; min-height: 100svh; padding-block: 16vh 14vh; }
+  .outro .lede { max-width: 34em; }
+  .outro-quip { margin: 0; font-size: clamp(20px, 2vw, 28px); font-weight: 600; color: var(--hot); text-wrap: balance; }
+  .outro .code { width: min(100%, 980px); padding-block: 0; text-align: left; }
+  .links { display: flex; flex-direction: column; align-items: stretch; gap: 12px; width: min(100%, 360px); }
+  .links a { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 16px; text-decoration: none; padding: 12px 22px; border: 1px solid var(--border); border-radius: 999px; color: var(--fg); }
+  .links a svg { flex: none; }
+  .links a:first-child { border-color: var(--hot); color: var(--hot); }
+  .links a:hover { background: var(--elevated); }
+
+  /* the formula and the final code each come in a wide and a narrow (more line breaks) version */
+  .formula .narrow, .code pre.narrow { display: none; }
+  @media (max-width: 760px) {
+    .formula .wide, .code pre.wide { display: none; }
+    .formula .narrow, .code pre.narrow { display: block; }
+    .outro .code pre { padding: 16px 14px; font-size: 13px; }
+  }
+  /* ---------- the spreadsheet joke: a fake Google Sheet, always light like the real thing ---------- */
+  .sheet-joke { display: grid; gap: 22px; justify-items: center; width: 100%; padding-block: 4vh 10vh; }
+  .sheet-q { margin: 0; max-width: 30em; font-size: clamp(20px, 2.3vw, 30px); font-weight: 600; text-wrap: balance; }
+  .sheet-q.handoff { margin: 2vh 16px 7vh; }
+  .sheet-q em { color: var(--hot); font-style: normal; }
+  .sheet { position: relative; width: min(100%, 1100px); border-radius: 12px; overflow: hidden; background: #fff; color: #202124; text-align: left;
+    font-family: Arial, Helvetica, sans-serif; font-size: 12px; box-shadow: 0 20px 60px #0009; border: 1px solid #3c4043; transform: rotate(-1deg); }
+  .sheet-top { display: flex; align-items: center; gap: 10px; padding: 10px 14px 4px; background: #f9fbfd; }
+  .sheet-logo { width: 22px; height: 28px; flex: none; }
+  .sheet-title { font-size: 17px; color: #1f1f1f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sheet-saved { margin-left: auto; color: #5f6368; font-size: 12px; white-space: nowrap; }
+  .sheet-menu { display: flex; gap: 14px; padding: 0 14px 8px 46px; background: #f9fbfd; color: #444; font-size: 13px; white-space: nowrap; overflow: hidden; }
+  .sheet-fx { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-block: 1px solid #dadce0; background: #fff; font-family: Consolas, Menlo, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; }
+  .sheet-fx .ref { width: 44px; flex: none; color: #5f6368; border-right: 1px solid #dadce0; }
+  .sheet-fx .fx { color: #5f6368; font-style: italic; font-family: Georgia, serif; }
+  .sheet-grid { height: min(62vh, 520px); overflow: hidden; position: relative; }
+  .sheet-grid::after { content: ""; position: absolute; inset: auto 0 0 0; height: 70px; background: linear-gradient(#fff0, #fff); pointer-events: none; }
+  /* separate borders, so each cell carries its own lines and they scroll with it (collapsed borders are painted by the table and stay put) */
+  .sheet table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+  .sheet th, .sheet td { height: 21px; min-width: 68px; max-width: 68px; padding: 0 5px; border: 0 solid #e2e3e3; border-width: 0 1px 1px 0; white-space: nowrap; overflow: hidden; text-overflow: clip; font-variant-numeric: tabular-nums; }
+  .sheet td { text-align: right; }
+  .sheet th { background: #f8f9fa; color: #5f6368; font-weight: 400; text-align: center; }
+  .sheet th.row { min-width: 34px; max-width: 34px; }
+  .sheet thead th { position: sticky; top: 0; z-index: 1; }
+  .sheet td.h { text-align: left; font-weight: 700; background: #e8f0fe; }
+  .sheet td.y { background: #fff2cc; }
+  .sheet td.g { background: #d9ead3; }
+  .sheet td.r { background: #f4cccc; }
+  .sheet td.err { color: #d93025; font-weight: 700; text-align: center; }
+  .sheet td.sel { outline: 2px solid #1a73e8; outline-offset: -2px; }
+  .sheet td.banner { text-align: left; font-weight: 700; color: #fff; background: #3c78d8; letter-spacing: 0.02em; }
+  .sheet td.t { text-align: left; color: #5f6368; font-style: italic; }
+  .sheet td.sl { text-align: left; font-weight: 700; text-decoration: underline; }
+  .sheet td.ft { text-align: left; color: #188038; font-family: Consolas, Menlo, monospace; font-size: 11px; }
+  .sheet td.x { text-decoration: line-through; }
+  .sheet td.q { color: #d93025; }
+  /* scratch notes spill over empty neighbours, like long text in a real sheet */
+  .sheet td.t:has(+ td:empty), .sheet td.q { overflow: visible; }
+  .sheet-body { animation: sheet-scroll 60s linear infinite; }
+  @keyframes sheet-scroll { from { transform: none; } to { transform: translateY(-50%); } }
+  .sheet-tabs { display: flex; gap: 2px; padding: 6px 10px; background: #f9fbfd; border-top: 1px solid #dadce0; font-size: 12px; color: #444; white-space: nowrap; overflow: hidden; }
+  .sheet-tabs span { padding: 4px 12px; border-radius: 6px 6px 0 0; }
+  .sheet-tabs span:first-child { background: #e1e9f7; color: #0b57d0; font-weight: 700; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes reveal { from { opacity: 0.25; transform: translateY(48px); } to { opacity: 1; transform: none; } }
+  @supports (animation-timeline: view()) {
+    .part-lede > *, .joke-a { animation: reveal linear both; animation-timeline: view(); animation-range: entry 0% cover 30%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .caption, .part-lede > *, .joke-a { animation: none; }
+    .formula-wrap.stamped .stamp { animation: none; opacity: 0.92; transform: translate(-50%, -50%) rotate(-12deg); }
+    .sheet-body { animation: none; }
+  }
+  /* phones, when framed by an app (see the "embedded" class set in <head>): its translucent nav bar floats over the top */
+  @media (max-width: 760px) and (pointer: coarse) {
+    :root.embedded { --safe-top: calc(env(safe-area-inset-top, 0px) + 52px); }
+  }
+  /* phones: the stage's bottom edge stays put, so a longer caption grows upward instead of pushing the stage down.
+     Tall screens keep the stage a little below the middle; short screens drop it lower to leave the caption room. */
+  @media (max-width: 760px) {
+    .sticky { justify-content: flex-end; padding-bottom: max(16px, min(28svh, 100svh - 520px)); box-sizing: border-box; }
+  }
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .stage { border-radius: 10px; }
+    .sticky { gap: 10px; }
+    .formula { padding: 18px 14px; }
+    .sheet { transform: none; }
+  </style>
+</head>
+<body>
+
+<main>
+  <header class="hero">
+    <p class="eyebrow">@yipe/dice, explained</p>
+    <h1>How dice become DPR</h1>
+    <p class="lede">We do the math so you don't have to. But how do you model DPR accurately?</p>
+    <ul class="hero-stats" aria-label="The running example">
+      <li>Monk 5 / Rogue 1</li>
+      <li>+7 to hit</li>
+      <li>Martial Arts 1d8 + 4</li>
+      <li>AC 15</li>
+      <li>Stunning Strike DC 14</li>
+      <li>DPR per turn <b>35.37</b></li>
+    </ul>
+    <p class="cue">Scroll to roll</p>
+  </header>
+
+  <div id="prologue"></div>
+
+  <section class="joke" aria-labelledby="joke-q">
+    <div class="joke-track" id="joke-track">
+      <div class="joke-pin">
+        <p class="joke-q" id="joke-q">Modeling a Monk 5 / Rogue 1 is as easy as…</p>
+        <div class="formula-wrap" id="formula-wrap">
+          <div class="formula" id="formula" role="math" aria-label="The turn's damage per round as one expectation over every miss, hit and crit path"></div>
+          <div class="stamp" aria-hidden="true">Just kidding</div>
+        </div>
+      </div>
+    </div>
+    <p class="visually-hidden">Just kidding.</p>
+    <div class="sheet-joke">
+      <p class="sheet-q">Most people do it like this. <em>But even this is finicky, and often just an estimation.</em></p>
+      <figure class="sheet" aria-label="A sprawling spreadsheet of hand-entered DPR numbers, with formula errors and highlighted guesses">
+        <div class="sheet-top">
+          <svg class="sheet-logo" viewBox="0 0 22 28" aria-hidden="true"><path d="M2 0h12l8 8v18a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z" fill="#0f9d58"/><path d="M14 0l8 8h-6a2 2 0 0 1-2-2z" fill="#87ceac"/><path d="M5 12h12v10H5zm2 2v2h3v-2zm5 0v2h3v-2zm-5 4v2h3v-2zm5 0v2h3v-2z" fill="#fff"/></svg>
+          <span class="sheet-title">Monk Rogue DPR FINAL v7 (real) (copy of copy)</span>
+          <span class="sheet-saved">Last edit was 4 minutes ago</span>
+        </div>
+        <div class="sheet-menu" aria-hidden="true"><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Data</span><span>Tools</span><span>Extensions</span><span>Help</span></div>
+        <div class="sheet-fx" aria-hidden="true"><span class="ref" id="sheet-ref">T19</span><span class="fx">fx</span><span id="sheet-formula">=H19+K19+M19+N19+P19+S19</span></div>
+        <div class="sheet-grid" aria-hidden="true">
+          <table><thead id="sheet-head"></thead><tbody class="sheet-body" id="sheet-body"></tbody></table>
+        </div>
+        <div class="sheet-tabs" aria-hidden="true"><span>DPR v7</span><span>Vex (guess)</span><span>Sneak??</span><span>stun TODO</span><span>old DON'T USE</span><span>Sheet14</span></div>
+      </figure>
+    </div>
+    <p class="sheet-q handoff">That's why we made DPRcalc and @yipe/dice: to do this math exactly, every time.</p>
+    <p class="joke-a">Here's how it works under the covers.<br/>Let's step through it.</p>
+  </section>
+
+  <div id="parts"></div>
+
+  <section class="outro" id="your-turn" aria-labelledby="your-turn-title">
+    <p class="eyebrow">Your turn</p>
+    <h2 id="your-turn-title">Run the Numbers on Your Own Attacks</h2>
+    <div class="links">
+      <a href="https://dprcalc.com/dice"><svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" aria-hidden="true" height="1.35em" width="1.35em" xmlns="http://www.w3.org/2000/svg"><path d="M138.798 35.342L28.73 114.268l95.777 29.095 111.305-87.09-97.014-20.93zm112.986 31.082l-118.047 89.96 51.07 131.102 8.534-7.455 4.23-15.708a18.338 13.102 76.863 0 1-9.08-20.45 18.338 13.102 76.863 0 1 10.997-13.727 18.338 13.102 76.863 0 1 3.62.53 18.338 13.102 76.863 0 1 3.113 1.544l7.94-29.48a9 9 0 0 1 .353-1.04 9 9 0 0 1 .058-.128 9 9 0 0 1 .32-.685 9 9 0 0 1 .09-.153 9 9 0 0 1 .37-.625 9 9 0 0 1 .534-.723 9 9 0 0 1 .066-.074 9 9 0 0 1 .54-.594 9 9 0 0 1 .65-.593 9 9 0 0 1 .004-.002 9 9 0 0 1 .46-.342 9 9 0 0 1 .266-.197 9 9 0 0 1 .502-.3 9 9 0 0 1 .27-.157 9 9 0 0 1 .44-.208 9 9 0 0 1 .38-.178 9 9 0 0 1 .437-.152 9 9 0 0 1 .41-.143 9 9 0 0 1 .404-.1 9 9 0 0 1 .47-.114 9 9 0 0 1 .51-.07 9 9 0 0 1 .37-.05 9 9 0 0 1 .01 0 9 9 0 0 1 .01-.003l33.624-2.873a18.338 13.102 76.863 0 1 10.326-9.777 18.338 13.102 76.863 0 1 3.622.53 18.338 13.102 76.863 0 1 8.527 7.327l13.043-1.113-39.442-123.783zM137.25 74.03a9.8 19.77 77.916 0 1 12.798 8.734 9.8 19.77 77.916 0 1-21.938 11.998 9.8 19.77 77.916 0 1-16.57-8.602 9.8 19.77 77.916 0 1 21.938-12 9.8 19.77 77.916 0 1 3.77-.13zm100.228 23.517a18.338 13.102 76.863 0 1 .002 0 18.338 13.102 76.863 0 1 3.62.53 18.338 13.102 76.863 0 1 12.112 21.94 18.338 13.102 76.863 0 1-14.617 13.196 18.338 13.102 76.863 0 1-12.114-21.94 18.338 13.102 76.863 0 1 10.998-13.726zM24.22 131.71l46.992 114.124 94.236 40.38-45.988-125.57-95.24-28.935zm147.886 17.43a18.338 13.102 76.863 0 1 3.622.528 18.338 13.102 76.863 0 1 12.11 21.94 18.338 13.102 76.863 0 1-14.616 13.197 18.338 13.102 76.863 0 1-12.112-21.94 18.338 13.102 76.863 0 1 10.996-13.726zm-75.123 13.016a19.454 9.134 59.254 0 1 16.955 15.078 19.454 9.134 59.254 0 1-.425 19.485A19.454 9.134 59.254 0 1 95.6 181.78a19.454 9.134 59.254 0 1 .424-19.48 19.454 9.134 59.254 0 1 .96-.144zm263.393 40.21l-112.102 9.577 113.762 79.926 113.598-16.956-115.258-72.55zM70.82 212.022A19.454 9.134 59.254 0 1 87.777 227.1a19.454 9.134 59.254 0 1-.425 19.484 19.454 9.134 59.254 0 1-17.913-14.938 19.454 9.134 59.254 0 1 .425-19.482 19.454 9.134 59.254 0 1 .96-.14zm157.378 7.813L186.66 374.023l115.616 99.454 47.147-168.47-121.225-85.17zm126.987 11.168a21.76 8.898 15.267 0 1 19.693 4.783 21.76 8.898 15.267 0 1 7.607 14.244 21.76 8.898 15.267 0 1-28.886-3.182 21.76 8.898 15.267 0 1-7.61-14.244 21.76 8.898 15.267 0 1 9.195-1.6zM487.78 291.3L366.9 309.343l-46.823 167.316 116.297-31.77L487.78 291.3zm-181.808 10.8a25.834 15.573 84.277 0 1 4.238.943 25.834 15.573 84.277 0 1 12.873 31.72 25.834 15.573 84.277 0 1-18.105 17.893 25.834 15.573 84.277 0 1-12.874-31.72 25.834 15.573 84.277 0 1 13.868-18.836zm154.086 11.636a13.237 21.96 28.62 0 1 7.673 4.13 13.237 21.96 28.62 0 1-6.176 28.435 13.237 21.96 28.62 0 1-21.287 3.878 13.237 21.96 28.62 0 1 6.175-28.434 13.237 21.96 28.62 0 1 13.616-8.008zM391.362 324.4a13.237 21.96 28.62 0 1 7.672 4.13 13.237 21.96 28.62 0 1-6.176 28.435 13.237 21.96 28.62 0 1-21.287 3.877 13.237 21.96 28.62 0 1 6.177-28.434 13.237 21.96 28.62 0 1 13.615-8.008zm-173.996 13.305a25.834 15.573 84.277 0 1 4.24.945 25.834 15.573 84.277 0 1 12.872 31.72 25.834 15.573 84.277 0 1-18.106 17.894 25.834 15.573 84.277 0 1-12.873-31.72 25.834 15.573 84.277 0 1 13.866-18.84zm212.278 60.87a13.237 21.96 28.62 0 1 7.67 4.13 13.237 21.96 28.62 0 1-6.174 28.434 13.237 21.96 28.62 0 1-21.287 3.876 13.237 21.96 28.62 0 1 6.175-28.434 13.237 21.96 28.62 0 1 13.616-8.008zm-70.332 19.488a13.237 21.96 28.62 0 1 7.67 4.132 13.237 21.96 28.62 0 1-6.174 28.434 13.237 21.96 28.62 0 1-21.287 3.874 13.237 21.96 28.62 0 1 6.176-28.434 13.237 21.96 28.62 0 1 13.616-8.007z"></path></svg><span>Try DPRcalc's dice calculator</span></a>
+      <a href="https://dprcalc.com/analyze"><svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 512 512" aria-hidden="true" height="1.35em" width="1.35em" xmlns="http://www.w3.org/2000/svg"><path d="M254.1 18.63c-81.4 0-231.43 155.97-171.63 300.77 8 25.3 27.83 50.4 49.13 77.1 24.4 30.6 51.6 63.2 68.7 96.9h20.5c-18.1-39.8-48.5-75.9-74.6-108.6-27.4-34.3-48.73-65.2-48.73-87.9.1-9.1 2.23-18.1 5.53-26.3 23-61.4 114-119.7 148.5-135l3.6-2 3.9 1.3c60.9 20.9 129.3 66.7 154 135.7 4.1 11.7 5.9 18 5.6 27.3-.5 15.8-24.5 54.7-55 88.7-29.1 32.4-62.4 67.7-80 106.7h20.5c16.8-32.2 46.2-64 73.3-94.2 23.2-25.6 45.3-50 54.9-74.8 52.9-124-99.2-305.67-178.2-305.67zm.8 135.47c-38.7 21.5-85.1 52.2-113.7 88.2 9.7 83 59 146.1 118.3 146.1 59.2 0 108.3-62.7 118.2-145.3-28.9-42.1-78-72.9-122.8-89zm-58.3 83h2.4c13.1.1 26.1 2.7 39.1 7.4-16.8 40.6-59 42-78.1 0 12.2-4.8 24.4-7.2 36.6-7.4zm124.9 0c13-.1 26 2.3 39.1 7.4-19.2 42-61.3 40.6-78.2 0 13.1-4.7 26.1-7.3 39.1-7.4z"></path></svg><span>Load your character</span></a>
+      <a href="https://github.com/yipe/dice"><svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 496 512" aria-hidden="true" height="1.35em" width="1.35em" xmlns="http://www.w3.org/2000/svg"><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"></path></svg><span>Code it yourself</span></a>
+    </div>
+    <p class="lede">You can use dprcalc to load a character and explore yourself, or you can model this entire chain of attacks with this code.</p>
+    <p class="outro-quip">You'd think all of this would be a ton of code, but it's not complex at all.</p>
+    <figure class="code" id="outro-code"></figure>
+  </section>
+</main>
+
+<script>
+// The fake spreadsheet. Every cell is a real (if simplified) DPR formula, so the sheet holds up to a squint,
+// plus a few deliberate, subtle mistakes (MISTAKES below) of the kind real DPR sheets pick up.
+(() => {
+  const head = document.getElementById("sheet-head"), body = document.getElementById("sheet-body");
+  if (!head || !body) return;
+  const COLS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  const LABELS = ["build", "AC", "to hit", "P(hit)", "P(crit)", "dmg", "crit dmg", "sword", "P(vex)", "P(hit) adv", "sword 2", "scimitar", "fist", "fist 2", "P(SA)", "SA dmg", "fail save", "P(stun)", "stun bonus", "subtotal", "DPR", "x0.95 fudge", "old DPR", "diff", "% diff", "check"];
+  // one block per build variant, each opened by a banner row saying what changed
+  const BLOCKS = [
+    { key: "base", hit: 7, mod: 4, banner: "BASE: Monk 5 / Rogue 1, Dex 18 (+4), PB +3, so +7 to hit" },
+    { key: "Dex 16", hit: 6, mod: 3, banner: "WHAT IF: Dex 16 (+3) instead, so +6 to hit and +3 dmg" },
+    { key: "Lv 9", hit: 8, mod: 4, banner: "LATER: Monk 8 / Rogue 1, PB +4, so +8 to hit (ignore new features for now)" },
+    { key: "Dex 20", hit: 7, mod: 5, banner: "WHAT IF: Dex 20 (+5) at Lv 8, +8 to hit?? using +7 for now" },
+  ];
+  const ACS = Array.from({ length: 21 }, (_, i) => 10 + i);
+  const clamp = (x) => Math.min(0.95, Math.max(0.05, x));
+  // block index and AC -> the deliberate mistake on that row
+  const MISTAKES = {
+    "0:16": "transposed", // dmg typed as 8.05 instead of 8.50
+    "0:25": "noScimitar", // subtotal skips the scimitar (the selected cell, so the formula bar shows it)
+    "0:30": "noNat20", // P(hit) 0.00, forgot a natural 20 always hits
+    "1:13": "doubledMod", // crit dmg doubles the +3 too (15 instead of 12)
+    "1:20": "twoAttacks", // P(SA) 0.58, only counts two finesse attacks (should be 0.73)
+    "2:16": "roundDown", // DPR 31.59 rounded down to 31.5
+  };
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const f2 = (x) => x.toFixed(2);
+  const td = (v, cls = "") => `<td${cls ? ` class="${cls}"` : ""}>${v}</td>`;
+  head.innerHTML = "<tr><th class='row'></th>" + COLS.map((c) => `<th>${c}</th>`).join("") + "</tr>";
+  const rows = [];
+  let n = 0, selRow = 0;
+  BLOCKS.forEach((b, bi) => {
+    rows.push(`<tr><th class="row">${++n}</th><td class="banner" colspan="${COLS.length}">${b.banner}</td></tr>`);
+    rows.push(`<tr><th class="row">${++n}</th>${LABELS.map((l) => td(l, "h")).join("")}</tr>`);
+    for (const ac of ACS) {
+      n++;
+      const m = MISTAKES[`${bi}:${ac}`];
+      const hit = m === "noNat20" ? 0 : clamp((21 + b.hit - ac) / 20);
+      const crit = 0.05;
+      const dmg = m === "transposed" ? 8.05 : 4.5 + b.mod;
+      const critDmg = m === "doubledMod" ? 9 + 2 * b.mod : 9 + b.mod;
+      const sword = (hit - crit) * dmg + crit * critDmg;
+      const hitAdv = 1 - (1 - hit) ** 2, critAdv = 1 - 0.95 ** 2;
+      const advEv = (hitAdv - critAdv) * dmg + critAdv * critDmg;
+      const sword2 = hit * advEv + (1 - hit) * sword; // Vex: advantage when sword 1 hit
+      const scim = (hit - crit) * 4.5 + crit * 9; // Nick: no Dex mod
+      const fist = sword, fail = 0.5;
+      const pSA = m === "twoAttacks" ? 1 - (1 - hit) ** 2 : 1 - (1 - hit) ** 3;
+      const sa = pSA * 3.5;
+      const pStun = hit * fail;
+      const stunBonus = pStun * (advEv - fist); // fist 2 rolls with advantage
+      const sub = sword + sword2 + (m === "noScimitar" ? 0 : scim) + fist + fist + sa + stunBonus;
+      const dpr = m === "roundDown" ? Math.floor(sub * 10) / 10 : Math.round(sub * 10) / 10;
+      const old = sub * (0.9 + 0.2 * rnd());
+      const diff = sub - old;
+      if (m === "noScimitar") selRow = n;
+      rows.push(`<tr><th class="row">${n}</th>` + [
+        td(b.key, "t"), td(ac), td(b.hit), td(f2(hit)), td(f2(crit)), td(f2(dmg)), td(f2(critDmg)), td(f2(sword)), td(f2(hit)), td(f2(hitAdv)), td(f2(sword2)),
+        td(f2(scim)), td(f2(fist)), td(f2(fist)), td(f2(pSA)), td(f2(sa)), td(f2(fail)), td(f2(pStun)), td(f2(stunBonus)),
+        td(f2(sub), m === "noScimitar" ? "sel" : ""), td(dpr.toFixed(1), "g"), td(f2(sub * 0.95), "y"), td(f2(old)), td(f2(diff)),
+        old ? td(`${((diff / old) * 100).toFixed(1)}%`) : td("#DIV/0!", "err"),
+        rnd() < 0.08 ? td("#REF!", "err") : td(Math.abs(diff / old) > 0.07 ? "??" : "ok", "t"),
+      ].join("") + "</tr>");
+    }
+    // after the base block, someone worked out the stun odds in spare cells (all of it correct arithmetic)
+    if (bi === 0) {
+      const sparse = (cells) => `<tr><th class="row">${++n}</th>${COLS.map((_, i) => cells[i] ?? "<td></td>").join("")}</tr>`;
+      rows.push(sparse({}));
+      rows.push(sparse({ 0: td("stun odds", "sl") }));
+      rows.push(sparse({ 0: td("P(fail save)", "t"), 1: td("0.5"), 2: td("=10/20", "ft"), 3: td("11/20", "t x"), 4: td("d20+3 vs DC 14, fails on 1 to 10", "t") }));
+      rows.push(sparse({ 0: td("fist 1 stuns", "t"), 1: td("0.325"), 2: td("=0.65*0.5", "ft") }));
+      rows.push(sparse({ 0: td("fist 1 miss, 2 stuns", "t"), 1: td("0.11375"), 2: td("=0.35*0.65*0.5", "ft") }));
+      rows.push(sparse({ 0: td("total", "t"), 1: td("0.43875"), 2: td("=B27+B28", "ft"), 3: td("but fist 2 is the last attack, nothing left to stun for??", "t q") }));
+      rows.push(sparse({ 0: td("use", "t"), 1: td("0.325", "y"), 2: td("#ERROR!", "err"), 4: td("0.65"), 5: td("x2?", "t"), 7: td("13") }));
+      rows.push(sparse({}));
+    }
+  });
+  // the formula bar shows the selected subtotal: sword + sword 2 + fist + fist 2 + SA + stun, with the scimitar (L) left out
+  const r = selRow;
+  document.getElementById("sheet-ref").textContent = `T${r}`;
+  document.getElementById("sheet-formula").textContent = `=H${r}+K${r}+M${r}+N${r}+P${r}+S${r}`;
+  const html = rows.join("");
+  // two copies so the endless scroll loops seamlessly, renumbered so the row numbers keep counting
+  body.innerHTML = html + html.replace(/<th class="row">(\d+)<\/th>/g, (_, d) => `<th class="row">${+d + n}</th>`);
+})();
+</script>
+<script src="app.js"></script>
+</body>
+</html>
