@@ -41,6 +41,9 @@ for (const [name, viewport] of RUNS) {
   }
   const wide = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   if (wide > 0) problems.push(`${name}: page scrolls sideways by ${wide}px`);
+  // the final code box shrinks its font to fit rather than scroll sideways
+  const codeOver = await page.evaluate(() => { const pre = [...document.querySelectorAll("#outro-code pre")].find((p) => p.offsetParent); return pre ? pre.scrollWidth - pre.clientWidth : -1; });
+  if (codeOver !== 0) problems.push(`${name}: final code box ${codeOver < 0 ? "is missing" : `scrolls sideways by ${codeOver}px`}`);
   const parts = await page.evaluate(() => document.querySelectorAll("section.part").length);
   // with each part on screen, its stage must have drawn something (stages mount lazily, so check them one at a time)
   for (let i = 0; i < parts; i++) {

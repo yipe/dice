@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Player, type PlayerRef } from "@remotion/player";
 import { ShowChrome } from "../src/chrome";
@@ -244,14 +244,18 @@ if (mount) createRoot(mount).render(<App />);
 const outroCode = document.getElementById("outro-code");
 // phones get the same code broken onto shorter lines (also checked by check-snippets.mjs), so it fits without scrolling
 const NARROW_CODE = CODE["../snippets/part13-narrow.ts"];
-if (outroCode)
-  createRoot(outroCode).render(
+// React renders asynchronously, so the code box fits itself once it is actually on the page
+const OutroCode: React.FC = () => {
+  useLayoutEffect(() => fitAll(), []);
+  return (
     <>
       <figcaption>The @yipe/dice code</figcaption>
       <pre className="wide"><code>{highlight(code(13).trim())}</code></pre>
       <pre className="narrow"><code>{highlight(NARROW_CODE.trim())}</code></pre>
-    </>,
+    </>
   );
+};
+if (outroCode) createRoot(outroCode).render(<OutroCode />);
 const formula = document.getElementById("formula");
 if (formula) formula.innerHTML = `<div class="wide">${FORMULA_HTML}</div><div class="narrow">${FORMULA_NARROW_HTML}</div>`;
 // shrink the formula and the outro code until they fit their box, so phones never scroll them sideways
