@@ -10,7 +10,11 @@ const fist = attack.onHit(d8.plus(4)).tagged("unarmed");
 const sneak = [d6, { of: "finesse" }] as const;                                     // Sneak Attack
 const stun = [stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" }] as const; // Stunning Strike
 
-turn([sword, sword, scimitar, fist, fist]).onFirstHit(...sneak).mean();                           // 29.7576
-turn([vexSword, vexSword, scimitar, fist, fist]).onFirstHit(...sneak).mean();                     // 32.1409
-turn([vexSword, vexSword, scimitar, fist, fist]).onFirstHit(...sneak).onFirstHit(...stun).mean(); // 33.5367
-turn([fist, fist, vexSword, vexSword, scimitar]).onFirstHit(...sneak).onFirstHit(...stun).mean(); // 35.3698
+const normal = turn([sword, sword, scimitar, fist, fist]);
+const vexed = turn([vexSword, vexSword, scimitar, fist, fist]);
+const fistsFirst = turn([fist, fist, vexSword, vexSword, scimitar]);
+
+normal.onFirstHit(...sneak).mean();                         // 29.7576
+vexed.onFirstHit(...sneak).mean();                          // 32.1409
+vexed.onFirstHit(...sneak).onFirstHit(...stun).mean();      // 33.5367
+fistsFirst.onFirstHit(...sneak).onFirstHit(...stun).mean(); // 35.3698
