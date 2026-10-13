@@ -1,0 +1,74 @@
+name: Explainer
+
+# Builds and checks the "How Dice Become DPR" page in explainer/, and deploys it to GitHub Pages from main only.
+# Pull requests that touch it get the same build and checks, without the deploy.
+on:
+  push:
+    branches: [main]
+    paths: ["explainer/**", ".github/workflows/explainer.yml"]
+  pull_request:
+    paths: ["explainer/**", ".github/workflows/explainer.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: explainer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: explainer/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # Typecheck, the data modules' asserts, every code snippet's value, and the joke formula's exact sum.
+      - name: Check numbers
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Scrolls the built page at desktop and phone sizes; fails on any page error, missing asset or sideways scroll.
+      - name: Smoke test
+        run: npm run smoke
+
+      - name: Upload page
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: explainer/site
+
+  # Only main publishes: a manual run on another branch still builds and checks, but never deploys.
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
