@@ -22,8 +22,14 @@ const url = `http://localhost:${server.address().port}/`;
 
 const problems = [];
 const browser = await chromium.launch();
-for (const [name, viewport] of [["desktop", { width: 1440, height: 900 }], ["phone", { width: 390, height: 844 }]]) {
-  const page = await browser.newPage({ viewport, isMobile: name === "phone", hasTouch: name === "phone" });
+const RUNS = [
+  ["desktop", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+  // reduced motion swaps the scroll-driven stages for one still frame per part
+  ["reduced motion", { width: 1440, height: 900 }],
+];
+for (const [name, viewport] of RUNS) {
+  const page = await browser.newPage({ viewport, isMobile: name === "phone", hasTouch: name === "phone", reducedMotion: name === "reduced motion" ? "reduce" : "no-preference" });
   page.on("pageerror", (e) => problems.push(`${name}: page error: ${e.message}`));
   page.on("response", (r) => r.status() >= 400 && problems.push(`${name}: ${r.status()} ${r.url()}`));
   await page.goto(url, { waitUntil: "load" });
@@ -36,6 +42,13 @@ for (const [name, viewport] of [["desktop", { width: 1440, height: 900 }], ["pho
   const wide = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   if (wide > 0) problems.push(`${name}: page scrolls sideways by ${wide}px`);
   const parts = await page.evaluate(() => document.querySelectorAll("section.part").length);
+  // with each part on screen, its stage must have drawn something (stages mount lazily, so check them one at a time)
+  for (let i = 0; i < parts; i++) {
+    await page.evaluate((k) => document.querySelectorAll("section.part .stage")[k].scrollIntoView({ block: "center" }), i);
+    await page.waitForTimeout(250);
+    const drawn = await page.evaluate((k) => document.querySelectorAll("section.part .stage")[k].children.length > 0, i);
+    if (!drawn) problems.push(`${name}: part ${i} (${await page.evaluate((k) => document.querySelectorAll("section.part")[k].id, i)}) has an empty stage`);
+  }
   console.log(`${name}: scrolled ${height}px through ${parts} parts`);
   if (parts < 10) problems.push(`${name}: only ${parts} parts rendered`);
   await page.close();
