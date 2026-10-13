@@ -79,7 +79,7 @@ export const Ep13Finale: React.FC = () => {
             <div style={{ position: "absolute", left: NUM.side + NUM.slot / 2 - NUM.r, top: DOT_TOP - NUM.r, width: 2 * NUM.r, height: 2 * NUM.r, borderRadius: "50%", background: C.hot, boxShadow: boom > 0 ? `0 0 ${40 * Math.exp(-boom / 25)}px ${C.hot}` : `0 0 14px ${C.hot}` }} />
           </div>
           <div style={{ fontFamily: F.mono, fontSize: 34, fontWeight: 600, marginTop: 18, opacity: sp(T.boom + 10) }}>damage per round</div>
-          <div style={{ fontSize: 28, color: C.muted, marginTop: 26, opacity: sp(T.boom + 50) * (1 - up) }}>Monk 5 / Rogue 1 at AC 15, Unarmed Strikes first: Stunning Strike, Vex and Sneak Attack.</div>
+          <div style={{ fontSize: 28, color: C.muted, marginTop: 26, opacity: sp(T.boom + 50) * (1 - up) }}>Monk 5 / Rogue 1 vs AC 15, Flurry of Blows first with Stunning Strike, then Vex, Nick, and Sneak Attack.</div>
         </div>
       )}
 
