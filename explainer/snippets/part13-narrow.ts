@@ -5,21 +5,19 @@ import {
   saveDC, stunningStrike, vex,
 } from "@yipe/dice/dnd5e";
 
-const pb = 3;
-const mod = 4;
-const monkDie = d8;
-const attack = d20.plus(pb + mod).ac(15);
+// +3 proficiency, +4 Dex
+const attack = d20.plus(7).ac(15);
 
 const shortsword = attack
-  .onHit(monkDie.plus(mod))
+  .onHit(d8.plus(4))
   .tagged("finesse")
   .onEveryHit(vex());
 // Nick: no Dex mod
 const scimitar = attack
-  .onHit(monkDie)
+  .onHit(d8)
   .tagged("finesse");
 const fist = attack
-  .onHit(monkDie.plus(mod))
+  .onHit(d8.plus(4))
   .tagged("unarmed");
 
 turn([
