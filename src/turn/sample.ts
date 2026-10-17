@@ -123,9 +123,11 @@ function payloadFor(rider: EvaluatedRider, sourceId: string): RiderPayload {
 
 /**
  * The dice of folded rider `id` landing on `sourceId` in `mode`, or `undefined` for a chip (see
- * {@link sampleRiderDice}). A payload read per attack rolls what its `rollAt(sourceId)` returns:
- * the landing's roll itself, `onCrit` as given and never doubled again. Vulnerability is applied
- * here, once, as the plan's `vulnerable()` payload does: the total doubled as a whole roll.
+ * {@link sampleRiderDice}). A plain payload's total is doubled where `vulnerable`, as the plan's
+ * `vulnerable()` payload is. A payload read per attack rolls what its `rollAt(sourceId)` returns,
+ * which is exact for that landing (`onCrit` as given, never doubled again; its `vulnerable` pair
+ * where the landing used up a vulnerability). Without that pair a vulnerable landing is a chip:
+ * `at(sourceId).vulnerable` is the law and need not be the plain roll doubled.
  */
 function sampleFoldedRider(
   plan: TurnPlan,
@@ -137,11 +139,13 @@ function sampleFoldedRider(
   rng: Rng
 ): RollSample | undefined {
   const contextual = plan.payloadAt.get(id);
-  const drawn =
-    contextual === undefined
-      ? sampleRiderDice(payloadFor(rider, sourceId), mode, rng)
-      : contextual.rollAt?.(sourceId)?.[mode === "crit" ? "onCrit" : "onHit"].sample(rng);
-  return drawn === undefined || !vulnerable ? drawn : { ...drawn, total: drawn.total * 2 };
+  if (contextual === undefined) {
+    const drawn = sampleRiderDice(payloadFor(rider, sourceId), mode, rng);
+    return drawn === undefined || !vulnerable ? drawn : { ...drawn, total: scaleValue(drawn.total, 2, "floor") };
+  }
+  const rolls = contextual.rollAt?.(sourceId);
+  const pair = vulnerable ? rolls?.vulnerable : rolls;
+  return pair?.[mode === "crit" ? "onCrit" : "onHit"].sample(rng);
 }
 
 /** Whether two or more kept dice of the base pool show the same face. */
@@ -164,8 +168,9 @@ function matchedOf(builder: AttackBuilder, sample: AttackSample): boolean {
 
 /**
  * The builder a row rolls with, and the context its `sample` still has to apply: the row's own
- * context for a bare builder; `undefined` for one `rollUnder(context)` returned, which is already
- * in it (applying it again would, for a save, subtract the penalty dice twice).
+ * context for a bare builder (its `sample(rng, context)` re-derives and scales for it); `undefined`
+ * for one `rollUnder(context)` returned, whose PMF is already exactly `under(context)` (roll type,
+ * penalty dice and vulnerability included), so it is sampled bare and never scaled here.
  */
 interface Roller {
   builder: AttackBuilder | SaveBuilder | RollBuilder;
@@ -216,16 +221,14 @@ interface RowRoll {
 }
 
 /**
- * One roll of a row with its builder: the dice, the landing and its own damage. A builder's
- * `sample(rng, context)` doubles a landing for `context.vulnerable` itself; one already in its
- * context is sampled without one, so the doubling is applied here the same way (a landing, or
- * a failed save, as a whole roll).
+ * One roll of a row with its builder: the dice, the landing and its own damage. A bare builder's
+ * `sample(rng, context)` applies the context, `context.vulnerable` included; a `rollUnder` builder
+ * (`context` undefined) is exact as it is. A plain `RollBuilder` row is one unlabelled payload,
+ * doubled here where the row is vulnerable, as the plan's `under` for it is.
  */
 function sampleRow(step: Step, { builder, context }: Roller, vulnerable: boolean, rng: Rng): RowRoll {
-  const doubled = (total: number): number => (vulnerable && context === undefined ? scaleValue(total, 2, "floor") : total);
   if (builder instanceof AttackBuilder) {
     const sample = builder.sample(rng, context);
-    if (sample.outcome !== "miss") sample.total = doubled(sample.total);
     return {
       outcome: sample.outcome,
       result: sample.outcome,
@@ -237,7 +240,6 @@ function sampleRow(step: Step, { builder, context }: Roller, vulnerable: boolean
   if (builder instanceof SaveBuilder) {
     const sample = builder.sample(rng, context);
     const failed = sample.outcome === "save-fail";
-    if (failed) sample.total = doubled(sample.total);
     const dealt = sample.total > 0;
     return {
       outcome: "hit",
@@ -251,7 +253,7 @@ function sampleRow(step: Step, { builder, context }: Roller, vulnerable: boolean
   return {
     outcome: "hit",
     result: "hit",
-    total: vulnerable ? scaleValue(sample.total, 2, "floor") : sample.total,
+    total: vulnerable && context !== undefined ? scaleValue(sample.total, 2, "floor") : sample.total,
     dice: traced(sample.dice, "damage", "you", step.id),
   };
 }
@@ -413,7 +415,8 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       let chips = false;
       for (const [id] of candidates[0]?.riders ?? []) {
         const rider = plan.riderOf.get(id) as EvaluatedRider;
-        const any = rider.landing === "any";
+        // Lands on anything, as the plan folds it (`fold`): never a rider folded to land on crits only.
+        const any = rider.landing === "any" && !plan.perHitCritOnly.has(id);
         // A rider whose coin is not a walk flag takes it per landing: the plan thins its payload
         // (`thin`), so a failed coin deals 0 and the landing still counts. A rider whose dice
         // joined the row's roll deals nothing beside it.

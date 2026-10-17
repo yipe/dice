@@ -108,8 +108,37 @@ describe("Turn.sample law", () => {
       return { onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } };
     },
   };
-  /** The same payload with the rolls behind it (`rollAt`): the plan folds `at`, the sampler rolls these dice. */
-  const perAttackRolled: ContextualPayload = { ...perAttack, rollAt: () => ({ onHit: roll(2, 6), onCrit: roll(4, 6) }) };
+  /** The same payload with the rolls behind it (`rollAt`), its vulnerable pair given: the plan folds `at`, the sampler rolls these dice. */
+  const perAttackRolled: ContextualPayload = {
+    ...perAttack,
+    rollAt: () => ({ onHit: roll(2, 6), onCrit: roll(4, 6), vulnerable: { onHit: roll(2, 6).scaleResult(2), onCrit: roll(4, 6).scaleResult(2) } }),
+  };
+  /** A resisted payload (halved) that a vulnerability lands with the scales off and doubled: `at().vulnerable` is 4x the plain roll's law, not 2x. */
+  const resistedPayload = (rollAt: ContextualPayload["rollAt"]): ContextualPayload => ({
+    at: () => ({
+      onHit: roll(2, 6).half().toPMF(),
+      onCrit: roll(4, 6).half().toPMF(),
+      vulnerable: { onHit: roll(2, 6).scaleResult(2).toPMF(), onCrit: roll(4, 6).scaleResult(2).toPMF() },
+    }),
+    ...(rollAt ? { rollAt } : {}),
+  });
+  /** The resisted payload with its rolls, vulnerable pair included: dice on both branches. */
+  const resistedRolled = resistedPayload(() => ({
+    onHit: roll(2, 6).half(),
+    onCrit: roll(4, 6).half(),
+    vulnerable: { onHit: roll(2, 6).scaleResult(2), onCrit: roll(4, 6).scaleResult(2) },
+  }));
+  /** The resisted payload with plain rolls only: a vulnerable landing falls back to the chip. */
+  const resistedPlainRolls = resistedPayload(() => ({ onHit: roll(2, 6).half(), onCrit: roll(4, 6).half() }));
+  /** A row resisted (halved) that a vulnerability lands with the scales off and doubled; `rollUnder` is exact for both. */
+  const resistedRay = d20.plus(6).ac(16).onHit(roll(2, 8).half());
+  const exposedRay = d20.plus(6).ac(16).onHit(roll(2, 8).scaleResult(2));
+  const scaledRow: ContextualSource = {
+    rowCheck: resistedRay.rowCheck,
+    under: (context: RowContext, eps?: number) => (context.vulnerable ? exposedRay : resistedRay).under({ ...context, vulnerable: false }, eps),
+    rollUnder: (context: RowContext) => (context.vulnerable ? exposedRay : resistedRay).rollUnder({ ...context, vulnerable: false }),
+  };
+  const vulnerableSword = sword.onEveryHit(vulnerability().untilNextHit());
   const breathCheck = d20.plus(3).dc(15).ability("wis");
   /** A save row whose `rollUnder` builds its check in the context itself (`DCBuilder.rolledIn`). */
   const penalisedSave: ContextualSource = {
@@ -151,6 +180,11 @@ describe("Turn.sample law", () => {
     ["rider payload per attack with rollAt: dice, not a chip", turn([sword, sword]).rider({ on: "first-hit", damage: perAttackRolled })],
     ["rider payload per attack with rollAt, happens 0.75", turn([sword, sword]).rider({ on: "first-hit", damage: perAttackRolled, happens: 0.75 })],
     ["rider payload per attack with rollAt, every hit under a vulnerability", turn([sword.onEveryHit(vulnerability().untilNextHit()), axe, axe]).rider({ on: "every-hit", damage: perAttackRolled })],
+    ["rollUnder is exact under a vulnerability: a resisted row lands with the scales off (4x, not 2x)", turn([vulnerableSword, { source: scaledRow, id: "ray" }, { source: scaledRow, id: "ray2" }])],
+    ["rollAt with its vulnerable pair: a resisted rider lands doubled with the scales off", turn([vulnerableSword, axe, axe]).rider({ on: "every-hit", damage: resistedRolled })],
+    ["rollAt without a vulnerable pair: the vulnerable landing is a chip, exact", turn([vulnerableSword, axe, axe]).rider({ on: "every-hit", damage: resistedPlainRolls })],
+    ["folded any-crit rider that lands on anything (crit-only fold)", turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).rider({ on: "any-crit", damage: roll(2, 6), landing: "any", max: 1 })],
+    ["folded any-crit rider under a vulnerability", turn([vulnerableSword, axe, axe]).rider({ on: "any-crit", damage: roll(2, 6), max: 2 })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;

@@ -116,7 +116,13 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     /** The one damage type of the whole row, set by {@link typed}. */
     readonly damageType?: string,
     /** Names a turn's `of` and `to` can watch this attack by, set by {@link tagged}. */
-    readonly tags: readonly string[] = []
+    readonly tags: readonly string[] = [],
+    /**
+     * 2 for the attack {@link rollUnder} returns in a vulnerable context: every landing's total is
+     * doubled as a whole roll, in the PMF and in {@link sample}, so the builder's PMF is `under(context)`.
+     * Set only there; a builder derived from it (`noCrit`, `typed`, ...) is built unscaled.
+     */
+    private readonly landingScale: 1 | 2 = 1
   ) {
     if (damageType !== undefined) this.dealt = this.dealtOdds.bind(this);
   }
@@ -541,13 +547,31 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * disadvantage or crit-on-hit it is bit-exact with the 0.16 `withCheck` re-derivation.
    */
   under(context: RowContext, eps: number = 0): PMF {
-    const attack = this.inContext(context);
-    return context.vulnerable ? attack.resolveScaled(eps, 2).pmf : attack.toPMF(eps);
+    return this.rollUnder(context).toPMF(eps);
   }
 
-  /** See {@link ContextualSource.rollUnder}: this attack re-derived in `context` ({@link under}'s rebuild). */
+  /**
+   * See {@link ContextualSource.rollUnder}: this attack re-derived in `context` ({@link under}'s
+   * rebuild), with a vulnerable context's doubling baked in, so its PMF is exactly `under(context)`.
+   */
   rollUnder(context: RowContext): AttackBuilder {
-    return this.inContext(context);
+    const attack = this.inContext(context);
+    if (!context.vulnerable || attack.landingScale === 2) return attack;
+    return new AttackBuilder(
+      attack.check,
+      attack.hitEffect,
+      attack.critEffect,
+      attack.missEffect,
+      attack.separateDamage,
+      attack.rerollThreshold,
+      attack.minimumDieValue,
+      attack.halfOnMissFlag,
+      attack.attached,
+      attack.rerollPool,
+      attack.damageType,
+      attack.tags,
+      2
+    );
   }
 
   /** `this` when `context` changes nothing, else this attack with its check re-derived in it (see {@link under}). */
@@ -627,7 +651,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     const payload = attack.samplePayload(outcome, rng);
     const { base, separate } = payload;
     let total = base.total + separate.reduce((sum, s) => sum + s.total, 0);
-    if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+    if (context?.vulnerable || attack.landingScale === 2) total = scaleValue(total, 2, "floor");
     return { outcome, check: checkDice, damage: [...base.dice, ...separate.flatMap((s) => s.dice)], total, payload };
   }
 
@@ -991,7 +1015,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
 
   /** Resolves the attack into its weighted slices. `eps` defaults to 0, as for {@link toPMF}: no reachable damage value is pruned. */
   resolve(eps: number = 0): AttackResolution {
-    return this.resolveScaled(eps, 1);
+    return this.resolveScaled(eps, this.landingScale);
   }
 
   /**
@@ -1343,7 +1367,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     const poolKey = this.rerollPool ? `${this.rerollPool.budget}x${this.rerollPool.rolls}` : "";
     return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*S${channelsKey}*half${
       this.halfOnMissFlag ? 1 : 0
-    }*U${poolKey}*e${eps}`;
+    }*U${poolKey}*V${this.landingScale}*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.
