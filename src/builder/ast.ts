@@ -577,7 +577,7 @@ export function rerollablePool(node: ExpressionNode): {
 
 // Getters
 
-function findDie(node: ExpressionNode): DieNode | undefined {
+export function findDie(node: ExpressionNode): DieNode | undefined {
   switch (node.type) {
     case "die":
       return node;
@@ -625,7 +625,7 @@ function maxOfIndependent(parts: readonly PMF[], eps: number): PMF {
   return PMF.fromMap(out, eps);
 }
 
-function getTotalCount(node: KeepNode): number {
+export function getTotalCount(node: KeepNode): number {
   // The total dice count is encoded in the nearest SumNode under child
   let cur = node.child;
   while (cur.type === "keep") cur = cur.child;
