@@ -175,6 +175,11 @@ export interface ContextualSource {
   /**
    * The builder behind `under(context)`, when the row has dice structure to roll; absent means
    * "sample the PMF and show a chip". `undefined` from a present method means the same for that context.
+   *
+   * Contract: the builder is already in `context` (its roll type, `autoHit`/`critOnHit`, `autoFail`,
+   * penalty dice, `joined` dice) and is sampled with no further context. It must NOT bake in
+   * `context.vulnerable` or any damage scaling for it: the sampler doubles a landing's total once,
+   * as a whole roll, exactly as `under(context)` does for a vulnerable context.
    */
   rollUnder?(context: RowContext): AttackBuilder | SaveBuilder | RollBuilder | undefined;
 }
@@ -262,11 +267,31 @@ export interface LandingPayload {
   vulnerable: { onHit: PMF; onCrit: PMF };
 }
 
+/**
+ * The rolls behind a {@link LandingPayload}: each builder's PMF is the payload's `onHit` / `onCrit`
+ * for that landing. `onCrit` is the crit roll itself (dice already doubled, or whatever the rule
+ * says); the sampler never doubles it again. Neither bakes in vulnerability: the sampler doubles the
+ * roll's total once where the landing is vulnerable (so `at(...).vulnerable` is expected to be the
+ * plain payload doubled).
+ */
+export interface LandingRoll {
+  onHit: RollBuilder;
+  onCrit: RollBuilder;
+}
+
 /** Rider damage that depends on the attack it lands on: its type and the target's scale for that attack. */
 export interface ContextualPayload {
   at(attackId: string): LandingPayload;
   /** P(the payload on `attackId` deals more than 0 damage of `type` after the target's scale), as a plain hit and as a crit. */
   dealt?(type: string, attackId: string): { hit: number; crit: number };
+  /**
+   * The builders behind `at(attackId)`, when the payload has dice to roll (the twin of
+   * {@link ContextualSource.rollUnder}): already for that attack (its type, the target's scale),
+   * sampled with no further context, with no vulnerability baked in (see {@link LandingRoll});
+   * absent means "draw the PMF and show a chip". `undefined` from a present method means the same
+   * for that attack.
+   */
+  rollAt?(attackId: string): LandingRoll | undefined;
 }
 
 /**
