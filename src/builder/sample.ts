@@ -1,3 +1,13 @@
+/**
+ * One random draw of a roll AST, the sampling twin of `resolve` in `./ast`: every node kind here
+ * mirrors its PMF branch, so a sample's law is the PMF.
+ *
+ * Draw order (what a scripted or traced `Rng` sees) is deterministic: depth-first, children left to
+ * right, in the AST's source order. A die's reroll and then its explosions follow that die at once;
+ * a `sum` draws all `count` children, then any `explodePool` extras; `keep`, `d20Roll`, `maxOf` and
+ * `max` draw their trials in order; `rerollUpTo` draws every trial's whole pool, then the winning
+ * trial's rerolls in pool order. `dice` lists the physical dice in that same order.
+ */
 import type { Rng } from "../common/rng";
 import { scaleValue } from "../pmf/sample";
 import { findDie, getTotalCount, rerollablePool, resolveSingleDie } from "./ast";
@@ -164,12 +174,15 @@ export function sampleNode(node: ExpressionNode, rng: Rng): RollSample {
   }
 }
 
+/** One die group of a `rerollUpTo` pool, in the order the child lists it. */
 interface PoolKind {
   die: DieNode;
   count: number;
   sign: 1 | -1;
   /** Mean of the signed faces: what a reroll of this kind is worth. */
   mean: number;
+  /** Position in `mergeKinds` order (higher mean first, then the faces key): breaks gain ties. */
+  rank: number;
 }
 
 interface PoolDie {
@@ -192,18 +205,26 @@ interface PoolRoll {
  * gain `mean - shown`, ties to the kind with the higher mean (then the lower faces key), then to
  * the lower face. With `rolls` above 1 the pool is rolled that many times and the roll scoring
  * highest is the one rerolled; a tie keeps the earlier roll.
+ *
+ * The dice are drawn and emitted in the child's source order (`roll(2, 6).plus(d8)` draws d6, d6,
+ * d8); the canonical mean order only settles which dice take the budget.
  */
 function sampleRerollUpTo(child: ExpressionNode, budget: number, rolls: number, rng: Rng): RollSample {
   const { groups, flat } = rerollablePool(child);
-  const kinds: PoolKind[] = groups
-    .map(({ die, count, sign }) => {
-      const single = resolveSingleDie(die);
-      const faces = single.support();
-      const mean = faces.reduce((m, f) => m + sign * f * single.pAt(f), 0);
-      const key = `${faces.map((f) => sign * f).join(",")}|${faces.map((f) => single.pAt(f)).join(",")}`;
-      return { die, count, sign, mean, key };
-    })
-    .sort((a, b) => Math.round((b.mean - a.mean) * GRID) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const scored = groups.map(({ die, count, sign }) => {
+    const single = resolveSingleDie(die);
+    const faces = single.support();
+    const mean = faces.reduce((m, f) => m + sign * f * single.pAt(f), 0);
+    const key = `${faces.map((f) => sign * f).join(",")}|${faces.map((f) => single.pAt(f)).join(",")}`;
+    return { die, count, sign, mean, key };
+  });
+  const canonical = scored
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const byMean = Math.round((scored[b].mean - scored[a].mean) * GRID);
+      return byMean || (scored[a].key < scored[b].key ? -1 : scored[a].key > scored[b].key ? 1 : 0);
+    });
+  const kinds: PoolKind[] = scored.map(({ die, count, sign, mean }, i) => ({ die, count, sign, mean, rank: canonical.indexOf(i) }));
   const capacity = Math.max(0, Math.floor(budget));
   const trials = Math.max(1, Math.floor(rolls));
 
@@ -219,7 +240,7 @@ function sampleRerollUpTo(child: ExpressionNode, budget: number, rolls: number, 
       pool
         .map((_, i) => i)
         .filter((i) => gain(i) > 0)
-        .sort((a, b) => gain(b) - gain(a) || pool[a].kind - pool[b].kind || pool[a].value - pool[b].value)
+        .sort((a, b) => gain(b) - gain(a) || kinds[pool[a].kind].rank - kinds[pool[b].kind].rank || pool[a].value - pool[b].value)
         .slice(0, capacity)
     );
     const score = pool.reduce((s, d, i) => s + (chosen.has(i) ? kinds[d.kind].mean : d.value), 0);
@@ -227,9 +248,10 @@ function sampleRerollUpTo(child: ExpressionNode, budget: number, rolls: number, 
   };
 
   const attempts = Array.from({ length: trials }, rollOne);
+  // Scores compare on the grid exactly as `rerollUpToPMF` keys them; the first highest wins.
   let best = 0;
   attempts.forEach((a, i) => {
-    if (Math.round((a.score - attempts[best].score) * GRID) > 0) best = i;
+    if (Math.round(a.score * GRID) > Math.round(attempts[best].score * GRID)) best = i;
   });
 
   let total = flat;
