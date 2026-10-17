@@ -188,6 +188,12 @@ export interface TurnPlan {
   dealing: boolean;
   /** Per condition: whether its later attack rolls lean melee (the optional fallback, see `Turn`). */
   meleeLeaning: readonly boolean[];
+  /** Per step id, the source it rolls: a declared attack's, or a rider's payload. What `Turn.sample` draws dice from. */
+  sourceOf: ReadonlyMap<string, Damage | ContextualSource | readonly Damage[]>;
+  /** Per rider id, the rider as the plan placed it (`every-hit` with `max: 1` lowered to `first-hit`). */
+  riderOf: ReadonlyMap<string, EvaluatedRider>;
+  /** Per rider id whose damage is read per attack ({@link ContextualPayload}): that payload, for `Turn.sample`'s `rollAt`. */
+  payloadAt: ReadonlyMap<string, ContextualPayload>;
 }
 
 /** Outcome-labelled sub-mass PMFs for one source, masses summing to 1. */
@@ -585,10 +591,16 @@ export interface Step {
   contextRollTypes: readonly RollType[];
   /** Per context, whether the row's target is vulnerable there (its landings deal double). */
   contextVulnerable: readonly boolean[];
+  /** Per context, the `RowContext` the row's source rolls under there; `undefined` where the source declares no row. */
+  contextRowContexts: readonly (RowContext | undefined)[];
   /** Which of {@link Step.contextPmfs} a state rolls in. */
   contextIndexOf: (codes: readonly number[], fired: readonly FireMode[], flags: number, counts: readonly number[]) => number;
   /** Whether a substitute rewrites the row's own damage, so it is not its context's PMF. */
   transformed: boolean;
+  /** That substitute's policy: how `Turn.sample` decides a spend. Null where none watches the row. */
+  policy: SubstitutePolicy | null;
+  /** The probability the row happens at all (`AttackOptions.chance`); 1 for a rider. */
+  chance: number;
 }
 
 /** Trigger kinds that read a group's accumulated state (as opposed to `not-fired`,
@@ -769,7 +781,7 @@ function toPMF(
       return Math.abs(mass - 1) <= EPS ? part : part.normalize();
     }
     // A contextual source rolls its own row's context when nothing in the state changes it.
-    if (isContextual(part)) return rollUnder(part, contextOf(rowCheckOf(part) as RowCheck, 0), eps, id);
+    if (isContextual(part)) return pmfUnder(part, contextOf(rowCheckOf(part) as RowCheck, 0), eps, id);
     // `Damage` rules this out, but a consumer deserializing UI state reaches
     // here untyped. Reporting it as a spec error beats a bare TypeError from
     // calling a method that isn't there.
@@ -796,7 +808,7 @@ function toPMF(
 }
 
 /** `source`'s PMF under `context`, checked like a `toPMF()` result. */
-function rollUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
+function pmfUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
   const resolved = (source.under as (context: RowContext, eps?: number) => unknown)(context, eps);
   if (!(resolved instanceof PMF)) {
     throw new TurnSpecError("not-an-attack", id, `"${id}" has an under() that did not return a PMF.`);
@@ -1285,7 +1297,7 @@ type EvaluatedCondition = Omit<ConditionSpec, "on" | "grants" | "onSave"> & {
 };
 
 /** A {@link Rider} whose damage is a {@link RiderDamage} (a `ContextualPayload` is read per attack instead). */
-type EvaluatedRider = Rider extends infer R
+export type EvaluatedRider = Rider extends infer R
   ? R extends unknown
     ? Omit<R, "damage" | "landing"> & { damage: RiderDamage; landing?: SaveLanding | "any" }
     : never
@@ -3756,6 +3768,7 @@ export function buildPlan(
     const contextPmfs: PMF[] = ownPmf === undefined ? [] : [ownPmf];
     const contextVulnerable: boolean[] = ownPmf === undefined ? [] : [false];
     const contextRollTypes: RollType[] = ownPmf === undefined ? [] : [baseRollType];
+    const contextRowContexts: (RowContext | undefined)[] = ownPmf === undefined ? [] : [baseContext];
     let contextIndexOf: Step["contextIndexOf"] = () => 0;
     /** The row's table in a context, its finished variants written into `target` from `offset` on (see {@link blocked}). */
     const tableOf = (
@@ -3849,7 +3862,7 @@ export function buildPlan(
           );
           const context = { ...contextOf(check, key, penalties), joined: joinedOf(key) };
           return {
-            pmf: () => rollUnder(source as unknown as ContextualSource, context, eps, entry.id),
+            pmf: () => pmfUnder(source as unknown as ContextualSource, context, eps, entry.id),
             signature: contextKey(context),
           };
         }
@@ -3935,6 +3948,7 @@ export function buildPlan(
           tables.push(undefined);
           pending.set(index, { key, variant });
           contextVulnerable.push(rowContextOf(key)?.vulnerable ?? false);
+          contextRowContexts.push(rowContextOf(key));
           contextRollTypes.push(rollTypeIn(key, variant.signature));
           tableByContext.set(variant.signature, index);
         }
@@ -4020,13 +4034,19 @@ export function buildPlan(
       contextPmfs,
       contextVulnerable,
       contextRollTypes,
+      contextRowContexts,
       contextIndexOf,
       transformed: substitute !== undefined,
+      policy: substitute === undefined ? null : (substitutes[substitute].policy ?? { kind: "always" }),
+      chance,
     });
   });
 
   return {
     steps,
+    sourceOf: new Map(sequence.map((entry): [string, Damage | ContextualSource | readonly Damage[]] => [entry.id, damageOf(entry.id)])),
+    riderOf: new Map(riderIds.map((id, index): [string, EvaluatedRider] => [id, riders[index]])),
+    payloadAt: new Map([...contextualPayloads].map(([index, payload]): [string, ContextualPayload] => [riderIds[index], payload])),
     groupCount: slotLastStep.length,
     attackPMFs,
     attackSingles,

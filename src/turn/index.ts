@@ -29,3 +29,4 @@ export type {
   VulnerabilityEffect,
 } from "./effects";
 export * from "./types";
+export * from "./trace";

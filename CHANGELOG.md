@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-10-17
+
+### Added
+
+- **Sampling**: every builder and turn can roll one play of itself, consistent with its exact PMF.
+  `Rng` (`die(sides)`, `chance(p)`) is the randomness a caller supplies; `samplePMF(pmf, rng)` draws a
+  value from a resolved PMF. `RollBuilder.sample`, `AttackBuilder.sample` / `samplePayload`,
+  `SaveBuilder.sample` and `DCBuilder.sampleCheck` return the total and every physical die (sides, face,
+  kept, reroll). `Turn.sample(rng)` walks one path through the plan in the walk's own order and returns a
+  `Trace`: the total, `samplerVersion`, and `waves` of `DieRoll`s and `Outcome`s (hit, crit, miss,
+  save-fail, save-pass, fired, skipped) per step. `ContextualSource.rollUnder?(context)` lets a source
+  expose the builder it resolved from, so its dice are rolled instead of drawn from its PMF.
+- **`ContextualPayload.rollAt?(attackId)`**: a rider payload can expose `{ onHit, onCrit, vulnerable? }`
+  builders so `Turn.sample` rolls the rider's dice instead of drawing from `at()`. Without the
+  `vulnerable` pair a vulnerable landing is drawn from `at().vulnerable`.
+- **Contract for both hooks**: the builder a `rollUnder` / `rollAt` returns must have exactly the PMF it
+  stands in for, vulnerability included; the sampler never rescales it. The library's own
+  `AttackBuilder` / `SaveBuilder.rollUnder` bake vulnerability the same way.
+- **`SAMPLER_VERSION`**: stamped on every `Trace`; bumped whenever the draw order changes, so a stored
+  seed replays the same trace only under the version it was recorded with.
+- **Conformance**: `tests/sample-conformance.test.ts` G-tests 100k samples of each fixture turn against
+  `Turn.pmf` (`DICE_SAMPLES` overrides the count); `tests/sample-draw-order.test.ts` snapshots the draw
+  order of every builder and turn fixture under fixed seeds.
+
 ## [0.19.0] - 2026-10-12
 
 ### Added
