@@ -1,6 +1,7 @@
 import { PMF } from "../pmf/pmf";
+import type { Rng } from "../common/rng";
 import { AttackBuilder } from "./attack";
-import { resolveRootD20 } from "./ast";
+import { resolveRootD20, sampleCheckDice, type CheckDice } from "./ast";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
 import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";
@@ -208,6 +209,15 @@ export class ACBuilder extends RollBuilder {
       out.set(key, (out.get(key) || 0) + p);
     }
     return PMF.fromMap(out, eps);
+  }
+
+  /**
+   * One draw of the to-hit dice: the d20s under the resolved roll type (three under
+   * {@link threeDiceAdvantage}; dropped ones `kept: false`), then the bonus dice in config order.
+   * The outcome against the AC is `AttackBuilder.sample`'s.
+   */
+  sampleCheck(rng: Rng): CheckDice {
+    return sampleCheckDice(this, rng);
   }
 
   /** Accepts a replacement AC, so `vsAC` can rebind the check without rebuilding the roll. */
