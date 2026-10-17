@@ -14,6 +14,8 @@ import {
   pmfFromRollBuilder,
   rerollablePool,
   resolveRootD20,
+  sampleCheckDice,
+  type CheckDice,
 } from "./ast";
 import { requireFinite, rerollUpToArguments } from "./arguments";
 import {
@@ -1218,6 +1220,11 @@ export class AlwaysHitBuilder extends RollBuilder {
     return resolveRootD20(this);
   }
 
+  /** One draw of the natural roll (which decides a crit) and the bonus dice: see `ACBuilder.sampleCheck`. */
+  sampleCheck(rng: Rng): CheckDice {
+    return sampleCheckDice(this, rng);
+  }
+
   override copy(): AlwaysHitBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
@@ -1309,6 +1316,14 @@ export class AlwaysCritBuilder extends RollBuilder {
 
   override toPMF(): PMF {
     return resolveRootD20(this);
+  }
+
+  /**
+   * One draw of the natural roll and the bonus dice (nothing is drawn by `AttackBuilder.sample` for
+   * `alwaysHits().alwaysCrits()`, which reads no roll): see `ACBuilder.sampleCheck`.
+   */
+  sampleCheck(rng: Rng): CheckDice {
+    return sampleCheckDice(this, rng);
   }
 
   override copy(): AlwaysCritBuilder {

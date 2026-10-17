@@ -1,4 +1,5 @@
 import { PMF } from "../";
+import type { Rng } from "../common/rng";
 import { d20RollPMF } from "./d20";
 import { builderPMFCache } from "./factory";
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "./nodes";
 import { rerollUpToPMF, type PoolDieKind } from "./reroll-pool";
 import { naturalRollIndex, type RollBuilder } from "./roll";
+import { sampleNode, type SampledDie } from "./sample";
 import type { RollConfig, RollType } from "./types";
 
 // Default epsilon 0: single-die PMFs resolve without pruning.
@@ -370,9 +372,20 @@ export function resolveD20Roll(die: DieNode, rollType: RollType | undefined): PM
  * 1 or 20 and throws.
  */
 export function resolveRootD20(check: RollBuilder): PMF {
+  const root = naturalDieConfig(check);
+  if (!root) return PMF.delta(0);
+  return resolveD20Roll(dieNodeFromConfig(root), check.rollType);
+}
+
+/**
+ * The config of `check`'s natural die as {@link resolveRootD20} reads it (an `ACBuilder` folds
+ * three-dice advantage in), or `undefined` for a check with no die. Throws when the natural roll
+ * is not one die.
+ */
+export function naturalDieConfig(check: RollBuilder): RollConfig | undefined {
   const configs = check.getSubRollConfigs();
   const rootIdx = naturalRollIndex(configs);
-  if (rootIdx === -1) return PMF.delta(0);
+  if (rootIdx === -1) return undefined;
   const rootConfig = check.getRootDieConfig() ?? configs[rootIdx];
   const sides = configs[rootIdx].sides;
   const tied = configs.some(
@@ -384,7 +397,41 @@ export function resolveRootD20(check: RollBuilder): PMF {
         "Roll it once and add any other dice as bonus dice."
     );
   }
-  return resolveD20Roll(dieNodeFromConfig(rootConfig), check.rollType);
+  return rootConfig;
+}
+
+/** The dice of one check draw: the natural roll (dropped d20s `kept: false`), then every bonus die. */
+export interface CheckDice {
+  check: SampledDie[];
+  /** The natural roll's kept face; 0 for a check with no die. */
+  natural: number;
+  /** The bonus dice's sum, penalty dice subtracted. */
+  bonus: number;
+}
+
+/**
+ * The sampling twin of {@link resolveRootD20}: one draw of the natural die under its roll type
+ * (the dice in roll order), then of each bonus die group in config order. The flat modifier is
+ * not added; the caller reads `check.modifier`.
+ */
+export function sampleCheckDice(check: RollBuilder, rng: Rng): CheckDice {
+  const dice: SampledDie[] = [];
+  let natural = 0;
+  const root = naturalDieConfig(check);
+  if (root) {
+    const die = dieNodeFromConfig(root);
+    const rollType = check.rollType;
+    const s = sampleNode(rollType === "flat" ? die : { type: "d20Roll", rollType, child: die }, rng);
+    natural = s.total;
+    dice.push(...s.dice);
+  }
+  let bonus = 0;
+  for (const config of check.getBonusDiceConfigs()) {
+    const s = sampleNode(astFromRollConfigs([config])!, rng);
+    bonus += s.total;
+    dice.push(...s.dice);
+  }
+  return { check: dice, natural, bonus };
 }
 
 export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
