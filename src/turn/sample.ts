@@ -304,6 +304,8 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
     const riderDamage = new Map<string, number>();
     /** Folded riders whose own `happens` coin failed on this landing: traced `skipped`, as a step rider is. */
     const riderSkipped = new Set<string>();
+    /** Chip riders whose coin came up here, by `happens`: their draw takes the plan's `thin` out again. */
+    const riderPassed = new Map<string, number>();
     const riderDice: DieRoll[] = [];
     let spent = false;
 
@@ -389,6 +391,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
             : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
         if (drawn === undefined) {
           chips = true;
+          if (!joined && !coined) riderPassed.set(id, rider.happens ?? 1);
           continue;
         }
         const damage = vulnerable && !any ? drawn.total * 2 : drawn.total;
@@ -417,6 +420,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
         riderDice.length = 0;
         riderDamage.clear();
         riderSkipped.clear();
+        riderPassed.clear();
         spent = draw.spends;
       } else {
         draw = pickByMass(candidates, rng);
@@ -428,7 +432,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
     outcomeOf(step.id, rowResult, rowDamage);
     for (const [id, payload] of draw.riders ?? []) {
       if (riderSkipped.has(id)) outcomeOf(id, "skipped", 0);
-      else outcomeOf(id, "fired", riderDamage.get(id) ?? samplePMF(payload, rng).total);
+      else outcomeOf(id, "fired", riderDamage.get(id) ?? samplePMF(unthin(payload, riderPassed.get(id) ?? 1), rng).total);
     }
 
     // Then exactly as the walk: flags consumed, groups advanced, slots marked, grants applied.

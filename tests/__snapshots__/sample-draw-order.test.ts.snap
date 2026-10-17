@@ -914,6 +914,174 @@ exports[`draw order is a contract: Turn.sample > every-hit capped: fixed seeds, 
 ]
 `;
 
+exports[`draw order is a contract: Turn.sample > folded chip rider + happens coin: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "samplerVersion": 1,
+    "total": 8,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+          {
+            "damage": 8,
+            "result": "fired",
+            "source": "hex",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 7,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "b",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 21,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 7,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 10,
+            "result": "hit",
+            "source": "a",
+          },
+          {
+            "damage": 11,
+            "result": "fired",
+            "source": "hex",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "b",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 17,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+          {
+            "damage": 6,
+            "result": "fired",
+            "source": "hex",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 16,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 11,
+            "result": "hit",
+            "source": "b",
+          },
+        ],
+      },
+    ],
+  },
+]
+`;
+
 exports[`draw order is a contract: Turn.sample > happens coin on a damage rider: fixed seeds, fixed draws 1`] = `
 [
   {
