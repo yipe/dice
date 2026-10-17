@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { d, d6, d8, d20, roll } from "../src/builder/factory";
 import { advantage, critOnHit, keepBestDamage, turn, vulnerability } from "../src/turn";
-import type { Turn } from "../src/turn";
+import type { ContextualPayload, Turn } from "../src/turn";
 import { sampleFallbacks } from "../src/turn/sample";
 import type { Rng } from "../src/common/rng";
 
@@ -100,6 +100,14 @@ function sampleMean(t: Turn, n: number, seed: number): number {
 describe("Turn.sample law", () => {
   const N = 20_000;
   const axe = d20.plus(6).ac(16).onHit(roll(2, 6, 4));
+  /** A rider payload read per attack (a `ContextualPayload`): the plan folds it as a chip. */
+  const perAttack: ContextualPayload = {
+    at: () => {
+      const onHit = roll(2, 6).toPMF();
+      const onCrit = roll(4, 6).toPMF();
+      return { onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } };
+    },
+  };
   const cases: [string, Turn][] = [
     ["first-hit rider step", turn([sword, sword]).onFirstHit(roll(3, 6))],
     ["every-hit rider folded", turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).onEveryHit(roll(1, 6))],
@@ -128,6 +136,8 @@ describe("Turn.sample law", () => {
     ["substitute under a rider coin's variant blocks", turn([sword, sword]).rider({ on: "every-hit", damage: d6, happens: 0.5 }).onFirstHit(keepBestDamage())],
     ["substitute under a granted context", turn([sword.onEveryHit(advantage().untilNextAttack()), axe, axe]).onFirstHit(keepBestDamage())],
     ["folded first-hit rider that may not happen (lands on anything)", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6), happens: 0.3, landing: "any" })],
+    ["folded chip rider (bare PMF) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6).toPMF(), happens: 0.75, landing: "any" })],
+    ["folded chip rider (payload per attack) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: perAttack, happens: 0.75 })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;

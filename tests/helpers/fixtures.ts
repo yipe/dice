@@ -116,6 +116,11 @@ export const FIXTURES: Record<string, () => Turn> = {
       ],
       riders: [{ id: "sa", on: "first-hit", damage: roll(3, d6), joins: ["a"] }],
     }),
+  "folded chip rider + happens coin": () =>
+    turn([
+      { source: sword, id: "a" },
+      { source: sword, id: "b" },
+    ]).rider({ id: "hex", on: "first-hit", damage: roll(2, d6).toPMF(), happens: 0.75, landing: "any" }),
 };
 
 /** Builders with a `.sample`: the draw-order snapshot runs over these before Turn.sample exists. A5a lands with the
