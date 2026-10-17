@@ -1053,10 +1053,10 @@ export class Turn {
    * `rng.chance`. Optional conditions are attempted as the plan decided. See `sampleTurn`.
    */
   sample(rng: Rng): Trace {
-    if (this.plan.dealing) {
+    if (this.samplePlan.dealing) {
       throw new TurnSpecError(
         "dealing-joint-unsupported",
-        this.plan.conditionIds.join(", "),
+        this.samplePlan.conditionIds.join(", "),
         "A condition in this turn needs a damage type dealt (`dealing`): the turn knows only the odds a landing dealt it, so it has no joint to sample."
       );
     }
