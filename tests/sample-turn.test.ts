@@ -185,6 +185,8 @@ describe("Turn.sample law", () => {
     ["rollAt without a vulnerable pair: the vulnerable landing is a chip, exact", turn([vulnerableSword, axe, axe]).rider({ on: "every-hit", damage: resistedPlainRolls })],
     ["folded any-crit rider that lands on anything (crit-only fold)", turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).rider({ on: "any-crit", damage: roll(2, 6), landing: "any", max: 1 })],
     ["folded any-crit rider under a vulnerability", turn([vulnerableSword, axe, axe]).rider({ on: "any-crit", damage: roll(2, 6), max: 2 })],
+    ["substitute spent on a rollUnder row under a vulnerability (scaled once)", turn([vulnerableSword, { source: scaledRow, id: "ray" }, { source: scaledRow, id: "ray2" }]).onFirstHit(keepBestDamage(), { of: ["ray", "ray2"] })],
+    ["substitute spent on a bare attack under a vulnerability (scaled once)", turn([vulnerableSword, axe, axe]).onFirstHit(keepBestDamage(), { of: ["attack 2", "attack 3"] })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;
