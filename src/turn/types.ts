@@ -1,6 +1,9 @@
 import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
 import type { AbilityName } from "../builder/types";
+import type { AttackBuilder } from "../builder/attack";
+import type { RollBuilder } from "../builder/roll";
+import type { SaveBuilder } from "../builder/save";
 
 export type { DiceMatchInfo, HasDiceMatchInfo };
 
@@ -169,6 +172,11 @@ export interface ContextualSource {
    * target's scales off). Read where a condition with `dealing` watches the row.
    */
   dealt?(type: string, context: RowContext): { hit: number; crit: number };
+  /**
+   * The builder behind `under(context)`, when the row has dice structure to roll; absent means
+   * "sample the PMF and show a chip". `undefined` from a present method means the same for that context.
+   */
+  rollUnder?(context: RowContext): AttackBuilder | SaveBuilder | RollBuilder | undefined;
 }
 
 /**

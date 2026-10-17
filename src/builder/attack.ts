@@ -1,12 +1,15 @@
 import type { DiceMatchInfo, OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import type { Rng } from "../common/rng";
 import { diceSumDistribution, faceWeights, jointSumAndMatch } from "../common/bounce";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { scaleValue } from "../pmf/sample";
 import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
+import type { SampledDie } from "./sample";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
 import { requireFinite, rerollUpToArguments } from "./arguments";
@@ -72,6 +75,16 @@ export function clearAttackCache(): void {
 function withRange<C extends ACBuilder | AlwaysHitBuilder | AlwaysCritBuilder>(check: C, range: AttackRange | undefined): C {
   if (range === undefined) return check;
   return (range === "ranged" ? check.ranged() : check.melee()) as C;
+}
+
+/** One roll of an attack: the check dice, the payload dice and what landed. */
+export interface AttackSample {
+  outcome: "hit" | "crit" | "miss";
+  /** The d20s (dropped ones `kept: false`), then the bonus dice; empty for `alwaysHits().alwaysCrits()`. */
+  check: SampledDie[];
+  /** The base payload's dice (the doubled pool on a crit), then each separate channel's, or the miss payload's. */
+  damage: SampledDie[];
+  total: number;
 }
 
 export class AttackBuilder implements CheckBuilder, ContextualSource {
@@ -526,32 +539,94 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * disadvantage or crit-on-hit it is bit-exact with the 0.16 `withCheck` re-derivation.
    */
   under(context: RowContext, eps: number = 0): PMF {
+    const attack = this.inContext(context);
+    return context.vulnerable ? attack.resolveScaled(eps, 2).pmf : attack.toPMF(eps);
+  }
+
+  /** See {@link ContextualSource.rollUnder}: this attack re-derived in `context` ({@link under}'s rebuild). */
+  rollUnder(context: RowContext): AttackBuilder {
+    return this.inContext(context);
+  }
+
+  /** `this` when `context` changes nothing, else this attack with its check re-derived in it (see {@link under}). */
+  private inContext(context: RowContext): AttackBuilder {
     const own = this.rowCheck;
     const rollType = own.pinned ? own.rollType : context.rollType;
     const autoHit = own.autoHit || context.autoHit;
     const critOnHit = own.autoCrit || context.critOnHit;
-    let attack: AttackBuilder = this;
-    if (rollType !== own.rollType || autoHit !== own.autoHit || critOnHit !== own.autoCrit) {
-      const range = this.check.attackConfig.range;
-      if (autoHit) {
-        const configs = this.check.getSubRollConfigs();
-        const root = naturalRollIndex(configs);
-        if (root !== -1) configs[root].rollType = rollType;
-        const always = new AlwaysHitBuilder(new RollBuilder(configs), { critThreshold: this.check.critThreshold, range });
-        attack = this.rebuilt(critOnHit ? always.alwaysCrits() : always);
-      } else {
-        // The same re-derivation as `withCheck`, so a granted modifier matches 0.16 bit for bit.
-        const base = this.toCheck();
-        const literal: Pick<Check, "rollType" | "advantageDice"> =
-          rollType === "elven accuracy"
-            ? { rollType: "advantage", advantageDice: 3 }
-            : rollType === "advantage"
-              ? { rollType, advantageDice: 2 }
-              : { rollType, advantageDice: base.advantageDice };
-        attack = this.rebuilt(withRange(AttackBuilder.buildCheck({ ...base, ...literal, critOnHit }), range));
-      }
+    if (rollType === own.rollType && autoHit === own.autoHit && critOnHit === own.autoCrit) return this;
+    const range = this.check.attackConfig.range;
+    if (autoHit) {
+      const configs = this.check.getSubRollConfigs();
+      const root = naturalRollIndex(configs);
+      if (root !== -1) configs[root].rollType = rollType;
+      const always = new AlwaysHitBuilder(new RollBuilder(configs), { critThreshold: this.check.critThreshold, range });
+      return this.rebuilt(critOnHit ? always.alwaysCrits() : always);
     }
-    return context.vulnerable ? attack.resolveScaled(eps, 2).pmf : attack.toPMF(eps);
+    // The same re-derivation as `withCheck`, so a granted modifier matches 0.16 bit for bit.
+    const base = this.toCheck();
+    const literal: Pick<Check, "rollType" | "advantageDice"> =
+      rollType === "elven accuracy"
+        ? { rollType: "advantage", advantageDice: 3 }
+        : rollType === "advantage"
+          ? { rollType, advantageDice: 2 }
+          : { rollType, advantageDice: base.advantageDice };
+    return this.rebuilt(withRange(AttackBuilder.buildCheck({ ...base, ...literal, critOnHit }), range));
+  }
+
+  /**
+   * One roll of this attack as {@link under} weighs it: the check ({@link ACBuilder.sampleCheck}:
+   * the d20s, then the bonus dice), then the landing payload (the base pool, doubled on a crit,
+   * then each separate channel in order), or on a miss the miss payload (`onMiss`), or the whole
+   * hit payload halved and floored (`halfOnMiss`). `alwaysHits().alwaysCrits()` draws no check.
+   * `context.vulnerable` doubles a landing's total as a whole roll and never redraws.
+   */
+  sample(rng: Rng, context?: RowContext): AttackSample {
+    const attack = context ? this.inContext(context) : this;
+    const check = attack.check;
+    let checkDice: SampledDie[] = [];
+    let outcome: AttackSample["outcome"];
+    if (check instanceof AlwaysCritBuilder && check.fromAlwaysHit) {
+      outcome = "crit";
+    } else {
+      // `resolveProbabilities`: a natural 1 misses, a natural 20 crits, any other roll has to reach
+      // the AC, inside or outside the crit range. A dieless check's natural roll is a certain 0.
+      const drawn = check.sampleCheck(rng);
+      checkDice = drawn.check;
+      const r = drawn.natural;
+      const inCritRange = r === 20 || (r >= 1 && r >= check.critThreshold);
+      if (check instanceof AlwaysHitBuilder) outcome = inCritRange ? "crit" : "hit";
+      else if (r === 1) outcome = "miss";
+      else if (r === 20) outcome = "crit";
+      else if (r + check.modifier + drawn.bonus < (check.attackConfig.ac ?? 0)) outcome = "miss";
+      else outcome = check instanceof AlwaysCritBuilder || inCritRange ? "crit" : "hit";
+    }
+    // `noCrit()`: the crit's weight lands as a hit (`resolveScaled`).
+    if (outcome === "crit" && attack.critEffect === null) outcome = "hit";
+
+    const damage: SampledDie[] = [];
+    let total = 0;
+    const draw = (effect: ActionEffect | undefined): void => {
+      if (!effect) return;
+      const s = effect.sample(rng);
+      total += s.total;
+      damage.push(...s.dice);
+    };
+    if (outcome === "miss") {
+      if (attack.halfOnMissFlag) {
+        if (attack.hitEffect) draw(attack.pooled(attack.hitEffect));
+        for (const channel of attack.separateDamage) draw(channel);
+        total = scaleValue(total, 0.5, "floor");
+      } else {
+        draw(attack.missEffect);
+      }
+    } else {
+      const base = outcome === "crit" ? (attack.critEffect ?? attack.hitEffect?.copy().doubleDice()) : attack.hitEffect;
+      if (base) draw(attack.pooled(base));
+      for (const channel of attack.separateDamage) draw(outcome === "crit" ? channel.copy().doubleDice() : channel);
+      if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+    }
+    return { outcome, check: checkDice, damage, total };
   }
 
   /**

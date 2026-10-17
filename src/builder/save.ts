@@ -1,12 +1,15 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import type { Rng } from "../common/rng";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { scaleValue } from "../pmf/sample";
 import { pmfFromRollBuilder } from "./ast";
 import type { AttachedCondition } from "./attack";
 import type { DCBuilder } from "./dc";
 import { ParsedRollBuilder, RollBuilder } from "./roll";
+import type { SampledDie } from "./sample";
 import type { AbilityName, CheckBuilder, SaveResolution } from "./types";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
 import { IGNORES_JOINED } from "../turn/context";
@@ -29,6 +32,14 @@ export function clearSaveCache(): void {
 /** What a save's payload deals: a builder reads through {@link pmfFromRollBuilder}, a parsed string through its own PMF. */
 function payloadPMF(effect: RollBuilder, eps: number): PMF {
   return effect instanceof ParsedRollBuilder ? effect.toPMF(eps) : pmfFromRollBuilder(effect);
+}
+
+/** One roll of a save: the enemy's check dice, the payload dice and what landed. */
+export interface SaveSample {
+  outcome: "save-fail" | "save-pass";
+  check: SampledDie[];
+  damage: SampledDie[];
+  total: number;
 }
 
 export class SaveBuilder implements CheckBuilder, ContextualSource {
@@ -134,15 +145,49 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * facts, and `joined` is ignored: a builder does not pool rider dice into its own roll.
    */
   under(context: RowContext, eps: number = 0): PMF {
-    const own = this.rowCheck;
-    const rollType = own.pinned ? own.rollType : context.rollType;
-    const autoFail = own.autoFail || context.autoFail;
-    let save: SaveBuilder = this;
-    if (rollType !== own.rollType || autoFail !== own.autoFail || context.penaltyDice.length > 0) {
-      const check = this.check.rolledIn({ rollType, autoFail, penaltyDice: context.penaltyDice });
-      save = new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
-    }
+    const save = this.inContext(context);
     return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);
+  }
+
+  /** See {@link ContextualSource.rollUnder}: this save with its check rolled in `context` ({@link under}'s rebuild). */
+  rollUnder(context: RowContext): SaveBuilder {
+    return this.inContext(context);
+  }
+
+  /** `this` when `context` changes nothing, else this save with its check rolled in it (see {@link DCBuilder.inContext}). */
+  private inContext(context: RowContext): SaveBuilder {
+    const check = this.check.inContext(context);
+    return check === this.check ? this : new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
+  }
+
+  /**
+   * One roll of this save as {@link under} weighs it: the enemy's check (see
+   * {@link DCBuilder.sampleCheck}), then the failure payload's dice, then an `onSaveSuccess` payload
+   * on a pass. A pass still draws the failure dice: under `saveHalf()` the PMF halves that same
+   * roll, and under a plain save the draw order must not depend on the pass, since in play the
+   * player's dice are on the table before the enemy's d20 decides. `context.vulnerable` doubles a
+   * failure's total as a whole roll and never redraws.
+   */
+  sample(rng: Rng, context?: RowContext): SaveSample {
+    const save = context ? this.inContext(context) : this;
+    const { check, failed } = save.check.sampleCheck(rng);
+    const damage: SampledDie[] = [];
+    let total = 0;
+    if (save.failureEffect) {
+      const s = save.failureEffect.sample(rng);
+      total = s.total;
+      damage.push(...s.dice);
+    }
+    if (failed) {
+      if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+      return { outcome: "save-fail", check, damage, total };
+    }
+    if (save.saveOutcome === "half") return { outcome: "save-pass", check, damage, total: scaleValue(total, 0.5, "floor") };
+    if (save.saveOutcome instanceof RollBuilder) {
+      const s = save.saveOutcome.sample(rng);
+      return { outcome: "save-pass", check, damage: s.dice, total: s.total };
+    }
+    return { outcome: "save-pass", check, damage, total: 0 };
   }
 
   /**
