@@ -225,6 +225,23 @@ describe("Turn.sample path details", () => {
     expect(t.sample(script([15, 2], [false])).waves[1].outcomes[0]).toMatchObject({ source: "maybe", result: "skipped" });
     expect(t.sample(script([15, 2, 1, 1], [true])).waves[1].outcomes[0]).toMatchObject({ source: "maybe", result: "fired", damage: 2 });
   });
+  it("a folded rider whose per-landing coin fails is skipped in the row's wave, its dice undrawn", () => {
+    // A first-hit rider on any landing is folded into the row and takes its coin as the row lands.
+    const t = turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).rider({ on: "first-hit", damage: roll(2, 6), happens: 0.5, landing: "any", id: "coin" });
+    // Row a hits (15, d8 = 2); the coin fails: no 2d6 drawn. Row b hits (16, d8 = 3).
+    const failed = t.sample(script([15, 2, 16, 3], [false]));
+    expect(failed.waves.map((w) => w.outcomes)).toEqual([
+      [
+        { source: "a", result: "hit", damage: 5 },
+        { source: "coin", result: "skipped", damage: 0 },
+      ],
+      [{ source: "b", result: "hit", damage: 6 }],
+    ]);
+    expect(failed.total).toBe(11);
+    const fired = t.sample(script([15, 2, 1, 4, 16, 3], [true]));
+    expect(fired.waves[0].outcomes[1]).toEqual({ source: "coin", result: "fired", damage: 5 });
+    expect(fired.total).toBe(16);
+  });
   it("refuses a turn with a dealing condition, as the joint pmf does", () => {
     const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold");
     const t = turn([ray.onEveryHit(advantage().untilNextAttack(), { dealing: "cold" }), ray]);

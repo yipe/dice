@@ -1,10 +1,10 @@
 import { PMF } from "../pmf/pmf";
 import type { Rng } from "../common/rng";
-import { resolveRootD20, sampleCheckDice } from "./ast";
+import { resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { requireFinite } from "./arguments";
 import { naturalRollIndex, RollBuilder } from "./roll";
-import type { SampledDie } from "./sample";
+import { sampleCheckDice, type SampledDie } from "./sample";
 import { SaveBuilder } from "./save";
 import type { AttachedCondition } from "./attack";
 import type { Lasting } from "../turn/effects";

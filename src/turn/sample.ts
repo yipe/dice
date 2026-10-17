@@ -302,6 +302,8 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
     let rowDice: DieRoll[] = [];
     /** Per folded rider, its damage once its dice are drawn; a chip rider draws from the chosen draw's payload. */
     const riderDamage = new Map<string, number>();
+    /** Folded riders whose own `happens` coin failed on this landing: traced `skipped`, as a step rider is. */
+    const riderSkipped = new Set<string>();
     const riderDice: DieRoll[] = [];
     let spent = false;
 
@@ -378,11 +380,13 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
         // (`thin`), so a failed coin deals 0 and the landing still counts. A rider whose dice
         // joined the row's roll deals nothing beside it.
         const coined = plan.coins.some((each) => each.id === id);
-        const nothing =
-          (rowContext !== undefined && rowContext.joined.includes(id)) || (!coined && !coin(rng, rider.happens ?? 1));
-        const drawn = nothing
-          ? { total: 0, dice: [] }
-          : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
+        const joined = rowContext !== undefined && rowContext.joined.includes(id);
+        const skipped = !joined && !coined && !coin(rng, rider.happens ?? 1);
+        if (skipped) riderSkipped.add(id);
+        const drawn =
+          joined || skipped
+            ? { total: 0, dice: [] }
+            : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
         if (drawn === undefined) {
           chips = true;
           continue;
@@ -412,6 +416,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
         rowDice = [];
         riderDice.length = 0;
         riderDamage.clear();
+        riderSkipped.clear();
         spent = draw.spends;
       } else {
         draw = pickByMass(candidates, rng);
@@ -422,7 +427,8 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
     wave.dice.push(...rowDice, ...riderDice);
     outcomeOf(step.id, rowResult, rowDamage);
     for (const [id, payload] of draw.riders ?? []) {
-      outcomeOf(id, "fired", riderDamage.get(id) ?? samplePMF(payload, rng).total);
+      if (riderSkipped.has(id)) outcomeOf(id, "skipped", 0);
+      else outcomeOf(id, "fired", riderDamage.get(id) ?? samplePMF(payload, rng).total);
     }
 
     // Then exactly as the walk: flags consumed, groups advanced, slots marked, grants applied.

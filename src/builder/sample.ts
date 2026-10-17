@@ -10,8 +10,17 @@
  */
 import type { Rng } from "../common/rng";
 import { scaleValue } from "../pmf/sample";
-import { findDie, getTotalCount, rerollablePool, resolveSingleDie } from "./ast";
+import {
+  astFromRollConfigs,
+  dieNodeFromConfig,
+  findDie,
+  getTotalCount,
+  naturalDieConfig,
+  rerollablePool,
+  resolveSingleDie,
+} from "./ast";
 import type { DieNode, ExpressionNode } from "./nodes";
+import type { RollBuilder } from "./roll";
 
 /** One physical die of a sample. `kept` is false for a die the roll dropped (rerolled away, lost a keep). */
 export interface SampledDie {
@@ -24,6 +33,40 @@ export interface SampledDie {
 export interface RollSample {
   total: number;
   dice: SampledDie[];
+}
+
+/** The dice of one check draw: the natural roll (dropped d20s `kept: false`), then every bonus die. */
+export interface CheckDice {
+  check: SampledDie[];
+  /** The natural roll's kept face; 0 for a check with no die. */
+  natural: number;
+  /** The bonus dice's sum, penalty dice subtracted. */
+  bonus: number;
+}
+
+/**
+ * The sampling twin of `resolveRootD20`: one draw of the natural die under its roll type (the
+ * dice in roll order), then of each bonus die group in config order. The flat modifier is not
+ * added; the caller reads `check.modifier`.
+ */
+export function sampleCheckDice(check: RollBuilder, rng: Rng): CheckDice {
+  const dice: SampledDie[] = [];
+  let natural = 0;
+  const root = naturalDieConfig(check);
+  if (root) {
+    const die = dieNodeFromConfig(root);
+    const rollType = check.rollType;
+    const s = sampleNode(rollType === "flat" ? die : { type: "d20Roll", rollType, child: die }, rng);
+    natural = s.total;
+    dice.push(...s.dice);
+  }
+  let bonus = 0;
+  for (const config of check.getBonusDiceConfigs()) {
+    const s = sampleNode(astFromRollConfigs([config])!, rng);
+    bonus += s.total;
+    dice.push(...s.dice);
+  }
+  return { check: dice, natural, bonus };
 }
 
 /** Gains and scores compare on the same grid as `reroll-pool.ts`, so float noise never flips a choice. */

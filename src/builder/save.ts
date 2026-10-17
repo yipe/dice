@@ -165,8 +165,9 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * {@link DCBuilder.sampleCheck}), then the failure payload's dice, then an `onSaveSuccess` payload
    * on a pass. A pass still draws the failure dice: under `saveHalf()` the PMF halves that same
    * roll, and under a plain save the draw order must not depend on the pass, since in play the
-   * player's dice are on the table before the enemy's d20 decides. `context.vulnerable` doubles a
-   * failure's total as a whole roll and never redraws.
+   * player's dice are on the table before the enemy's d20 decides. Under `onSaveSuccess()` a pass
+   * lists them `kept: false` ahead of the success payload's dice: every die that rolled is shown.
+   * `context.vulnerable` doubles a failure's total as a whole roll and never redraws.
    */
   sample(rng: Rng, context?: RowContext): SaveSample {
     const save = context ? this.inContext(context) : this;
@@ -185,7 +186,8 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
     if (save.saveOutcome === "half") return { outcome: "save-pass", check, damage, total: scaleValue(total, 0.5, "floor") };
     if (save.saveOutcome instanceof RollBuilder) {
       const s = save.saveOutcome.sample(rng);
-      return { outcome: "save-pass", check, damage: s.dice, total: s.total };
+      const avoided = damage.map((die) => ({ ...die, kept: false }));
+      return { outcome: "save-pass", check, damage: [...avoided, ...s.dice], total: s.total };
     }
     return { outcome: "save-pass", check, damage, total: 0 };
   }

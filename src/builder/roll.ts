@@ -14,8 +14,6 @@ import {
   pmfFromRollBuilder,
   rerollablePool,
   resolveRootD20,
-  sampleCheckDice,
-  type CheckDice,
 } from "./ast";
 import { requireFinite, rerollUpToArguments } from "./arguments";
 import {
@@ -29,7 +27,7 @@ import {
 } from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
-import { sampleNode, type RollSample } from "./sample";
+import { sampleCheckDice, sampleNode, type CheckDice, type RollSample } from "./sample";
 import type { AttackRange, RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
