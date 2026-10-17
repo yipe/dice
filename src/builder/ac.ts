@@ -1,7 +1,8 @@
 import { PMF } from "../pmf/pmf";
 import type { Rng } from "../common/rng";
 import { AttackBuilder } from "./attack";
-import { resolveRootD20, sampleCheckDice, type CheckDice } from "./ast";
+import { resolveRootD20 } from "./ast";
+import { sampleCheckDice, type CheckDice } from "./sample";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
 import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";

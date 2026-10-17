@@ -102,10 +102,14 @@ describe("SaveBuilder.sample", () => {
     expect(s.damage.map((x) => x.face)).toEqual([4, 5]);
   });
 
-  it("onSaveSuccess draws its own payload after the failure dice", () => {
+  it("onSaveSuccess draws its own payload after the failure dice, which stay in the trace dropped", () => {
     const s = d20.plus(3).dc(15).onSaveFailure(roll(2, 6)).onSaveSuccess(d(4)).sample(dice([12, 4, 5, 3]));
     expect(s).toMatchObject({ outcome: "save-pass", total: 3 });
-    expect(s.damage).toEqual([{ sides: 4, face: 3, kept: true }]);
+    expect(s.damage).toEqual([
+      { sides: 6, face: 4, kept: false },
+      { sides: 6, face: 5, kept: false },
+      { sides: 4, face: 3, kept: true },
+    ]);
   });
 
   it("rollUnder returns the save re-derived in the context", () => {
