@@ -9,7 +9,7 @@ import { scaleValue } from "../pmf/sample";
 import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
 import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
-import type { SampledDie } from "./sample";
+import type { RollSample, SampledDie } from "./sample";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
 import { requireFinite, rerollUpToArguments } from "./arguments";
@@ -85,6 +85,8 @@ export interface AttackSample {
   /** The base payload's dice (the doubled pool on a crit), then each separate channel's, or the miss payload's. */
   damage: SampledDie[];
   total: number;
+  /** On a landing, the payload split at the base (see {@link AttackBuilder.samplePayload}); absent on a miss. */
+  payload?: { base: RollSample; separate: RollSample[] };
 }
 
 export class AttackBuilder implements CheckBuilder, ContextualSource {
@@ -604,15 +606,15 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // `noCrit()`: the crit's weight lands as a hit (`resolveScaled`).
     if (outcome === "crit" && attack.critEffect === null) outcome = "hit";
 
-    const damage: SampledDie[] = [];
-    let total = 0;
-    const draw = (effect: ActionEffect | undefined): void => {
-      if (!effect) return;
-      const s = effect.sample(rng);
-      total += s.total;
-      damage.push(...s.dice);
-    };
     if (outcome === "miss") {
+      const damage: SampledDie[] = [];
+      let total = 0;
+      const draw = (effect: ActionEffect | undefined): void => {
+        if (!effect) return;
+        const s = effect.sample(rng);
+        total += s.total;
+        damage.push(...s.dice);
+      };
       if (attack.halfOnMissFlag) {
         if (attack.hitEffect) draw(attack.pooled(attack.hitEffect));
         for (const channel of attack.separateDamage) draw(channel);
@@ -620,13 +622,27 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       } else {
         draw(attack.missEffect);
       }
-    } else {
-      const base = outcome === "crit" ? (attack.critEffect ?? attack.hitEffect?.copy().doubleDice()) : attack.hitEffect;
-      if (base) draw(attack.pooled(base));
-      for (const channel of attack.separateDamage) draw(outcome === "crit" ? channel.copy().doubleDice() : channel);
-      if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+      return { outcome, check: checkDice, damage, total };
     }
-    return { outcome, check: checkDice, damage, total };
+    const payload = attack.samplePayload(outcome, rng);
+    const { base, separate } = payload;
+    let total = base.total + separate.reduce((sum, s) => sum + s.total, 0);
+    if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+    return { outcome, check: checkDice, damage: [...base.dice, ...separate.flatMap((s) => s.dice)], total, payload };
+  }
+
+  /**
+   * The dice of one landing's payload as {@link sample} draws them, split at the base: the base
+   * payload (the doubled pool on a crit unless `onCrit` names one, the `rerollDamageUpTo` budget
+   * applied), then each separate channel. `outcome` is the landing as {@link sample} reports it
+   * (`noCrit()` already downgraded). What a turn's substitute re-rolls and a `dice-match` reads.
+   */
+  samplePayload(outcome: "hit" | "crit", rng: Rng, context?: RowContext): { base: RollSample; separate: RollSample[] } {
+    const attack = context ? this.inContext(context) : this;
+    const effect = outcome === "crit" ? (attack.critEffect ?? attack.hitEffect?.copy().doubleDice()) : attack.hitEffect;
+    const base = effect ? attack.pooled(effect).sample(rng) : { total: 0, dice: [] };
+    const separate = attack.separateDamage.map((channel) => (outcome === "crit" ? channel.copy().doubleDice() : channel).sample(rng));
+    return { base, separate };
   }
 
   /**
