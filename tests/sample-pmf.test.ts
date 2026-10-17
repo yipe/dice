@@ -35,6 +35,10 @@ describe("samplePMF", () => {
     expect(samplePMF(mixed, scripted([true])).outcome).toBe("crit"); // labels sorted: crit, hit; P(crit)=0.25 coin true
     expect(samplePMF(mixed, scripted([false])).outcome).toBe("hit");
   });
+  it("draws an unlabeled bin as a hit and an empty PMF as missNone", () => {
+    expect(samplePMF(new PMF(new Map([[4, { p: 1, count: {} }]])), scripted([])).outcome).toBe("hit");
+    expect(samplePMF(new PMF(new Map()), scripted([]))).toEqual({ total: 0, outcome: "missNone" });
+  });
   it("is unbiased over many draws (seeded LCG)", () => {
     let s = 12345;
     const lcg: Rng = {

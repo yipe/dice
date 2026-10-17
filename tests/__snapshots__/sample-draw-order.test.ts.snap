@@ -1093,7 +1093,7 @@ exports[`draw order is a contract: Turn.sample > joins + happens coin: fixed see
           },
           {
             "damage": 0,
-            "result": "fired",
+            "result": "skipped",
             "source": "sa",
           },
         ],

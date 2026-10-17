@@ -779,7 +779,7 @@ function toPMF(
       return Math.abs(mass - 1) <= EPS ? part : part.normalize();
     }
     // A contextual source rolls its own row's context when nothing in the state changes it.
-    if (isContextual(part)) return rollUnder(part, contextOf(rowCheckOf(part) as RowCheck, 0), eps, id);
+    if (isContextual(part)) return pmfUnder(part, contextOf(rowCheckOf(part) as RowCheck, 0), eps, id);
     // `Damage` rules this out, but a consumer deserializing UI state reaches
     // here untyped. Reporting it as a spec error beats a bare TypeError from
     // calling a method that isn't there.
@@ -806,7 +806,7 @@ function toPMF(
 }
 
 /** `source`'s PMF under `context`, checked like a `toPMF()` result. */
-function rollUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
+function pmfUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
   const resolved = (source.under as (context: RowContext, eps?: number) => unknown)(context, eps);
   if (!(resolved instanceof PMF)) {
     throw new TurnSpecError("not-an-attack", id, `"${id}" has an under() that did not return a PMF.`);
@@ -3860,7 +3860,7 @@ export function buildPlan(
           );
           const context = { ...contextOf(check, key, penalties), joined: joinedOf(key) };
           return {
-            pmf: () => rollUnder(source as unknown as ContextualSource, context, eps, entry.id),
+            pmf: () => pmfUnder(source as unknown as ContextualSource, context, eps, entry.id),
             signature: contextKey(context),
           };
         }

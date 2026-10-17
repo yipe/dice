@@ -1,4 +1,5 @@
 import type { Rng } from "../common/rng";
+import { MISS_NONE_OUTCOME } from "../common/types";
 import type { PMF } from "./pmf";
 
 export interface PMFSample {
@@ -31,7 +32,7 @@ export function scaleValue(
  */
 export function samplePMF(pmf: PMF, rng: Rng): PMFSample {
   const values = [...pmf.map.keys()].sort((a, b) => a - b);
-  if (values.length === 0) return { total: 0, outcome: "missNone" };
+  if (values.length === 0) return { total: 0, outcome: MISS_NONE_OUTCOME };
   let remaining = pmf.mass();
   let chosen = values[values.length - 1];
   for (let i = 0; i < values.length - 1; i++) {
@@ -46,6 +47,7 @@ export function samplePMF(pmf: PMF, rng: Rng): PMFSample {
   const bin = pmf.map.get(chosen)!;
   const labels = Object.keys(bin.count).sort();
   let left = labels.reduce((sum, label) => sum + (bin.count[label] ?? 0), 0);
+  // A bin with no label (`PMF.fromMap`, a plain roll) is a landed payload: it draws as a "hit".
   let outcome = labels[labels.length - 1] ?? "hit";
   for (let i = 0; i < labels.length - 1; i++) {
     const mass = bin.count[labels[i]] ?? 0;
