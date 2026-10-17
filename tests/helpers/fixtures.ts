@@ -2,7 +2,7 @@ import { d4, d6, d8, d20, roll } from "../../src/builder/factory";
 import { paralyzed } from "../../src/dnd5e/index";
 import { advantage, keepBestDamage, savePenalty, vulnerability } from "../../src/turn/effects";
 import { Turn, turn } from "../../src/turn/turn";
-import type { ContextualSource, RowCheck, RowContext } from "../../src/turn/types";
+import type { ContextualPayload, ContextualSource, RowCheck, RowContext } from "../../src/turn/types";
 
 const sword = d20.plus(5).ac(15).onHit(roll(1, 8, 3));
 const dagger = d20.plus(5).ac(15).critOn(19).onHit(roll(1, 4, 3));
@@ -34,6 +34,18 @@ const penalisedSave: ContextualSource = {
   rowCheck: breathCheck.onSaveFailure(roll(3, 6)).rowCheck,
   under: (context: RowContext, eps?: number) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)).toPMF(eps),
   rollUnder: (context: RowContext) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)),
+};
+
+const sneakHit = roll(3, 6);
+const sneakCrit = roll(6, 6);
+/** A rider payload read per attack with the rolls behind it (`ContextualPayload.rollAt`): rider dice, not a chip. */
+const sneakPerAttack: ContextualPayload = {
+  at: () => {
+    const onHit = sneakHit.toPMF();
+    const onCrit = sneakCrit.toPMF();
+    return { onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } };
+  },
+  rollAt: () => ({ onHit: sneakHit, onCrit: sneakCrit }),
 };
 
 /** The fixture turns every sampler conformance test runs: one per semantic trap the audit names. */
@@ -137,6 +149,11 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword, id: "a" },
       { source: penalisedSave, id: "breath" },
     ]).onFirstHit(savePenalty(d4).untilNextSave(), { of: ["a"] }),
+  "rider payload per attack with rollAt": () =>
+    turn([
+      { source: sword, id: "a" },
+      { source: dagger, id: "b" },
+    ]).rider({ id: "sneak", on: "first-hit", damage: sneakPerAttack }),
 };
 
 /** Builders with a `.sample`: the draw-order snapshot runs over these before Turn.sample exists. A5a lands with the

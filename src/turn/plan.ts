@@ -192,6 +192,8 @@ export interface TurnPlan {
   sourceOf: ReadonlyMap<string, Damage | ContextualSource | readonly Damage[]>;
   /** Per rider id, the rider as the plan placed it (`every-hit` with `max: 1` lowered to `first-hit`). */
   riderOf: ReadonlyMap<string, EvaluatedRider>;
+  /** Per rider id whose damage is read per attack ({@link ContextualPayload}): that payload, for `Turn.sample`'s `rollAt`. */
+  payloadAt: ReadonlyMap<string, ContextualPayload>;
 }
 
 /** Outcome-labelled sub-mass PMFs for one source, masses summing to 1. */
@@ -4044,6 +4046,7 @@ export function buildPlan(
     steps,
     sourceOf: new Map(sequence.map((entry): [string, Damage | ContextualSource | readonly Damage[]] => [entry.id, damageOf(entry.id)])),
     riderOf: new Map(riderIds.map((id, index): [string, EvaluatedRider] => [id, riders[index]])),
+    payloadAt: new Map([...contextualPayloads].map(([index, payload]): [string, ContextualPayload] => [riderIds[index], payload])),
     groupCount: slotLastStep.length,
     attackPMFs,
     attackSingles,

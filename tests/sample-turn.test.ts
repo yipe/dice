@@ -108,6 +108,8 @@ describe("Turn.sample law", () => {
       return { onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } };
     },
   };
+  /** The same payload with the rolls behind it (`rollAt`): the plan folds `at`, the sampler rolls these dice. */
+  const perAttackRolled: ContextualPayload = { ...perAttack, rollAt: () => ({ onHit: roll(2, 6), onCrit: roll(4, 6) }) };
   const breathCheck = d20.plus(3).dc(15).ability("wis");
   /** A save row whose `rollUnder` builds its check in the context itself (`DCBuilder.rolledIn`). */
   const penalisedSave: ContextualSource = {
@@ -146,6 +148,9 @@ describe("Turn.sample law", () => {
     ["folded chip rider (bare PMF) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6).toPMF(), happens: 0.75, landing: "any" })],
     ["folded chip rider (payload per attack) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: perAttack, happens: 0.75 })],
     ["save penalty die on a contextual save row (rollUnder already in context)", turn([{ source: sword, id: "a" }, { source: penalisedSave, id: "breath" }]).onFirstHit(savePenalty(d4).untilNextSave(), { of: ["a"] })],
+    ["rider payload per attack with rollAt: dice, not a chip", turn([sword, sword]).rider({ on: "first-hit", damage: perAttackRolled })],
+    ["rider payload per attack with rollAt, happens 0.75", turn([sword, sword]).rider({ on: "first-hit", damage: perAttackRolled, happens: 0.75 })],
+    ["rider payload per attack with rollAt, every hit under a vulnerability", turn([sword.onEveryHit(vulnerability().untilNextHit()), axe, axe]).rider({ on: "every-hit", damage: perAttackRolled })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;
@@ -259,6 +264,33 @@ describe("Turn.sample path details", () => {
     const fired = t.sample(script([15, 2, 1, 4, 16, 3], [true]));
     expect(fired.waves[0].outcomes[1]).toEqual({ source: "coin", result: "fired", damage: 5 });
     expect(fired.total).toBe(16);
+  });
+  it("a payload per attack with rollAt rolls its dice as rider dice, the crit roll as given, its coin first", () => {
+    const onHit = roll(2, 6).toPMF();
+    const onCrit = roll(4, 6).toPMF();
+    const sneak: ContextualPayload = {
+      at: () => ({ onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } }),
+      rollAt: () => ({ onHit: roll(2, 6), onCrit: roll(4, 6) }),
+    };
+    const t = turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).rider({ id: "sneak", on: "first-hit", damage: sneak, happens: 0.75 });
+    // a crits: 2d8 (4, 4); the coin comes up; the crit roll is 4d6 (1, 2, 3, 4), not 2d6 doubled again. b hits: sneak spent.
+    const crit = t.sample(script([20, 4, 4, 1, 2, 3, 4, 15, 6], [true]));
+    expect(crit.waves[0].outcomes).toEqual([
+      { source: "a", result: "crit", damage: 11 },
+      { source: "sneak", result: "fired", damage: 10 },
+    ]);
+    expect(crit.waves[0].dice.filter((x) => x.role === "rider").map((x) => [x.sides, x.face, x.source])).toEqual([
+      [6, 1, "sneak"],
+      [6, 2, "sneak"],
+      [6, 3, "sneak"],
+      [6, 4, "sneak"],
+    ]);
+    expect(crit.waves[1].outcomes).toEqual([{ source: "b", result: "hit", damage: 9 }]);
+    // The coin fails: no dice, skipped, and the landing still counts (b lands nothing).
+    const skipped = t.sample(script([15, 2, 15, 6], [false]));
+    expect(skipped.waves[0].outcomes[1]).toEqual({ source: "sneak", result: "skipped", damage: 0 });
+    expect(skipped.waves[0].dice.filter((x) => x.role === "rider")).toEqual([]);
+    expect(skipped.waves[1].outcomes).toEqual([{ source: "b", result: "hit", damage: 9 }]);
   });
   it("refuses a turn with a dealing condition, as the joint pmf does", () => {
     const ray = d20.plus(7).ac(16).onHit(roll(2, d8)).typed("cold");
