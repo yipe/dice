@@ -1,5 +1,6 @@
 import type { Check } from "../builder/types";
 import type { Bin, RollType } from "../common/types";
+import type { Rng } from "../common/rng";
 import { DenseTotal } from "../pmf/dense-total";
 import { PMF } from "../pmf/pmf";
 import { DiceQuery } from "../pmf/query";
@@ -11,6 +12,8 @@ import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./rea
 import { buildPlan, checkDuplicateIds, checkSaveRowAbility, checkStateLimit, declaredAttacks, fireMode, grantApplies, isStateless, released } from "./plan";
 import { contextOf, rowCheckOf } from "./context";
 import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
+import { sampleTurn } from "./sample";
+import type { Trace } from "./trace";
 import type {
   Attack,
   AttackOptions,
@@ -140,8 +143,13 @@ interface Readers {
   peakStates: number;
 }
 
-/** Test seam: the plan a turn walks and, once resolved, its walk size. Not exported from the package. */
-const inspections = new WeakMap<Turn, { plan: () => TurnPlan; stateCounts?: readonly number[] }>();
+/** Test seam: the plans a turn walks (`plan`; `samplePlan` for `Turn.sample`) and, once resolved, its walk size. Not exported from the package. */
+interface Inspection {
+  plan: () => TurnPlan;
+  samplePlan: () => TurnPlan;
+  stateCounts?: readonly number[];
+}
+const inspections = new WeakMap<Turn, Inspection>();
 
 /**
  * Test seam: whether every turn walks its plan, stateless or not. Not exported from the
@@ -151,7 +159,7 @@ export const walkEverything = { forced: false };
 
 /** Test seam: the plan `t` walks (built on first use for a stateless turn). Not exported from the package. */
 export function inspectPlan(t: Turn): TurnPlan {
-  return (inspections.get(t) as { plan: () => TurnPlan }).plan();
+  return (inspections.get(t) as Inspection).plan();
 }
 
 /**
@@ -160,8 +168,13 @@ export function inspectPlan(t: Turn): TurnPlan {
  */
 export function inspectTurn(t: Turn): { groupCount: number; stateCounts: readonly number[] } {
   t.mean();
-  const inspection = inspections.get(t) as { plan: () => TurnPlan; stateCounts: readonly number[] };
+  const inspection = inspections.get(t) as Required<Inspection>;
   return { groupCount: inspection.plan().groupCount, stateCounts: inspection.stateCounts };
+}
+
+/** Test seam: the plan `Turn.sample` walks, built if it has not been. Not exported from the package. */
+export function inspectSamplePlan(t: Turn): TurnPlan {
+  return (inspections.get(t) as Inspection).samplePlan();
 }
 
 /**
@@ -405,6 +418,8 @@ export class Turn {
   private patterns?: ReadonlyMap<string, ReadonlyMap<string, LandingPattern>>;
   /** The plan without probes, built on first use when there are probes (see {@link Turn.resolve}). */
   private plainPlan?: TurnPlan;
+  /** The plan `sample` walks: joint folds, no probes. Built on first use (see {@link samplePlan}). */
+  private sampled?: TurnPlan;
   /** The state the plan is built from: optional conditions decided (see {@link optionalChoice}). */
   private readonly planned: TurnState;
 
@@ -433,12 +448,17 @@ export class Turn {
     } else {
       ({ planned: this.planned, plan: this.built } = Turn.optionalChoice(this.state, eps));
     }
-    inspections.set(this, { plan: () => this.plan });
+    inspections.set(this, { plan: () => this.plan, samplePlan: () => this.samplePlan });
   }
 
   private get plan(): TurnPlan {
     this.built ??= buildPlan(this.planned, this.eps, new Set(this.planned.declined), "masses");
     return this.built;
+  }
+
+  private get samplePlan(): TurnPlan {
+    this.sampled ??= buildPlan({ ...this.planned, observe: [] }, this.eps, new Set(this.planned.declined), "joint");
+    return this.sampled;
   }
 
   /**
@@ -1028,6 +1048,22 @@ export class Turn {
   }
 
   /**
+   * One play of the turn: the same path the PMF walk sums over, drawn once. Every die is
+   * rolled with `rng.die`; a coin (a chance, a grant save, a source with no dice to roll) with
+   * `rng.chance`. Optional conditions are attempted as the plan decided. See `sampleTurn`.
+   */
+  sample(rng: Rng): Trace {
+    if (this.plan.dealing) {
+      throw new TurnSpecError(
+        "dealing-joint-unsupported",
+        this.plan.conditionIds.join(", "),
+        "A condition in this turn needs a damage type dealt (`dealing`): the turn knows only the odds a landing dealt it, so it has no joint to sample."
+      );
+    }
+    return sampleTurn(this.samplePlan, this.eps, rng);
+  }
+
+  /**
    * Mean damage for the turn. With a `dealing` condition, the sum of every attack's and rider's
    * marginal mean (the mean is linear, so it is exact where the joint is not available).
    */
@@ -1483,7 +1519,7 @@ export class Turn {
     const plan = buildPlan({ ...this.planned, observe: [] }, this.eps, new Set(this.planned.declined), "joint");
     const eps = this.eps;
     const { states, stateCounts } = this.walk(pmfLedger(eps), plan);
-    inspections.set(this, { plan: () => this.plan, stateCounts });
+    inspections.set(this, { plan: () => this.plan, samplePlan: () => this.samplePlan, stateCounts });
 
     let total: DenseTotal | undefined;
     for (const state of states.values()) {
