@@ -123,6 +123,7 @@ describe("Turn.sample law", () => {
     ["parsed string rows", turn([d("(d20 + 5 AC 15) * (2d6)"), d("(d20 + 5 AC 15) * (1d8 + 3)")]).onFirstHit(roll(2, 6))],
     ["reroll budget on the base pool", turn([axe.rerollDamageUpTo(1), axe]).onFirstHit(keepBestDamage())],
     ["advantage of its own under a granted advantage", turn([d20.plus(6).withAdvantage().ac(16).onHit(roll(2, 6, 4)).onEveryHit(advantage().untilNextAttack()), axe])],
+    ["chip riders: a PMF payload, folded and as a step that may not happen", turn([sword, sword]).onEveryHit(roll(1, 6).toPMF()).rider({ on: "first-hit", damage: roll(2, 6).toPMF(), happens: 0.3 })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;

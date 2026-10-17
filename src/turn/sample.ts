@@ -22,7 +22,7 @@ import { advance, FIRST_NONE, START_CODE } from "./state";
 import type { StepOutcome } from "./state";
 import { SAMPLER_VERSION } from "./trace";
 import type { DieRole, DieRoll, OutcomeResult, Trace, Wave } from "./trace";
-import type { Damage, RiderDamage, RiderPayload, RowContext } from "./types";
+import type { ContextualSource, Damage, RiderDamage, RiderPayload, RowContext } from "./types";
 
 export { SAMPLER_VERSION } from "./trace";
 
@@ -139,7 +139,7 @@ function matchedOf(builder: AttackBuilder, sample: AttackSample): boolean {
 
 /** The builder a row rolls with in `context`, or `undefined` for a row that is a chip. */
 function rollerOf(
-  source: TurnPlan["sourceOf"] extends ReadonlyMap<string, infer S> ? S | undefined : never,
+  source: Damage | ContextualSource | readonly Damage[] | undefined,
   context: RowContext | undefined
 ): AttackBuilder | SaveBuilder | RollBuilder | undefined {
   if (source === undefined || Array.isArray(source)) return undefined;
