@@ -1,10 +1,29 @@
-import { d20, roll } from "../../src/builder/factory";
+import { d6, d8, d20, roll } from "../../src/builder/factory";
 import { paralyzed } from "../../src/dnd5e/index";
 import { advantage, keepBestDamage, vulnerability } from "../../src/turn/effects";
-import { turn, type Turn } from "../../src/turn/turn";
+import { Turn, turn } from "../../src/turn/turn";
+import type { ContextualSource, RowCheck, RowContext } from "../../src/turn/types";
 
 const sword = d20.plus(5).ac(15).onHit(roll(1, 8, 3));
 const dagger = d20.plus(5).ac(15).critOn(19).onHit(roll(1, 4, 3));
+
+const check: RowCheck = {
+  kind: "attack",
+  rollType: "flat",
+  advantageDice: 2,
+  pinned: false,
+  autoHit: false,
+  autoCrit: false,
+  autoFail: false,
+};
+/** The sword with rider "sa"'s 3d6 in its own roll. */
+const pooled = d20.plus(5).ac(15).onHit(roll(1, d8).plus(3).plus(3, d6));
+/** A row that rolls rider "sa"'s dice in its own damage when the rider joins it (`Rider.joins`). */
+const poolingRow: ContextualSource = {
+  rowCheck: check,
+  under: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).under(context),
+  rollUnder: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).rollUnder(context),
+};
 
 /** The fixture turns every sampler conformance test runs: one per semantic trap the audit names. */
 export const FIXTURES: Record<string, () => Turn> = {
@@ -73,6 +92,30 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword.onEveryHit(paralyzed().untilEndOfTurn()), id: "a" },
       { source: sword.melee(), id: "b" },
     ]),
+  "joins: sneak dice pooled into the first row": () =>
+    Turn.from({
+      attacks: [
+        { id: "a", source: poolingRow },
+        { id: "b", source: sword },
+      ],
+      riders: [{ id: "sa", on: "first-hit", damage: roll(3, d6), joins: ["a"] }],
+    }),
+  "joins + happens coin": () =>
+    Turn.from({
+      attacks: [
+        { id: "a", source: poolingRow },
+        { id: "b", source: sword },
+      ],
+      riders: [{ id: "sa", on: "first-hit", damage: roll(3, d6), joins: ["a"], happens: 0.7 }],
+    }),
+  "joins + row chance": () =>
+    Turn.from({
+      attacks: [
+        { id: "a", source: poolingRow, chance: 0.6 },
+        { id: "b", source: sword },
+      ],
+      riders: [{ id: "sa", on: "first-hit", damage: roll(3, d6), joins: ["a"] }],
+    }),
 };
 
 /** Builders with a `.sample`: the draw-order snapshot runs over these before Turn.sample exists. A5a lands with the
