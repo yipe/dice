@@ -370,9 +370,20 @@ export function resolveD20Roll(die: DieNode, rollType: RollType | undefined): PM
  * 1 or 20 and throws.
  */
 export function resolveRootD20(check: RollBuilder): PMF {
+  const root = naturalDieConfig(check);
+  if (!root) return PMF.delta(0);
+  return resolveD20Roll(dieNodeFromConfig(root), check.rollType);
+}
+
+/**
+ * The config of `check`'s natural die as {@link resolveRootD20} reads it (an `ACBuilder` folds
+ * three-dice advantage in), or `undefined` for a check with no die. Throws when the natural roll
+ * is not one die.
+ */
+export function naturalDieConfig(check: RollBuilder): RollConfig | undefined {
   const configs = check.getSubRollConfigs();
   const rootIdx = naturalRollIndex(configs);
-  if (rootIdx === -1) return PMF.delta(0);
+  if (rootIdx === -1) return undefined;
   const rootConfig = check.getRootDieConfig() ?? configs[rootIdx];
   const sides = configs[rootIdx].sides;
   const tied = configs.some(
@@ -384,7 +395,7 @@ export function resolveRootD20(check: RollBuilder): PMF {
         "Roll it once and add any other dice as bonus dice."
     );
   }
-  return resolveD20Roll(dieNodeFromConfig(rootConfig), check.rollType);
+  return rootConfig;
 }
 
 export function resolveSingleDie(die: DieNode, eps: number = defaultEps): PMF {
@@ -577,7 +588,7 @@ export function rerollablePool(node: ExpressionNode): {
 
 // Getters
 
-function findDie(node: ExpressionNode): DieNode | undefined {
+export function findDie(node: ExpressionNode): DieNode | undefined {
   switch (node.type) {
     case "die":
       return node;
@@ -625,7 +636,7 @@ function maxOfIndependent(parts: readonly PMF[], eps: number): PMF {
   return PMF.fromMap(out, eps);
 }
 
-function getTotalCount(node: KeepNode): number {
+export function getTotalCount(node: KeepNode): number {
   // The total dice count is encoded in the nearest SumNode under child
   let cur = node.child;
   while (cur.type === "keep") cur = cur.child;

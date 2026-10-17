@@ -1,12 +1,15 @@
 import type { OutcomeType } from "../common/types";
 import { EPS } from "../common/types";
+import type { Rng } from "../common/rng";
 import { Mixture } from "../pmf/mixture";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { scaleValue } from "../pmf/sample";
 import { pmfFromRollBuilder } from "./ast";
 import type { AttachedCondition } from "./attack";
 import type { DCBuilder } from "./dc";
 import { ParsedRollBuilder, RollBuilder } from "./roll";
+import type { SampledDie } from "./sample";
 import type { AbilityName, CheckBuilder, SaveResolution } from "./types";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
 import { IGNORES_JOINED } from "../turn/context";
@@ -31,6 +34,14 @@ function payloadPMF(effect: RollBuilder, eps: number): PMF {
   return effect instanceof ParsedRollBuilder ? effect.toPMF(eps) : pmfFromRollBuilder(effect);
 }
 
+/** One roll of a save: the enemy's check dice, the payload dice and what landed. */
+export interface SaveSample {
+  outcome: "save-fail" | "save-pass";
+  check: SampledDie[];
+  damage: SampledDie[];
+  total: number;
+}
+
 export class SaveBuilder implements CheckBuilder, ContextualSource {
   /** A turn rolls no rider's dice into this row (`Rider.joins`): `under` ignores `context.joined`. */
   readonly [IGNORES_JOINED] = true;
@@ -46,7 +57,13 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
     readonly check: DCBuilder,
     private readonly failureEffect?: RollBuilder,
     private readonly saveOutcome: SaveOutcome | RollBuilder = "normal",
-    readonly attached: readonly AttachedCondition[] = []
+    readonly attached: readonly AttachedCondition[] = [],
+    /**
+     * 2 for the save {@link rollUnder} returns in a vulnerable context: a failure's total is doubled
+     * as a whole roll, in the PMF and in {@link sample}, so the builder's PMF is `under(context)`.
+     * Set only there; a builder derived from it is built unscaled.
+     */
+    private readonly failScale: 1 | 2 = 1
   ) {}
 
   /**
@@ -134,15 +151,55 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * facts, and `joined` is ignored: a builder does not pool rider dice into its own roll.
    */
   under(context: RowContext, eps: number = 0): PMF {
-    const own = this.rowCheck;
-    const rollType = own.pinned ? own.rollType : context.rollType;
-    const autoFail = own.autoFail || context.autoFail;
-    let save: SaveBuilder = this;
-    if (rollType !== own.rollType || autoFail !== own.autoFail || context.penaltyDice.length > 0) {
-      const check = this.check.rolledIn({ rollType, autoFail, penaltyDice: context.penaltyDice });
-      save = new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
+    return this.rollUnder(context).toPMF(eps);
+  }
+
+  /**
+   * See {@link ContextualSource.rollUnder}: this save with its check rolled in `context` ({@link under}'s
+   * rebuild), with a vulnerable context's doubling baked in, so its PMF is exactly `under(context)`.
+   */
+  rollUnder(context: RowContext): SaveBuilder {
+    const save = this.inContext(context);
+    if (!context.vulnerable || save.failScale === 2) return save;
+    return new SaveBuilder(save.check, save.failureEffect, save.saveOutcome, save.attached, 2);
+  }
+
+  /** `this` when `context` changes nothing, else this save with its check rolled in it (see {@link DCBuilder.inContext}). */
+  private inContext(context: RowContext): SaveBuilder {
+    const check = this.check.inContext(context);
+    return check === this.check ? this : new SaveBuilder(check, this.failureEffect, this.saveOutcome, this.attached);
+  }
+
+  /**
+   * One roll of this save as {@link under} weighs it: the enemy's check (see
+   * {@link DCBuilder.sampleCheck}), then the failure payload's dice, then an `onSaveSuccess` payload
+   * on a pass. A pass still draws the failure dice: under `saveHalf()` the PMF halves that same
+   * roll, and under a plain save the draw order must not depend on the pass, since in play the
+   * player's dice are on the table before the enemy's d20 decides. Under `onSaveSuccess()` a pass
+   * lists them `kept: false` ahead of the success payload's dice: every die that rolled is shown.
+   * `context.vulnerable` doubles a failure's total as a whole roll and never redraws.
+   */
+  sample(rng: Rng, context?: RowContext): SaveSample {
+    const save = context ? this.inContext(context) : this;
+    const { check, failed } = save.check.sampleCheck(rng);
+    const damage: SampledDie[] = [];
+    let total = 0;
+    if (save.failureEffect) {
+      const s = save.failureEffect.sample(rng);
+      total = s.total;
+      damage.push(...s.dice);
     }
-    return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);
+    if (failed) {
+      if (context?.vulnerable || save.failScale === 2) total = scaleValue(total, 2, "floor");
+      return { outcome: "save-fail", check, damage, total };
+    }
+    if (save.saveOutcome === "half") return { outcome: "save-pass", check, damage, total: scaleValue(total, 0.5, "floor") };
+    if (save.saveOutcome instanceof RollBuilder) {
+      const s = save.saveOutcome.sample(rng);
+      const avoided = damage.map((die) => ({ ...die, kept: false }));
+      return { outcome: "save-pass", check, damage: [...avoided, ...s.dice], total: s.total };
+    }
+    return { outcome: "save-pass", check, damage, total: 0 };
   }
 
   /**
@@ -169,7 +226,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * `onSaveSuccess()`; else 0).
    */
   resolve(eps: number = EPS): SaveResolution {
-    return this.resolveScaled(eps, 1);
+    return this.resolveScaled(eps, this.failScale);
   }
 
   /**
@@ -231,7 +288,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
       outcomeKey = outcome;
     }
 
-    return `${checkKey}*F${failKey}*O${outcomeKey}*e${eps}`;
+    return `${checkKey}*F${failKey}*O${outcomeKey}*V${this.failScale}*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.

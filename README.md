@@ -322,6 +322,23 @@ fromUI.fireProbability("sneak");  // 0.8775
 Invalid specs throw a `TurnSpecError` right away. Its `code` (`unknown-id`, `cycle`, `duplicate-id`, …)
 can be mapped directly to a form field error.
 
+### Roll one play of a turn
+
+The numbers above are exact. When you also want to show a roll, `sample` plays the same turn once, drawing
+every die from an `Rng` you supply (`die(sides)` uniform on 1..sides, `chance(p)` a coin), in the walk's own
+order, so sampled totals follow `pmf` exactly. The `Trace` lists every die and outcome per step, and is
+stamped with `SAMPLER_VERSION`: the same seed replays the same trace until that number changes.
+
+```ts
+const rng = { die: (sides: number) => 1 + Math.floor(Math.random() * sides), chance: (p: number) => Math.random() < p };
+const trace = fromUI.sample(rng);
+trace.total;                          // one play's damage, distributed as fromUI.pmf
+trace.waves[0].dice;                  // [{ sides: 20, face: 17, role: "attack", kept: true, … }, …]
+trace.waves.flatMap((w) => w.outcomes); // [{ source: "dagger 1", result: "hit", damage: 7 }, …]
+```
+
+Builders sample too: `roll(3, d6).sample(rng)`, `dagger.sample(rng)`, `fireball.sample(rng)`.
+
 ### Chart-ready output
 
 ```ts

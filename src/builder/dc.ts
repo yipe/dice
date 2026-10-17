@@ -1,8 +1,10 @@
 import { PMF } from "../pmf/pmf";
+import type { Rng } from "../common/rng";
 import { resolveRootD20 } from "./ast";
 import { splitAtThreshold } from "./prob";
 import { requireFinite } from "./arguments";
 import { naturalRollIndex, RollBuilder } from "./roll";
+import { sampleCheckDice, type SampledDie } from "./sample";
 import { SaveBuilder } from "./save";
 import type { AttachedCondition } from "./attack";
 import type { Lasting } from "../turn/effects";
@@ -52,6 +54,13 @@ const dcPMFCache = PMF.createCache(4000);
 /** Clears the DC-check PMF cache (test/bench seam). */
 export function clearDCCache(): void {
   dcPMFCache.clear();
+}
+
+/** One draw of a save check: the dice, their total with the modifier, and whether it fell short of the DC. */
+export interface CheckSample {
+  check: SampledDie[];
+  total: number;
+  failed: boolean;
 }
 
 export class DCBuilder extends RollBuilder {
@@ -142,6 +151,17 @@ export class DCBuilder extends RollBuilder {
     return new DCBuilder(roll, { ...this.saveConfig, ...(autoFail ? { autoFail: true } : {}) });
   }
 
+  /**
+   * This check as a save row rolls it in a turn's `context` ({@link rolledIn}), keeping its own roll
+   * type when {@link pinned}; `this` when the context changes nothing.
+   */
+  inContext(context: RowContext): DCBuilder {
+    const rollType = this.getRootDieConfig()?.pinned ? this.rollType : context.rollType;
+    const autoFail = this.autoFail || context.autoFail;
+    if (rollType === this.rollType && autoFail === this.autoFail && context.penaltyDice.length === 0) return this;
+    return this.rolledIn({ rollType, autoFail, penaltyDice: context.penaltyDice });
+  }
+
   override add(anotherRoll: RollBuilder): DCBuilder {
     const newBuilder = super.add(anotherRoll);
     return new DCBuilder(newBuilder, this.saveConfig);
@@ -230,6 +250,21 @@ export class DCBuilder extends RollBuilder {
       pFail += bin.p * below;
     }
     return { pSuccess, pFail };
+  }
+
+  /**
+   * One draw of this check as {@link saveProbabilities} weighs it: the d20 under the roll type
+   * (dropped dice `kept: false`), then each bonus and penalty die (penalties subtracted), plus the
+   * modifier; `failed` when the total is below the DC, with no natural-1/natural-20 rule. In a
+   * `context` the check is first rolled {@link inContext}. `alwaysFails()` or `context.autoFail`
+   * fails with no draw.
+   */
+  sampleCheck(rng: Rng, context?: RowContext): CheckSample {
+    const check = context ? this.inContext(context) : this;
+    if (check.autoFail) return { check: [], total: 0, failed: true };
+    const drawn = sampleCheckDice(check, rng);
+    const total = drawn.natural + drawn.bonus + check.modifier;
+    return { check: drawn.check, total, failed: total < check.saveDC };
   }
 
   /**

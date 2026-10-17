@@ -1,6 +1,9 @@
 import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
 import type { AbilityName } from "../builder/types";
+import type { AttackBuilder } from "../builder/attack";
+import type { RollBuilder } from "../builder/roll";
+import type { SaveBuilder } from "../builder/save";
 
 export type { DiceMatchInfo, HasDiceMatchInfo };
 
@@ -169,6 +172,17 @@ export interface ContextualSource {
    * target's scales off). Read where a condition with `dealing` watches the row.
    */
   dealt?(type: string, context: RowContext): { hit: number; crit: number };
+  /**
+   * The builder behind `under(context)`, when the row has dice structure to roll; absent means
+   * "sample the PMF and show a chip". `undefined` from a present method means the same for that context.
+   *
+   * Contract: the builder's PMF is EXACTLY `under(context)`, vulnerability included. It is already in
+   * `context` (roll type, `autoHit`/`critOnHit`, `autoFail`, penalty dice, `joined` dice, and for a
+   * `vulnerable` context the doubling, with the target's scales off where the row models them) and
+   * is sampled with no further context; the sampler never scales what it returns. A consumer that
+   * cannot build such a roll for a context returns `undefined` there.
+   */
+  rollUnder?(context: RowContext): AttackBuilder | SaveBuilder | RollBuilder | undefined;
 }
 
 /**
@@ -254,11 +268,32 @@ export interface LandingPayload {
   vulnerable: { onHit: PMF; onCrit: PMF };
 }
 
+/**
+ * The rolls behind a {@link LandingPayload}: each builder's PMF is EXACTLY the payload's for that
+ * landing (`onHit`, `onCrit`, and `vulnerable.onHit` / `vulnerable.onCrit` where the landing used up a
+ * vulnerability). `onCrit` is the crit roll itself (dice already doubled, or whatever the rule says);
+ * the sampler never doubles or scales any of them. `vulnerable` may be omitted: a vulnerable landing
+ * is then drawn from `at(...).vulnerable` as a chip (exact), never as the plain roll doubled.
+ */
+export interface LandingRoll {
+  onHit: RollBuilder;
+  onCrit: RollBuilder;
+  vulnerable?: { onHit: RollBuilder; onCrit: RollBuilder };
+}
+
 /** Rider damage that depends on the attack it lands on: its type and the target's scale for that attack. */
 export interface ContextualPayload {
   at(attackId: string): LandingPayload;
   /** P(the payload on `attackId` deals more than 0 damage of `type` after the target's scale), as a plain hit and as a crit. */
   dealt?(type: string, attackId: string): { hit: number; crit: number };
+  /**
+   * The builders behind `at(attackId)`, when the payload has dice to roll (the twin of
+   * {@link ContextualSource.rollUnder}): their PMFs equal `at(attackId)`'s exactly, sampled with no
+   * further context and never scaled by the sampler (see {@link LandingRoll}). Absent means "draw the
+   * PMF and show a chip"; `undefined` from a present method means the same for that attack. May be
+   * called once per landing: return cheap or cached builders.
+   */
+  rollAt?(attackId: string): LandingRoll | undefined;
 }
 
 /**

@@ -1,10 +1,12 @@
 import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
+import type { Rng } from "../common/rng";
 import type { DCBuilder } from "./dc";
 import { parse } from "../parser/parser";
 import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionError } from "../parser/scaleDice";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
+import { samplePMF } from "../pmf/sample";
 import {
   astFromRollConfigs,
   clearDieCaches,
@@ -25,6 +27,7 @@ import {
 } from "./expression";
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
+import { sampleCheckDice, sampleNode, type CheckDice, type RollSample } from "./sample";
 import type { AttackRange, RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
@@ -687,6 +690,11 @@ export class RollBuilder {
     return this.toPMF(eps).query();
   }
 
+  /** One roll of this builder's AST: the total and every physical die, drawn from `rng`. */
+  sample(rng: Rng): RollSample {
+    return sampleNode(this.toAST(), rng);
+  }
+
   toAST(): ExpressionNode {
     const configs = this.getSubRollConfigs();
     return (
@@ -1210,6 +1218,11 @@ export class AlwaysHitBuilder extends RollBuilder {
     return resolveRootD20(this);
   }
 
+  /** One draw of the natural roll (which decides a crit) and the bonus dice: see `ACBuilder.sampleCheck`. */
+  sampleCheck(rng: Rng): CheckDice {
+    return sampleCheckDice(this, rng);
+  }
+
   override copy(): AlwaysHitBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
@@ -1303,6 +1316,14 @@ export class AlwaysCritBuilder extends RollBuilder {
     return resolveRootD20(this);
   }
 
+  /**
+   * One draw of the natural roll and the bonus dice (nothing is drawn by `AttackBuilder.sample` for
+   * `alwaysHits().alwaysCrits()`, which reads no roll): see `ACBuilder.sampleCheck`.
+   */
+  sampleCheck(rng: Rng): CheckDice {
+    return sampleCheckDice(this, rng);
+  }
+
   override copy(): AlwaysCritBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
@@ -1336,6 +1357,11 @@ export class ParsedRollBuilder extends RollBuilder {
   override toPMF(_eps: number = 0): PMF {
     // The PMF is pre-computed at construction with eps=0; epsilon is not re-applied here.
     return this.cachedPMF;
+  }
+
+  /** A parsed string has no AST, so its draw is a PMF draw with no dice structure. */
+  override sample(rng: Rng): RollSample {
+    return { total: samplePMF(this.toPMF(), rng).total, dice: [] };
   }
 
   override toExpression(): string {
