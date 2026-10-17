@@ -5,13 +5,12 @@ function lgamma(z: number): number {
     76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155,
     0.001208650973866179, -0.000005395239384953,
   ];
-  const x = z;
   let y = z;
-  let t = x + 5.5;
-  t -= (x + 0.5) * Math.log(t);
+  let t = z + 5.5;
+  t -= (z + 0.5) * Math.log(t);
   let s = 1.000000000190015;
   for (const k of c) s += k / ++y;
-  return -t + Math.log((2.5066282746310005 * s) / x);
+  return -t + Math.log((2.5066282746310005 * s) / z);
 }
 
 /** Regularized upper incomplete gamma Q(a, x) (series/continued fraction, Numerical Recipes), as the bake-off harness used. */
@@ -47,18 +46,28 @@ export function gammaQ(a: number, x: number): number {
   return Math.exp(-x + a * Math.log(x) - lgamma(a)) * h;
 }
 
-/** G-test of `observed` counts against `expected` (a PMF), pooling expected counts under 5 into the next bin. */
+/**
+ * G-test of `observed` counts against `expected` (a PMF), pooling expected counts under 5 into the
+ * next bin. `n` must equal the sum of the observed counts. An observed value the PMF gives no mass
+ * is impossible under it, so p is 0 at once, never pooled away.
+ */
 export function gTest(
   observed: ReadonlyMap<number, number>,
   expected: PMF,
   n: number
 ): { g: number; df: number; p: number } {
+  let total = 0;
+  for (const count of observed.values()) total += count;
+  if (total !== n) throw new Error(`gTest: n (${n}) must equal the observed total (${total})`);
   const values = [...new Set([...expected.map.keys(), ...observed.keys()])].sort((a, b) => a - b);
   const bins: { o: number; e: number }[] = [];
   let acc = { o: 0, e: 0 };
   for (const v of values) {
-    acc.o += observed.get(v) ?? 0;
-    acc.e += (expected.map.get(v)?.p ?? 0) * n;
+    const o = observed.get(v) ?? 0;
+    const p = expected.map.get(v)?.p ?? 0;
+    if (o > 0 && p === 0) return { g: Infinity, df: Math.max(1, values.length - 1), p: 0 };
+    acc.o += o;
+    acc.e += p * n;
     if (acc.e >= 5) {
       bins.push(acc);
       acc = { o: 0, e: 0 };
