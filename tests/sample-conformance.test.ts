@@ -4,6 +4,7 @@ import { gTest } from "./helpers/gtest";
 import { lcgRng } from "./helpers/lcg";
 import { sampleFallbacks } from "../src/turn/sample"; // test seam: { count: number }, reset per test
 
+// Samples per fixture; lower for a quick local run, e.g. `DICE_SAMPLES=20000 yarn vitest run tests/sample-conformance.test.ts`.
 const N = Number(process.env["DICE_SAMPLES"] ?? 100_000);
 
 describe("Turn.sample agrees with Turn.pmf", () => {
@@ -22,7 +23,7 @@ describe("Turn.sample agrees with Turn.pmf", () => {
       }
       const { p, g, df } = gTest(counts, exact, N);
       // Deterministic seed: the result is the same every run, so the threshold is a one-time calibration, not a flake budget.
-      // 12 fixtures: Bonferroni on alpha 0.001 is 8.3e-5; use 1e-6 to leave room for the mean check below.
+      // 15 fixtures: Bonferroni on alpha 0.001 is 6.7e-5; use 1e-6 to leave room for the mean check below.
       expect(p, `G=${g.toFixed(1)} df=${df}`).toBeGreaterThan(1e-6);
       const se = exact.stdev() / Math.sqrt(N);
       expect(Math.abs(sum / N - exact.mean())).toBeLessThan(5 * se);
@@ -38,6 +39,7 @@ describe("Turn.sample agrees with Turn.pmf", () => {
         fired++;
       }
     }
-    expect(fired / N).toBeCloseTo(t.fireProbability("sneak"), 2);
+    const p = t.fireProbability("sneak");
+    expect(Math.abs(fired / N - p)).toBeLessThan(5 * Math.sqrt((p * (1 - p)) / N));
   });
 });
