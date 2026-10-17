@@ -1,0 +1,146 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`draw order is a contract: builders > rerollUpTo savage: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "dice": [
+      {
+        "face": 2,
+        "kept": false,
+        "sides": 6,
+      },
+      {
+        "face": 4,
+        "kept": false,
+        "sides": 6,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "total": 12,
+  },
+  {
+    "dice": [
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 5,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 2,
+        "kept": false,
+        "sides": 6,
+      },
+      {
+        "face": 3,
+        "kept": false,
+        "sides": 6,
+      },
+    ],
+    "total": 11,
+  },
+  {
+    "dice": [
+      {
+        "face": 5,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 3,
+        "kept": false,
+        "sides": 6,
+      },
+      {
+        "face": 4,
+        "kept": false,
+        "sides": 6,
+      },
+    ],
+    "total": 9,
+  },
+]
+`;
+
+exports[`draw order is a contract: builders > roll 3d8 reroll 1 minimum 2 plus 2: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "dice": [
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 2,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+    ],
+    "total": 12,
+  },
+  {
+    "dice": [
+      {
+        "face": 2,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 7,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+    ],
+    "total": 15,
+  },
+  {
+    "dice": [
+      {
+        "face": 3,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 5,
+        "kept": true,
+        "sides": 8,
+      },
+    ],
+    "total": 14,
+  },
+]
+`;
