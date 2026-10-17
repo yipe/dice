@@ -2152,6 +2152,231 @@ exports[`draw order is a contract: Turn.sample > rerollUpTo + explode pool paylo
 ]
 `;
 
+exports[`draw order is a contract: Turn.sample > save penalty die on a contextual save row: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "samplerVersion": 1,
+    "total": 0,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "enemy",
+            "face": 14,
+            "kept": true,
+            "role": "save",
+            "sides": 20,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "save-pass",
+            "source": "breath",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 24,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 7,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 10,
+            "result": "hit",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "enemy",
+            "face": 8,
+            "kept": true,
+            "role": "save",
+            "sides": 20,
+            "source": "breath",
+          },
+          {
+            "by": "enemy",
+            "face": 1,
+            "kept": true,
+            "role": "save",
+            "sides": 4,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 14,
+            "result": "save-fail",
+            "source": "breath",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 0,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "enemy",
+            "face": 16,
+            "kept": true,
+            "role": "save",
+            "sides": 20,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "breath",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "save-pass",
+            "source": "breath",
+          },
+        ],
+      },
+    ],
+  },
+]
+`;
+
 exports[`draw order is a contract: Turn.sample > save with half and a rider on fail: fixed seeds, fixed draws 1`] = `
 [
   {

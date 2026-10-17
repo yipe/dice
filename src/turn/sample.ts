@@ -139,18 +139,29 @@ function matchedOf(builder: AttackBuilder, sample: AttackSample): boolean {
   return builder.diceMatchInfo()[sample.outcome] !== null && diceMatched(sample.payload.base);
 }
 
+/**
+ * The builder a row rolls with, and the context its `sample` still has to apply: the row's own
+ * context for a bare builder; `undefined` for one `rollUnder(context)` returned, which is already
+ * in it (applying it again would, for a save, subtract the penalty dice twice).
+ */
+interface Roller {
+  builder: AttackBuilder | SaveBuilder | RollBuilder;
+  context: RowContext | undefined;
+}
+
 /** The builder a row rolls with in `context`, or `undefined` for a row that is a chip. */
 function rollerOf(
   source: Damage | ContextualSource | readonly Damage[] | undefined,
   context: RowContext | undefined
-): AttackBuilder | SaveBuilder | RollBuilder | undefined {
+): Roller | undefined {
   if (source === undefined || Array.isArray(source)) return undefined;
-  if (source instanceof AttackBuilder || source instanceof SaveBuilder) return source;
+  if (source instanceof AttackBuilder || source instanceof SaveBuilder) return { builder: source, context };
   if (isContextual(source) && typeof source.rollUnder === "function") {
-    return source.rollUnder(context ?? contextOf(source.rowCheck, 0));
+    const builder = source.rollUnder(context ?? contextOf(source.rowCheck, 0));
+    return builder === undefined ? undefined : { builder, context: undefined };
   }
   // A plain `RollBuilder` row is one unlabelled payload; a parsed string has no dice to show.
-  if (source instanceof RollBuilder && !(source instanceof ParsedRollBuilder)) return source;
+  if (source instanceof RollBuilder && !(source instanceof ParsedRollBuilder)) return { builder: source, context };
   return undefined;
 }
 
@@ -181,27 +192,29 @@ interface RowRoll {
   saveClass?: 0 | 1 | 2 | 3;
 }
 
-/** One roll of a row with its builder: the dice, the landing and its own damage. */
-function sampleRow(
-  step: Step,
-  roller: AttackBuilder | SaveBuilder | RollBuilder,
-  context: RowContext | undefined,
-  vulnerable: boolean,
-  rng: Rng
-): RowRoll {
-  if (roller instanceof AttackBuilder) {
-    const sample = roller.sample(rng, context);
+/**
+ * One roll of a row with its builder: the dice, the landing and its own damage. A builder's
+ * `sample(rng, context)` doubles a landing for `context.vulnerable` itself; one already in its
+ * context is sampled without one, so the doubling is applied here the same way (a landing, or
+ * a failed save, as a whole roll).
+ */
+function sampleRow(step: Step, { builder, context }: Roller, vulnerable: boolean, rng: Rng): RowRoll {
+  const doubled = (total: number): number => (vulnerable && context === undefined ? scaleValue(total, 2, "floor") : total);
+  if (builder instanceof AttackBuilder) {
+    const sample = builder.sample(rng, context);
+    if (sample.outcome !== "miss") sample.total = doubled(sample.total);
     return {
       outcome: sample.outcome,
       result: sample.outcome,
       total: sample.total,
       dice: [...traced(sample.check, "attack", "you", step.id), ...traced(sample.damage, "damage", "you", step.id)],
-      attack: { builder: roller, sample },
+      attack: { builder, sample },
     };
   }
-  if (roller instanceof SaveBuilder) {
-    const sample = roller.sample(rng, context);
+  if (builder instanceof SaveBuilder) {
+    const sample = builder.sample(rng, context);
     const failed = sample.outcome === "save-fail";
+    if (failed) sample.total = doubled(sample.total);
     const dealt = sample.total > 0;
     return {
       outcome: "hit",
@@ -211,7 +224,7 @@ function sampleRow(
       saveClass: failed ? (dealt ? 0 : 1) : dealt ? 2 : 3,
     };
   }
-  const sample = roller.sample(rng);
+  const sample = builder.sample(rng);
   return {
     outcome: "hit",
     result: "hit",
@@ -318,7 +331,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       rowResult = resultOf(own.outcome, draw.outcome);
       spent = draw.spends;
     } else {
-      const roll = sampleRow(step, roller, rowContext, vulnerable, rng);
+      const roll = sampleRow(step, roller, vulnerable, rng);
       const { outcome, attack } = roll;
       let ownTotal = roll.total;
       rowDice = roll.dice;
@@ -343,7 +356,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
           step.policy.kind === "always" ||
           (step.policy.kind === "below" && (base.total < step.policy[outcome] || !holdAvailable));
         if (spent) {
-          const fresh = attack.builder.samplePayload(outcome, rng, rowContext).base;
+          const fresh = attack.builder.samplePayload(outcome, rng, roller.context).base;
           const better = fresh.total > base.total;
           ownTotal = (better ? fresh : base).total + separate.reduce((sum, s) => sum + s.total, 0);
           if (vulnerable) ownTotal = scaleValue(ownTotal, 2, "floor");
