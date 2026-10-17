@@ -3,6 +3,7 @@ export * from "./attack";
 export * from "./dc";
 export * from "./factory";
 export * from "./roll";
+export * from "./sample";
 export * from "./save";
 export * from "./types";
 // `Mixture` builds the PMFs a `Turn` reads; the root entry exports it too, and both entries
