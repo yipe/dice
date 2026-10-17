@@ -71,8 +71,16 @@ describe("gTest", () => {
     const spiky = PMF.fromMap(new Map([[0, 0.9999], [100, 0.0001]]));
     expect(gTest(new Map([[0, 1000]]), spiky, 1000).df).toBe(1);
   });
+  it("returns p = 0 for an observed value the PMF gives no mass, even one draw", () => {
+    const observed = new Map([[1, 9999], [2, 9999], [3, 10000], [4, 10000], [5, 10000], [6, 10000], [7, 2]]);
+    const r = gTest(observed, fair, 60000);
+    expect(r.p).toBe(0);
+    expect(r.g).toBe(Infinity);
+  });
+  it("throws when n is not the observed total", () => {
+    expect(() => gTest(new Map([[1, 10]]), fair, 11)).toThrow(/observed total/);
+  });
 });
-
 
 describe("lcgRng", () => {
   it("2d20 keep-highest over 200k draws passes the G-test against the exact PMF", () => {

@@ -1,12 +1,10 @@
 import { d20, roll } from "../../src/builder/factory";
-import { advantage, condition, keepBestDamage, vulnerability } from "../../src/turn/effects";
+import { paralyzed } from "../../src/dnd5e/index";
+import { advantage, keepBestDamage, vulnerability } from "../../src/turn/effects";
 import { turn, type Turn } from "../../src/turn/turn";
-import type { ConditionRule } from "../../src/turn/types";
 
 const sword = d20.plus(5).ac(15).onHit(roll(1, 8, 3));
 const dagger = d20.plus(5).ac(15).critOn(19).onHit(roll(1, 4, 3));
-/** The trap this fixture names is the auto-crit, so the rule carries it (5e's stunned does not; paralyzed does). */
-const stunnedRule: ConditionRule = { attack: { melee: ["advantage", "critOnHit"], ranged: ["advantage"] } };
 
 /** The fixture turns every sampler conformance test runs: one per semantic trap the audit names. */
 export const FIXTURES: Record<string, () => Turn> = {
@@ -70,9 +68,9 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword.onEveryHit(vulnerability().untilNextHit()), id: "a" },
       { source: sword, id: "b" },
     ]),
-  "stunned condition (auto-crit on later melee)": () =>
+  "paralyzed condition (auto-crit on later melee)": () =>
     turn([
-      { source: sword.onEveryHit(condition("stunned", stunnedRule).untilEndOfTurn()), id: "a" },
+      { source: sword.onEveryHit(paralyzed().untilEndOfTurn()), id: "a" },
       { source: sword.melee(), id: "b" },
     ]),
 };

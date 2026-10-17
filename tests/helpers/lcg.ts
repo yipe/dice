@@ -23,8 +23,8 @@ export function lcgRng(seed: number): Rng {
     chance(p) {
       if (p <= 0) return false;
       if (p >= 1) return true;
-      const a = next(),
-        b = next();
+      const a = next();
+      const b = next();
       return ((a >>> 5) * 67108864 + (b >>> 6)) / 9007199254740992 < p;
     },
   };

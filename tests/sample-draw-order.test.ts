@@ -13,8 +13,8 @@ describe("FIXTURES", () => {
     expect(Object.keys(FIXTURES)).toHaveLength(12);
     for (const build of Object.values(FIXTURES)) expect(build().pmf.mean()).toBeGreaterThan(0);
   });
-  it("stunned fixture auto-crits the later melee attack", () => {
+  it("paralyzed fixture auto-crits the later melee attack", () => {
     const plain = FIXTURES["advantage grant until next attack"]().pmf.mean();
-    expect(FIXTURES["stunned condition (auto-crit on later melee)"]().pmf.mean()).toBeGreaterThan(plain);
+    expect(FIXTURES["paralyzed condition (auto-crit on later melee)"]().pmf.mean()).toBeGreaterThan(plain);
   });
 });
