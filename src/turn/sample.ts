@@ -160,10 +160,22 @@ function diceMatched(base: RollSample): boolean {
   return false;
 }
 
+/**
+ * Per attack builder, which landings have a `dice-match` descriptor. `diceMatchInfo()` enumerates
+ * the pool's face sums (a reroll pool's whole match table), far too slow per sampled landing; a
+ * builder is immutable, so its answer is fixed.
+ */
+const matchable = new WeakMap<AttackBuilder, { hit: boolean; crit: boolean }>();
+
 /** Whether the base dice matched, where the attack has a descriptor for that landing; never otherwise. */
 function matchedOf(builder: AttackBuilder, sample: AttackSample): boolean {
   if (sample.payload === undefined || sample.outcome === "miss") return false;
-  return builder.diceMatchInfo()[sample.outcome] !== null && diceMatched(sample.payload.base);
+  let known = matchable.get(builder);
+  if (known === undefined) {
+    const info = builder.diceMatchInfo();
+    matchable.set(builder, (known = { hit: info.hit !== null, crit: info.crit !== null }));
+  }
+  return known[sample.outcome] && diceMatched(sample.payload.base);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { d4, d6, d8, d20, roll } from "../../src/builder/factory";
 import { paralyzed } from "../../src/dnd5e/index";
 import { advantage, keepBestDamage, savePenalty, vulnerability } from "../../src/turn/effects";
+import type { Rng } from "../../src/common/rng";
 import { Turn, turn } from "../../src/turn/turn";
 import type { ContextualPayload, ContextualSource, RowCheck, RowContext } from "../../src/turn/types";
 
@@ -156,9 +157,17 @@ export const FIXTURES: Record<string, () => Turn> = {
     ]).rider({ id: "sneak", on: "first-hit", damage: sneakPerAttack }),
 };
 
-/** Builders with a `.sample`: the draw-order snapshot runs over these before Turn.sample exists. A5a lands with the
- *  roll entries only (it dev-starts on A1, before A3); A3 appends the attack and save entries when it merges. */
+/** Builders with a `.sample` (a DC check: `sampleCheck`): the draw-order snapshot covers each kind of builder's own draw order. */
 export const BUILDER_FIXTURES = {
   "roll 3d8 reroll 1 minimum 2 plus 2": roll(3, 8).reroll(1).minimum(2).plus(2),
   "rerollUpTo savage": roll(2, 6).rerollUpTo(1, { rolls: 2 }),
+  "attack with advantage, crit on 19, a separate channel": d20
+    .plus(5)
+    .withAdvantage()
+    .ac(15)
+    .critOn(19)
+    .onHit(roll(1, 8, 3))
+    .plusSeparateDamage(roll(1, 6)),
+  "save with half on success": d20.plus(3).dc(15).ability("dex").onSaveFailure(roll(3, 6)).saveHalf(),
+  "dc check (sampleCheck)": { sample: (rng: Rng) => d20.plus(3).dc(15).ability("dex").sampleCheck(rng) },
 };

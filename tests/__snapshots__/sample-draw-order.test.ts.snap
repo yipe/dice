@@ -3581,6 +3581,228 @@ exports[`draw order is a contract: Turn.sample > vulnerability until next hit: f
 ]
 `;
 
+exports[`draw order is a contract: builders > attack with advantage, crit on 19, a separate channel: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "check": [
+      {
+        "face": 8,
+        "kept": false,
+        "sides": 20,
+      },
+      {
+        "face": 14,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "hit",
+    "payload": {
+      "base": {
+        "dice": [
+          {
+            "face": 4,
+            "kept": true,
+            "sides": 8,
+          },
+        ],
+        "total": 7,
+      },
+      "scale": 1,
+      "separate": [
+        {
+          "dice": [
+            {
+              "face": 6,
+              "kept": true,
+              "sides": 6,
+            },
+          ],
+          "total": 6,
+        },
+      ],
+    },
+    "total": 13,
+  },
+  {
+    "check": [
+      {
+        "face": 14,
+        "kept": false,
+        "sides": 20,
+      },
+      {
+        "face": 19,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 1,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "crit",
+    "payload": {
+      "base": {
+        "dice": [
+          {
+            "face": 4,
+            "kept": true,
+            "sides": 8,
+          },
+          {
+            "face": 1,
+            "kept": true,
+            "sides": 8,
+          },
+        ],
+        "total": 8,
+      },
+      "scale": 1,
+      "separate": [
+        {
+          "dice": [
+            {
+              "face": 6,
+              "kept": true,
+              "sides": 6,
+            },
+            {
+              "face": 4,
+              "kept": true,
+              "sides": 6,
+            },
+          ],
+          "total": 10,
+        },
+      ],
+    },
+    "total": 18,
+  },
+  {
+    "check": [
+      {
+        "face": 3,
+        "kept": false,
+        "sides": 20,
+      },
+      {
+        "face": 16,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 5,
+        "kept": true,
+        "sides": 8,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "hit",
+    "payload": {
+      "base": {
+        "dice": [
+          {
+            "face": 5,
+            "kept": true,
+            "sides": 8,
+          },
+        ],
+        "total": 8,
+      },
+      "scale": 1,
+      "separate": [
+        {
+          "dice": [
+            {
+              "face": 4,
+              "kept": true,
+              "sides": 6,
+            },
+          ],
+          "total": 4,
+        },
+      ],
+    },
+    "total": 12,
+  },
+]
+`;
+
+exports[`draw order is a contract: builders > dc check (sampleCheck): fixed seeds, fixed draws 1`] = `
+[
+  {
+    "check": [
+      {
+        "face": 8,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "failed": true,
+    "total": 11,
+  },
+  {
+    "check": [
+      {
+        "face": 14,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "failed": false,
+    "total": 17,
+  },
+  {
+    "check": [
+      {
+        "face": 3,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "failed": true,
+    "total": 6,
+  },
+]
+`;
+
 exports[`draw order is a contract: builders > rerollUpTo savage: fixed seeds, fixed draws 1`] = `
 [
   {
@@ -3722,6 +3944,95 @@ exports[`draw order is a contract: builders > roll 3d8 reroll 1 minimum 2 plus 2
       },
     ],
     "total": 14,
+  },
+]
+`;
+
+exports[`draw order is a contract: builders > save with half on success: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "check": [
+      {
+        "face": 8,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 6,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "save-fail",
+    "total": 16,
+  },
+  {
+    "check": [
+      {
+        "face": 14,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 5,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 2,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 3,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "save-pass",
+    "total": 5,
+  },
+  {
+    "check": [
+      {
+        "face": 3,
+        "kept": true,
+        "sides": 20,
+      },
+    ],
+    "damage": [
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 3,
+        "kept": true,
+        "sides": 6,
+      },
+      {
+        "face": 4,
+        "kept": true,
+        "sides": 6,
+      },
+    ],
+    "outcome": "save-fail",
+    "total": 11,
   },
 ]
 `;
