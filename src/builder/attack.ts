@@ -86,7 +86,14 @@ export interface AttackSample {
   damage: SampledDie[];
   total: number;
   /** On a landing, the payload split at the base (see {@link AttackBuilder.samplePayload}); absent on a miss. */
-  payload?: { base: RollSample; separate: RollSample[] };
+  payload?: AttackPayloadSample;
+}
+
+/** One landing's payload dice, split at the base, and the whole-roll scale its total takes (see {@link AttackBuilder.samplePayload}). */
+export interface AttackPayloadSample {
+  base: RollSample;
+  separate: RollSample[];
+  scale: 1 | 2;
 }
 
 export class AttackBuilder implements CheckBuilder, ContextualSource {
@@ -648,25 +655,26 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       }
       return { outcome, check: checkDice, damage, total };
     }
-    const payload = attack.samplePayload(outcome, rng);
+    const payload = attack.samplePayload(outcome, rng, context);
     const { base, separate } = payload;
-    let total = base.total + separate.reduce((sum, s) => sum + s.total, 0);
-    if (context?.vulnerable || attack.landingScale === 2) total = scaleValue(total, 2, "floor");
+    const total = scaleValue(base.total + separate.reduce((sum, s) => sum + s.total, 0), payload.scale, "floor");
     return { outcome, check: checkDice, damage: [...base.dice, ...separate.flatMap((s) => s.dice)], total, payload };
   }
 
   /**
    * The dice of one landing's payload as {@link sample} draws them, split at the base: the base
    * payload (the doubled pool on a crit unless `onCrit` names one, the `rerollDamageUpTo` budget
-   * applied), then each separate channel. `outcome` is the landing as {@link sample} reports it
-   * (`noCrit()` already downgraded). What a turn's substitute re-rolls and a `dice-match` reads.
+   * applied), then each separate channel, unscaled; `scale` is what the landing's total is then
+   * multiplied by as a whole roll (2 for a vulnerable `context`, or an attack {@link rollUnder}
+   * built for one; else 1). `outcome` is the landing as {@link sample} reports it (`noCrit()`
+   * already downgraded). What a turn's substitute re-rolls and a `dice-match` reads.
    */
-  samplePayload(outcome: "hit" | "crit", rng: Rng, context?: RowContext): { base: RollSample; separate: RollSample[] } {
+  samplePayload(outcome: "hit" | "crit", rng: Rng, context?: RowContext): AttackPayloadSample {
     const attack = context ? this.inContext(context) : this;
     const effect = outcome === "crit" ? (attack.critEffect ?? attack.hitEffect?.copy().doubleDice()) : attack.hitEffect;
     const base = effect ? attack.pooled(effect).sample(rng) : { total: 0, dice: [] };
     const separate = attack.separateDamage.map((channel) => (outcome === "crit" ? channel.copy().doubleDice() : channel).sample(rng));
-    return { base, separate };
+    return { base, separate, scale: context?.vulnerable || attack.landingScale === 2 ? 2 : 1 };
   }
 
   /**
