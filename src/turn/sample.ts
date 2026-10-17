@@ -121,6 +121,29 @@ function payloadFor(rider: EvaluatedRider, sourceId: string): RiderPayload {
   return rider;
 }
 
+/**
+ * The dice of folded rider `id` landing on `sourceId` in `mode`, or `undefined` for a chip (see
+ * {@link sampleRiderDice}). A payload read per attack rolls what its `rollAt(sourceId)` returns:
+ * the landing's roll itself, `onCrit` as given and never doubled again. Vulnerability is applied
+ * here, once, as the plan's `vulnerable()` payload does: the total doubled as a whole roll.
+ */
+function sampleFoldedRider(
+  plan: TurnPlan,
+  id: string,
+  rider: EvaluatedRider,
+  sourceId: string,
+  mode: "hit" | "crit",
+  vulnerable: boolean,
+  rng: Rng
+): RollSample | undefined {
+  const contextual = plan.payloadAt.get(id);
+  const drawn =
+    contextual === undefined
+      ? sampleRiderDice(payloadFor(rider, sourceId), mode, rng)
+      : contextual.rollAt?.(sourceId)?.[mode === "crit" ? "onCrit" : "onHit"].sample(rng);
+  return drawn === undefined || !vulnerable ? drawn : { ...drawn, total: drawn.total * 2 };
+}
+
 /** Whether two or more kept dice of the base pool show the same face. */
 function diceMatched(base: RollSample): boolean {
   const seen = new Set<string>();
@@ -398,16 +421,15 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
         const joined = rowContext !== undefined && rowContext.joined.includes(id);
         const skipped = !joined && !coined && !coin(rng, rider.happens ?? 1);
         if (skipped) riderSkipped.add(id);
+        const mode = !any && outcome === "crit" ? "crit" : "hit";
         const drawn =
-          joined || skipped
-            ? { total: 0, dice: [] }
-            : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
+          joined || skipped ? { total: 0, dice: [] } : sampleFoldedRider(plan, id, rider, step.id, mode, vulnerable && !any, rng);
         if (drawn === undefined) {
           chips = true;
           if (!joined && !coined) riderPassed.set(id, rider.happens ?? 1);
           continue;
         }
-        const damage = vulnerable && !any ? drawn.total * 2 : drawn.total;
+        const damage = drawn.total;
         riderDamage.set(id, damage);
         if (damage > 0) ridersDealt = true;
         riderDice.push(...traced(drawn.dice, "rider", "you", id));
