@@ -24,6 +24,8 @@ import { SAMPLER_VERSION } from "./trace";
 import type { DieRole, DieRoll, OutcomeResult, Trace, Wave } from "./trace";
 import type { ContextualSource, Damage, RiderDamage, RiderPayload, RowContext } from "./types";
 
+// Bump when `tests/sample-draw-order.test.ts`'s snapshot changes for a reason other than a bug in the
+// snapshot itself; update the snapshot in the same commit.
 export { SAMPLER_VERSION } from "./trace";
 
 /**
