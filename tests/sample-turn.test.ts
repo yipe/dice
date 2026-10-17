@@ -124,6 +124,10 @@ describe("Turn.sample law", () => {
     ["reroll budget on the base pool", turn([axe.rerollDamageUpTo(1), axe]).onFirstHit(keepBestDamage())],
     ["advantage of its own under a granted advantage", turn([d20.plus(6).withAdvantage().ac(16).onHit(roll(2, 6, 4)).onEveryHit(advantage().untilNextAttack()), axe])],
     ["chip riders: a PMF payload, folded and as a step that may not happen", turn([sword, sword]).onEveryHit(roll(1, 6).toPMF()).rider({ on: "first-hit", damage: roll(2, 6).toPMF(), happens: 0.3 })],
+    ["substitute under a capped rider's variant blocks", turn([sword, sword, sword]).rider({ on: "every-hit", damage: d6, max: 2 }).onFirstHit(keepBestDamage())],
+    ["substitute under a rider coin's variant blocks", turn([sword, sword]).rider({ on: "every-hit", damage: d6, happens: 0.5 }).onFirstHit(keepBestDamage())],
+    ["substitute under a granted context", turn([sword.onEveryHit(advantage().untilNextAttack()), axe, axe]).onFirstHit(keepBestDamage())],
+    ["folded first-hit rider that may not happen (lands on anything)", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6), happens: 0.3, landing: "any" })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;

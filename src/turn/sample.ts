@@ -329,7 +329,10 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       // A substitute: spend the landing (re-roll the base payload, keep the better) by its policy.
       // The variant says whether holding is worth anything here: it carries hold draws only while
       // a later watched step can still land.
-      if (attack?.sample.payload !== undefined && step.policy !== null && variantIndex !== 0 && (outcome === "hit" || outcome === "crit")) {
+      // Live while its fire slot is empty (`select` reads the same slot: the variant index itself is
+      // offset by cap block and context, so it does not say).
+      const unspent = step.spendSlot !== -1 && fired[step.spendSlot] === null;
+      if (attack?.sample.payload !== undefined && step.policy !== null && unspent && (outcome === "hit" || outcome === "crit")) {
         const { base, separate } = attack.sample.payload;
         const holdAvailable = candidates.some((each) => !each.spends && each.matched === matched);
         spent =
@@ -371,11 +374,15 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       for (const [id] of candidates[0]?.riders ?? []) {
         const rider = plan.riderOf.get(id) as EvaluatedRider;
         const any = rider.landing === "any";
-        // A rider whose dice joined the row's roll deals nothing beside it.
-        const drawn =
-          rowContext !== undefined && rowContext.joined.includes(id)
-            ? { total: 0, dice: [] }
-            : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
+        // A rider whose coin is not a walk flag takes it per landing: the plan thins its payload
+        // (`thin`), so a failed coin deals 0 and the landing still counts. A rider whose dice
+        // joined the row's roll deals nothing beside it.
+        const coined = plan.coins.some((each) => each.id === id);
+        const nothing =
+          (rowContext !== undefined && rowContext.joined.includes(id)) || (!coined && !coin(rng, rider.happens ?? 1));
+        const drawn = nothing
+          ? { total: 0, dice: [] }
+          : sampleRiderDice(payloadFor(rider, step.id), !any && outcome === "crit" ? "crit" : "hit", rng);
         if (drawn === undefined) {
           chips = true;
           continue;
@@ -387,7 +394,9 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       }
       if (candidates.some((each) => each.wounded !== undefined)) {
         const wounded = ownTotal > 0 || ridersDealt;
-        // Nothing dealt so far and a chip rider still to draw: the pieces' masses decide.
+        // Nothing dealt so far and a chip rider still to draw: the pieces' masses decide. Known
+        // approximation: those masses count a dice rider's zero as part of `allZero` too, so this
+        // is exact only where the dice riders cannot roll 0.
         if (wounded || !chips) candidates = candidates.filter((each) => each.wounded === wounded);
       }
 
