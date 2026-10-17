@@ -188,6 +188,10 @@ export interface TurnPlan {
   dealing: boolean;
   /** Per condition: whether its later attack rolls lean melee (the optional fallback, see `Turn`). */
   meleeLeaning: readonly boolean[];
+  /** Per step id, the source it rolls: a declared attack's, or a rider's payload. What `Turn.sample` draws dice from. */
+  sourceOf: ReadonlyMap<string, Damage | ContextualSource | readonly Damage[]>;
+  /** Per rider id, the rider as the plan placed it (`every-hit` with `max: 1` lowered to `first-hit`). */
+  riderOf: ReadonlyMap<string, EvaluatedRider>;
 }
 
 /** Outcome-labelled sub-mass PMFs for one source, masses summing to 1. */
@@ -585,10 +589,16 @@ export interface Step {
   contextRollTypes: readonly RollType[];
   /** Per context, whether the row's target is vulnerable there (its landings deal double). */
   contextVulnerable: readonly boolean[];
+  /** Per context, the `RowContext` the row's source rolls under there; `undefined` where the source declares no row. */
+  contextRowContexts: readonly (RowContext | undefined)[];
   /** Which of {@link Step.contextPmfs} a state rolls in. */
   contextIndexOf: (codes: readonly number[], fired: readonly FireMode[], flags: number, counts: readonly number[]) => number;
   /** Whether a substitute rewrites the row's own damage, so it is not its context's PMF. */
   transformed: boolean;
+  /** That substitute's policy: how `Turn.sample` decides a spend. Null where none watches the row. */
+  policy: SubstitutePolicy | null;
+  /** The probability the row happens at all (`AttackOptions.chance`); 1 for a rider. */
+  chance: number;
 }
 
 /** Trigger kinds that read a group's accumulated state (as opposed to `not-fired`,
@@ -1285,7 +1295,7 @@ type EvaluatedCondition = Omit<ConditionSpec, "on" | "grants" | "onSave"> & {
 };
 
 /** A {@link Rider} whose damage is a {@link RiderDamage} (a `ContextualPayload` is read per attack instead). */
-type EvaluatedRider = Rider extends infer R
+export type EvaluatedRider = Rider extends infer R
   ? R extends unknown
     ? Omit<R, "damage" | "landing"> & { damage: RiderDamage; landing?: SaveLanding | "any" }
     : never
@@ -3756,6 +3766,7 @@ export function buildPlan(
     const contextPmfs: PMF[] = ownPmf === undefined ? [] : [ownPmf];
     const contextVulnerable: boolean[] = ownPmf === undefined ? [] : [false];
     const contextRollTypes: RollType[] = ownPmf === undefined ? [] : [baseRollType];
+    const contextRowContexts: (RowContext | undefined)[] = ownPmf === undefined ? [] : [baseContext];
     let contextIndexOf: Step["contextIndexOf"] = () => 0;
     /** The row's table in a context, its finished variants written into `target` from `offset` on (see {@link blocked}). */
     const tableOf = (
@@ -3935,6 +3946,7 @@ export function buildPlan(
           tables.push(undefined);
           pending.set(index, { key, variant });
           contextVulnerable.push(rowContextOf(key)?.vulnerable ?? false);
+          contextRowContexts.push(rowContextOf(key));
           contextRollTypes.push(rollTypeIn(key, variant.signature));
           tableByContext.set(variant.signature, index);
         }
@@ -4020,13 +4032,18 @@ export function buildPlan(
       contextPmfs,
       contextVulnerable,
       contextRollTypes,
+      contextRowContexts,
       contextIndexOf,
       transformed: substitute !== undefined,
+      policy: substitute === undefined ? null : (substitutes[substitute].policy ?? { kind: "always" }),
+      chance,
     });
   });
 
   return {
     steps,
+    sourceOf: new Map(sequence.map((entry): [string, Damage | ContextualSource | readonly Damage[]] => [entry.id, damageOf(entry.id)])),
+    riderOf: new Map(riderIds.map((id, index): [string, EvaluatedRider] => [id, riders[index]])),
     groupCount: slotLastStep.length,
     attackPMFs,
     attackSingles,
