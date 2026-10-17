@@ -57,7 +57,13 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
     readonly check: DCBuilder,
     private readonly failureEffect?: RollBuilder,
     private readonly saveOutcome: SaveOutcome | RollBuilder = "normal",
-    readonly attached: readonly AttachedCondition[] = []
+    readonly attached: readonly AttachedCondition[] = [],
+    /**
+     * 2 for the save {@link rollUnder} returns in a vulnerable context: a failure's total is doubled
+     * as a whole roll, in the PMF and in {@link sample}, so the builder's PMF is `under(context)`.
+     * Set only there; a builder derived from it is built unscaled.
+     */
+    private readonly failScale: 1 | 2 = 1
   ) {}
 
   /**
@@ -145,13 +151,17 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * facts, and `joined` is ignored: a builder does not pool rider dice into its own roll.
    */
   under(context: RowContext, eps: number = 0): PMF {
-    const save = this.inContext(context);
-    return context.vulnerable ? save.resolveScaled(eps, 2).pmf : save.toPMF(eps);
+    return this.rollUnder(context).toPMF(eps);
   }
 
-  /** See {@link ContextualSource.rollUnder}: this save with its check rolled in `context` ({@link under}'s rebuild). */
+  /**
+   * See {@link ContextualSource.rollUnder}: this save with its check rolled in `context` ({@link under}'s
+   * rebuild), with a vulnerable context's doubling baked in, so its PMF is exactly `under(context)`.
+   */
   rollUnder(context: RowContext): SaveBuilder {
-    return this.inContext(context);
+    const save = this.inContext(context);
+    if (!context.vulnerable || save.failScale === 2) return save;
+    return new SaveBuilder(save.check, save.failureEffect, save.saveOutcome, save.attached, 2);
   }
 
   /** `this` when `context` changes nothing, else this save with its check rolled in it (see {@link DCBuilder.inContext}). */
@@ -180,7 +190,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
       damage.push(...s.dice);
     }
     if (failed) {
-      if (context?.vulnerable) total = scaleValue(total, 2, "floor");
+      if (context?.vulnerable || save.failScale === 2) total = scaleValue(total, 2, "floor");
       return { outcome: "save-fail", check, damage, total };
     }
     if (save.saveOutcome === "half") return { outcome: "save-pass", check, damage, total: scaleValue(total, 0.5, "floor") };
@@ -216,7 +226,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
    * `onSaveSuccess()`; else 0).
    */
   resolve(eps: number = EPS): SaveResolution {
-    return this.resolveScaled(eps, 1);
+    return this.resolveScaled(eps, this.failScale);
   }
 
   /**
@@ -278,7 +288,7 @@ export class SaveBuilder implements CheckBuilder, ContextualSource {
       outcomeKey = outcome;
     }
 
-    return `${checkKey}*F${failKey}*O${outcomeKey}*e${eps}`;
+    return `${checkKey}*F${failKey}*O${outcomeKey}*V${this.failScale}*e${eps}`;
   }
 
   // By default, create PMF with no pruning. Cached by the cheap config key across identical rebuilds.
