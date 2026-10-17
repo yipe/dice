@@ -66,6 +66,19 @@ describe("RollBuilder.sample", () => {
     expect(s.total).toBe(23);
     expect(s.dice.map((x) => x.face)).toEqual([6, 2, 6, 6, 3]);
   });
+  it("explodePool chains: one max face, its extra shows max again, the next spends the last budget", () => {
+    // 3d6 budget 2: [6, 2, 2] -> one pending; extra 6 (pending stays 1, budget 1); extra 4 (budget 0)
+    const s = roll(3, 6).explodePool(2).sample(dice([6, 2, 2, 6, 4]));
+    expect(s.total).toBe(20);
+    expect(s.dice.map((x) => x.face)).toEqual([6, 2, 2, 6, 4]);
+  });
+  it("rerollUpTo draws and lists dice in source order, not mean order", () => {
+    // 2d6 + d8, budget 1: d6 shows 1 (gain 2.5), d8 shows 2 (gain 2.5): tie goes to the higher-mean kind (d8)
+    const s = roll(2, 6).plus(1, d(8)).rerollUpTo(1).sample(dice([1, 4, 2, 7]));
+    expect(s.dice.map((x) => x.sides)).toEqual([6, 6, 8, 8]);
+    expect(s.dice.map((x) => x.kept)).toEqual([true, true, false, true]);
+    expect(s.total).toBe(12);
+  });
   it("half floors the child's total and keeps its dice", () => {
     const s = roll(2, 8).half().sample(dice([3, 4]));
     expect(s.total).toBe(3);
