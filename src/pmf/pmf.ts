@@ -9,6 +9,7 @@ import {
 } from "../common/types";
 import { denseConvolution, denseMap, labelText, type BinTable } from "./dense";
 import { DiceQuery } from "./query";
+import { scaleValue } from "./sample";
 
 /** Library caches hand the same PMF to every caller, so entries are frozen as they are stored. */
 const sharedPMFCacheOptions: LRUCacheOptions<PMF> = {
@@ -1059,23 +1060,7 @@ export class PMF {
     if (!Number.isFinite(denominator) || denominator === 0) {
       throw new RangeError(`scaleDamage() denominator must be finite and non-zero, got ${denominator}`);
     }
-    const exact = Number.isInteger(factor) && Number.isInteger(denominator);
-    return this.mapDamage((damageValue) => {
-      if (exact && Number.isInteger(damageValue)) {
-        const numerator = damageValue * factor;
-        if (rounding === "round") {
-          return Math.floor((2 * numerator + denominator) / (2 * denominator));
-        }
-        const quotient = numerator / denominator;
-        return rounding === "ceil" ? Math.ceil(quotient) : Math.floor(quotient);
-      }
-      const scaled = (damageValue * factor) / denominator;
-      return rounding === "round"
-        ? Math.round(scaled)
-        : rounding === "ceil"
-        ? Math.ceil(scaled)
-        : Math.floor(scaled);
-    });
+    return this.mapDamage((damageValue) => scaleValue(damageValue, factor, rounding, denominator));
   }
 
   /**
