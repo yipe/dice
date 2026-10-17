@@ -1,12 +1,12 @@
 import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
+import type { Rng } from "../common/rng";
 import type { DCBuilder } from "./dc";
 import { parse } from "../parser/parser";
 import { AmbiguousCritDoublingError, scaleParsedDice, UndoubleableExpressionError } from "../parser/scaleDice";
 import { PMF } from "../pmf/pmf";
 import type { DiceQuery } from "../pmf/query";
 import { samplePMF } from "../pmf/sample";
-import type { Rng } from "../common/rng";
 import {
   astFromRollConfigs,
   clearDieCaches,
