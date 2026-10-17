@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { d, d6, d8, d20, roll } from "../src/builder/factory";
-import { advantage, critOnHit, keepBestDamage, turn, vulnerability } from "../src/turn";
-import type { ContextualPayload, Turn } from "../src/turn";
+import { d, d4, d6, d8, d20, roll } from "../src/builder/factory";
+import { advantage, critOnHit, keepBestDamage, savePenalty, turn, vulnerability } from "../src/turn";
+import type { ContextualPayload, ContextualSource, RowContext, Turn } from "../src/turn";
 import { sampleFallbacks } from "../src/turn/sample";
 import type { Rng } from "../src/common/rng";
 
@@ -108,6 +108,13 @@ describe("Turn.sample law", () => {
       return { onHit, onCrit, vulnerable: { onHit: onHit.mapDamage((x) => 2 * x), onCrit: onCrit.mapDamage((x) => 2 * x) } };
     },
   };
+  const breathCheck = d20.plus(3).dc(15).ability("wis");
+  /** A save row whose `rollUnder` builds its check in the context itself (`DCBuilder.rolledIn`). */
+  const penalisedSave: ContextualSource = {
+    rowCheck: breathCheck.onSaveFailure(roll(3, 6)).rowCheck,
+    under: (context: RowContext, eps?: number) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)).toPMF(eps),
+    rollUnder: (context: RowContext) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)),
+  };
   const cases: [string, Turn][] = [
     ["first-hit rider step", turn([sword, sword]).onFirstHit(roll(3, 6))],
     ["every-hit rider folded", turn([{ source: sword, id: "a" }, { source: sword, id: "b" }]).onEveryHit(roll(1, 6))],
@@ -138,6 +145,7 @@ describe("Turn.sample law", () => {
     ["folded first-hit rider that may not happen (lands on anything)", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6), happens: 0.3, landing: "any" })],
     ["folded chip rider (bare PMF) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: roll(2, 6).toPMF(), happens: 0.75, landing: "any" })],
     ["folded chip rider (payload per attack) that may not happen", turn([sword, sword]).rider({ on: "first-hit", damage: perAttack, happens: 0.75 })],
+    ["save penalty die on a contextual save row (rollUnder already in context)", turn([{ source: sword, id: "a" }, { source: penalisedSave, id: "breath" }]).onFirstHit(savePenalty(d4).untilNextSave(), { of: ["a"] })],
   ];
   it.each(cases)("%s: the sample mean is the turn's mean, with no fallback", (_name, t) => {
     const before = sampleFallbacks.count;

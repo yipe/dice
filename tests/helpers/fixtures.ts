@@ -1,6 +1,6 @@
-import { d6, d8, d20, roll } from "../../src/builder/factory";
+import { d4, d6, d8, d20, roll } from "../../src/builder/factory";
 import { paralyzed } from "../../src/dnd5e/index";
-import { advantage, keepBestDamage, vulnerability } from "../../src/turn/effects";
+import { advantage, keepBestDamage, savePenalty, vulnerability } from "../../src/turn/effects";
 import { Turn, turn } from "../../src/turn/turn";
 import type { ContextualSource, RowCheck, RowContext } from "../../src/turn/types";
 
@@ -23,6 +23,17 @@ const poolingRow: ContextualSource = {
   rowCheck: check,
   under: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).under(context),
   rollUnder: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).rollUnder(context),
+};
+
+const breathCheck = d20.plus(3).dc(15).ability("wis");
+/**
+ * A save row that builds its own check per context (`DCBuilder.rolledIn`), as a consumer's
+ * `ContextualSource` does: the builder `rollUnder` returns is already in the context, penalty dice included.
+ */
+const penalisedSave: ContextualSource = {
+  rowCheck: breathCheck.onSaveFailure(roll(3, 6)).rowCheck,
+  under: (context: RowContext, eps?: number) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)).toPMF(eps),
+  rollUnder: (context: RowContext) => breathCheck.rolledIn(context).onSaveFailure(roll(3, 6)),
 };
 
 /** The fixture turns every sampler conformance test runs: one per semantic trap the audit names. */
@@ -121,6 +132,11 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword, id: "a" },
       { source: sword, id: "b" },
     ]).rider({ id: "hex", on: "first-hit", damage: roll(2, d6).toPMF(), happens: 0.75, landing: "any" }),
+  "save penalty die on a contextual save row": () =>
+    turn([
+      { source: sword, id: "a" },
+      { source: penalisedSave, id: "breath" },
+    ]).onFirstHit(savePenalty(d4).untilNextSave(), { of: ["a"] }),
 };
 
 /** Builders with a `.sample`: the draw-order snapshot runs over these before Turn.sample exists. A5a lands with the
