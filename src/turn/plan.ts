@@ -2232,6 +2232,15 @@ export function buildPlan(
     }
     riders.forEach((rider, riderIndex) => {
       if (!isReroll[riderIndex]) return;
+      // An any-miss reroll's step runs after every declared attack, not right after the miss it rerolls: converting it would
+      // spend the conversion out of turn order.
+      if (rider.on === "any-miss" && substituteBySource.get(riderIds[riderIndex]) === index) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Substitute "${id}" converts a miss of "${riderIds[riderIndex]}", an any-miss reroll that resolves after every declared attack. Use onFirstMiss, which resolves right after the miss.`
+        );
+      }
       const rerolled = sourceIdsByNode[riderIndex].find((sourceId) => substituteBySource.get(sourceId) === index);
       if (rerolled === undefined) return;
       fail(
@@ -3354,7 +3363,10 @@ export function buildPlan(
     if (payload?.base) return Mixture.mix([["hit", payload.base.hit, 1]], eps);
     const source = damageOf(sourceId);
     if (rowContext !== undefined && isContextual(source)) {
-      const hit = pmfUnder(source, { ...rowContext, autoHit: true }, eps, sourceId).filterOutcome("hit");
+      // Never a crit: an attack that crits on every hit (its own `alwaysCrits()`, or a crit-on-hit grant) rolls with no crit.
+      const plain = source as ContextualSource & { noCrit?: () => ContextualSource };
+      const rolled = typeof plain.noCrit === "function" ? plain.noCrit() : source;
+      const hit = pmfUnder(rolled, { ...rowContext, autoHit: true, critOnHit: false }, eps, sourceId).filterOutcome("hit");
       if (hit.mass() > 0) return hit.scaleMass(1 / hit.mass());
     }
     return fail(
