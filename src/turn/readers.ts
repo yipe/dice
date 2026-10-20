@@ -411,6 +411,11 @@ export class ReaderTally {
   readonly effectSources: Map<number, number[]>[];
   readonly contextMass: number[][];
   readonly happened: number[];
+  /**
+   * Per step whose miss may convert (`Step.converts`), the row's own damage of each draw that happens, by its part (`Draw.own`, else
+   * its slice), with the mass that drew it: the row's marginal, which its context PMFs are not.
+   */
+  readonly ownDraws: Map<PMF, number>[];
   readonly attempts: Map<number, { attempted: number; taken: number }>[];
   readonly landings = new Map<string, Map<string, RowLanding>>();
   readonly onceWeights = new Map<string, Map<PMF, number>>();
@@ -441,6 +446,7 @@ export class ReaderTally {
     // A context's PMF is there once a state rolled in it (see Step.contextPmfs): size by the count.
     this.contextMass = steps.map((step) => new Array<number>(step.contextPmfs.length).fill(0));
     this.happened = steps.map(() => 0);
+    this.ownDraws = steps.map(() => new Map());
     this.attempts = steps.map(() => new Map());
     this.readBits = steps.map((step) => step.flagReads.map(effectBits));
     // A slot a row advances is read by the later step riders of the same group: up to the step
@@ -506,6 +512,11 @@ export class ReaderTally {
     if (draw.outcome === "none") return;
     const step = this.steps[s];
     this.happened[s] += mass;
+    if (step.converts) {
+      const own = draw.own ?? draw.slice;
+      const weights = this.ownDraws[s];
+      weights.set(own, (weights.get(own) ?? 0) + mass);
+    }
     const folded = draw.riders ?? [];
     const stepped: [string, "hit" | "crit"][] = [];
     for (const { id, slot, on } of this.stepRiders[s]) {

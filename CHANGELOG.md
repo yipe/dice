@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`convertFirstMiss` marginals are read off the reader walk.** A row whose miss may convert took its marginal from a walk of its
+  own (one per row, with PMF arithmetic at every step), which made a turn with many watched rows tens of times slower. Its
+  marginal is now the reader walk's tally of what its draws dealt; the numbers are unchanged.
+
 ## [0.21.0] - 2026-10-20
 
 ### Added

@@ -4111,7 +4111,7 @@ export function buildPlan(
       contextRollTypes,
       contextRowContexts,
       contextIndexOf,
-      transformed: substitute !== undefined,
+      transformed: substitute !== undefined && !converts,
       converts,
       policy: substitute === undefined || converts ? null : (substitutes[substitute].policy ?? { kind: "always" }),
       chance,
