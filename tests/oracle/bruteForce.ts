@@ -306,6 +306,11 @@ export interface SyntheticTurn {
   beams?: readonly BeamSpec[]
   /** Conditional grants: effects a landing puts on its target, read by the rows that follow in turn order. */
   grants?: readonly GrantSpec[]
+  /**
+   * Boon of Combat Prowess: the first attack row among `of`, in turn order, that misses (a natural 1 included, after its own
+   * advantage) hits instead, as a plain hit; once per turn. A converted hit lands every rider and grant a hit lands.
+   */
+  convertFirstMiss?: { of: readonly number[] }
   /** The primary target (creature 0) has this condition from the start of the turn, for certain. Not Unconscious, which a damaging row would end. */
   startingCondition?: StartingConditionName
 }
@@ -1324,6 +1329,8 @@ interface SourceBranch {
   vulnerable?: boolean
   p: number
   outcomes: Map<number, number>
+  /** A miss `convertFirstMiss` turned into this hit: taking the branch spends the conversion. */
+  converts?: boolean
 }
 
 const NO_DAMAGE: Map<number, number> = new Map([[0, 1]])
@@ -1372,6 +1379,20 @@ function attackBranches(a: AttackSpec, kind: AdvantageKind = a.rollOverride ?? a
     ...tagged(withDealt('hit', chance * pHit, hit)),
     ...tagged(withDealt('crit', chance * pCrit, crit))
   ]
+}
+
+/**
+ * `branches` with the miss converted (`SyntheticTurn.convertFirstMiss`): every miss, a natural 1 included, is a plain hit
+ * instead (the hit payload, never the crit one), and taking it spends the conversion. A row that did not happen stays so.
+ */
+function convertMisses(a: AttackSpec, branches: readonly SourceBranch[], vulnerable: boolean): SourceBranch[] {
+  const missed = (branch: SourceBranch): boolean => branch.landing === 'none' || branch.landing === 'missDamage'
+  const pMiss = branches.filter(missed).reduce((sum, branch) => sum + branch.p, 0)
+  const { hit } = vulnerable
+    ? vulnerableDicePayloads(a.damage, a.critDamage, a.critDealsMax)
+    : dicePayloads(a.damage, a.critDamage, a.critDealsMax)
+  const converted = withDealt('hit', pMiss, hit).map((branch) => ({ ...branch, converts: true, ...(vulnerable ? { vulnerable: true } : {}) }))
+  return [...branches.filter((branch) => !missed(branch)), ...converted]
 }
 
 /**
@@ -1826,6 +1847,8 @@ interface EffectInstance {
 
 interface PathState extends RiderFates {
   active: readonly EffectInstance[]
+  /** `convertFirstMiss` has turned a miss into a hit this turn. */
+  converted?: boolean
   /** Per grant: it has been tried this turn (read by `cap: 'once'`). */
   tried: readonly boolean[]
 }
@@ -2298,6 +2321,11 @@ function enumerateSourcesWithRiders(
           ? attackBranchesDealing(a, askedType, rollType, critOnHit, vulnerable)
           : attackBranches(a, rollType, critOnHit, vulnerable)
       )
+      if (!state.converted && turn.convertFirstMiss?.of.includes(s)) {
+        if (typedRows.has(s) && askedType !== undefined) throw new Error(`row ${s}: a converted miss on a row a dealing grant splits is not modelled`)
+        const unconverted = branches
+        branches = cached(`${s}|${rollType}|${critOnHit}|${vulnerable}|converted`, () => convertMisses(a, unconverted, vulnerable))
+      }
     } else {
       const sv = row.save
       rollType = sv.rollOverride ?? combineRollTypes(sv.rollType ?? 'flat', false, contributes(contributions, 'saveDisadvantage'))
@@ -2364,6 +2392,7 @@ function enumerateSourcesWithRiders(
         const landed = variant.typed && branch.typeDealt !== true ? { ...branch, typeDealt: true } : branch
         const afterRow: PathState = {
           ...variant.state,
+          ...(branch.converts ? { converted: true } : {}),
           active: variant.state.active.filter(
             (instance) =>
               !consumed.includes(instance) &&

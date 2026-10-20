@@ -89,6 +89,13 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword, id: "a" },
       { source: sword, id: "b" },
     ]).onFirstHit(keepBestDamage(), { id: "sub" }),
+  "convert first miss + sneak attack": () =>
+    turn([
+      { source: sword, id: "a" },
+      { source: dagger, id: "b" },
+    ])
+      .convertFirstMiss({ id: "boon" })
+      .onFirstHit(roll(3, 6), { id: "sneak" }),
   "dice-match bounce": () =>
     turn([{ source: d20.plus(7).ac(15).onHit(roll(3, 8)), id: "orb" }]).onDiceMatch(
       ["orb"],

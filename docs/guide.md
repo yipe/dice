@@ -462,6 +462,28 @@ trigger reading the same attack.
 `fireProbability(id)` reports P(spent). A second transform over any of the same attacks throws
 `duplicate-substitute`, and a transform passed to any other verb throws `unsupported-trigger`.
 
+### Once per turn: the first miss hits instead
+
+`convertFirstMiss()` turns the first watched attack that misses into a hit, once per turn, in turn
+order — the 2024 Boon of Combat Prowess. Any miss converts, a natural 1 included, after the roll's
+own advantage or reroll. The converted attack is a plain hit: it deals its hit damage, never its
+crit damage, and it lands every rider and condition a hit lands (Sneak Attack, a smite, an
+advantage grant):
+
+```ts
+const attack = d20.plus(5).ac(12).onHit(roll(2, d6).plus(3));
+
+turn([attack, attack]).mean();                     // 14.7000
+turn([attack, attack]).convertFirstMiss().mean();  // 19.8000
+```
+
+It converts automatically: there is no holding it for a later, bigger attack. `of` limits the
+attacks it watches; every one must roll to hit, and an attack an `onFirstMiss` / `onAnyMiss` reroll
+watches is refused — the reroll resolves first, so watch the reroll instead. A reaction is a turn
+of its own, with its own conversion. It is a substitute: `fireProbability(id)` reports P(converted),
+a second one over the same attacks throws `duplicate-substitute`, and its `TurnSpec` form is
+`{ on: "first-miss", substitute: "hit", of }` in `substitutes`.
+
 ### Conditions: advantage, disadvantage and crits granted by earlier attacks
 
 The same verbs take a **grant** — a modifier with a lifetime — for the attack rolls after it:
