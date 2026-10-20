@@ -244,6 +244,13 @@
   @media (max-width: 760px) {
     .sticky { justify-content: flex-end; padding-bottom: max(16px, min(28svh, 100svh - 520px)); box-sizing: border-box; }
   }
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .stage { border-radius: 10px; }
+    .sticky { gap: 10px; }
+    .formula { padding: 18px 14px; }
+    .sheet { transform: none; }
+  }
   /* phones turned sideways: very little height, so the pinned title becomes one slim row, the caption shrinks,
      and the stage gets the rest instead of a thumbnail */
   @media (orientation: landscape) and (max-height: 520px) {
@@ -256,12 +263,6 @@
     .caption { font-size: 15px; max-width: 70ch; }
     .stage { width: min(100%, calc((100svh - var(--safe-top) - var(--hdr, 0px) - 76px) * 1920 / 880)); }
   }
-  @media (max-width: 640px) {
-    body { font-size: 16px; }
-    .stage { border-radius: 10px; }
-    .sticky { gap: 10px; }
-    .formula { padding: 18px 14px; }
-    .sheet { transform: none; }
   </style>
 </head>
 <body>
