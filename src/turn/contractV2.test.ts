@@ -112,7 +112,7 @@ describe("TurnSpec v2 validation", () => {
 
 describe("TurnSpec v2 types", () => {
   it("exports the revision", () => {
-    expect(CONTRACT_REVISION).toBe(4);
+    expect(CONTRACT_REVISION).toBe(5);
   });
 
   it("exports every new type from the builder entry", () => {

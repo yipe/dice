@@ -428,9 +428,15 @@ export function oracleTurnToSpec(turn: SyntheticTurn): TurnSpec {
   return {
     attacks,
     ...(riders.length ? { riders: riders.map((rider, i) => riderOf(turn, rider, i)) } : {}),
+    ...(turn.convertFirstMiss
+      ? { substitutes: [{ id: CONVERT_ID, on: 'first-miss' as const, substitute: 'hit' as const, of: turn.convertFirstMiss.of.map(rowId) }] }
+      : {}),
     ...(conditions.length ? { conditions } : {})
   }
 }
+
+/** The spec id of `SyntheticTurn.convertFirstMiss`. */
+export const CONVERT_ID = 'convert'
 
 /** The engine-only features `turn` uses (dpr's reference `toSpec` throws `EngineOnlyError` on each); empty for most. */
 export function oracleEngineOnly(turn: SyntheticTurn): string[] {

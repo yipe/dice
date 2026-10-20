@@ -11,7 +11,7 @@ export type { DiceMatchInfo, HasDiceMatchInfo };
  * The version of the plain-data `TurnSpec` v2 contract this module declares. A consumer holding
  * its own copy of the contract can assert it matches.
  */
-export const CONTRACT_REVISION = 4;
+export const CONTRACT_REVISION = 5;
 
 /**
  * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
@@ -373,22 +373,30 @@ export type SubstitutePolicy =
   | { kind: "optimal" };
 
 /**
- * A once-per-turn payload transform: at the first watched landing the policy
- * accepts, the attack's base payload is replaced by a transform of itself. The
- * JSON-safe form of `Turn.onFirstHit(keepBestDamage())`; callers write the
- * factory, never the string.
+ * A once-per-turn rewrite of a watched attack's outcome or payload. Two kinds:
+ *
+ * - `{ on: "first-hit", substitute: "reroll-keep-higher" }`: at the first watched landing the
+ *   policy accepts, the attack's base payload is replaced by a transform of itself. The
+ *   JSON-safe form of `Turn.onFirstHit(keepBestDamage())`; callers write the factory, never the
+ *   string.
+ * - `{ on: "first-miss", substitute: "hit" }`: the first watched attack that misses hits
+ *   instead, in turn order — any miss, a natural 1 included, after the roll's own advantage or
+ *   reroll. The converted row is a plain hit, never a crit: it deals the row's hit damage and is
+ *   a landing for every rider and condition a hit lands. Every watched source must roll to hit
+ *   and not be watched by an attack-shaped miss rider (the reroll resolves first, so convert the
+ *   reroll instead). No policy. `Turn.convertFirstMiss()`; `fireProbability(id)` is P(converted).
  */
 export interface SubstituteSpec {
   id?: string;
-  on: "first-hit";
+  on: "first-hit" | "first-miss";
   /**
    * Omit it: defaults to every declared attack plus every attack-shaped `any-miss` /
    * `first-miss` rider, the same sources the chaining spelling watches (see {@link Trigger}).
    */
   of?: readonly string[];
   /** Named transform, so a {@link TurnSpec} stays JSON-safe and persistable. */
-  substitute: "reroll-keep-higher";
-  /** Defaults to `{ kind: "always" }`. */
+  substitute: "reroll-keep-higher" | "hit";
+  /** Defaults to `{ kind: "always" }`. `first-hit` only. */
   policy?: SubstitutePolicy;
 }
 

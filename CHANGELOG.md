@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Turn.convertFirstMiss()`**: the first watched attack that misses hits instead, once per turn, in
+  turn order (the 2024 Boon of Combat Prowess). Any miss converts, a natural 1 included, after the roll's
+  own advantage or reroll. The converted attack is a plain hit — its hit damage, never its crit damage —
+  and a landing for every rider and condition a hit lands, so a first-hit rider such as Sneak Attack can
+  be spent on it. `of` limits the attacks it watches. Its `TurnSpec` form is a substitute,
+  `{ on: "first-miss", substitute: "hit", of }`; `fireProbability(id)` is P(converted). A watched source
+  that rolls no attack is `not-an-attack`; one an attack-shaped miss rider rerolls is
+  `unsupported-trigger` (convert the reroll instead); a policy is `unsupported-policy`. `Turn.sample`
+  rolls the converted hit's payload fresh.
+- **`CONTRACT_REVISION` is 5**: `SubstituteSpec.on` takes `"first-miss"` and `substitute` takes `"hit"`.
+
 ## [0.20.0] - 2026-10-17
 
 ### Added
