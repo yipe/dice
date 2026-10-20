@@ -145,6 +145,9 @@ const PartSection: React.FC<{ part: Part; index: number }> = ({ part, index }) =
   const [near, setNear] = useState(false);
   const [frame, setFrame] = useState(reducedMotion ? part.duration - 1 : 0);
   const frameRef = useRef(frame);
+  // once the reader presses play the stage is a plain video for good: scrolling no longer moves it
+  const [video, setVideo] = useState(false);
+  const [playing, setPlaying] = useState(false);
 
   // mount the player only around the viewport
   useEffect(() => {
@@ -157,7 +160,7 @@ const PartSection: React.FC<{ part: Part; index: number }> = ({ part, index }) =
 
   // scroll position -> frame, eased so a flick of the wheel still reads as motion
   useEffect(() => {
-    if (!near || reducedMotion) return;
+    if (!near || reducedMotion || video) return;
     let raf = 0;
     let current = frameRef.current;
     const tick = () => {
@@ -180,12 +183,40 @@ const PartSection: React.FC<{ part: Part; index: number }> = ({ part, index }) =
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [near, part.duration]);
+  }, [near, video, part.duration]);
+
+  // video mode: the player drives the frame (and so the captions)
+  useEffect(() => {
+    const p = playerRef.current;
+    if (!near || !p) return;
+    const onFrame = (e: { detail: { frame: number } }) => { frameRef.current = e.detail.frame; setFrame(e.detail.frame); };
+    const onPlay = () => setPlaying(true), onPause = () => setPlaying(false);
+    p.addEventListener("frameupdate", onFrame);
+    p.addEventListener("play", onPlay);
+    p.addEventListener("pause", onPause);
+    p.addEventListener("ended", onPause);
+    return () => {
+      p.removeEventListener("frameupdate", onFrame);
+      p.removeEventListener("play", onPlay);
+      p.removeEventListener("pause", onPause);
+      p.removeEventListener("ended", onPause);
+    };
+  }, [near]);
+
+  const togglePlay = () => {
+    const p = playerRef.current;
+    if (!p) return;
+    setVideo(true);
+    if (video && p.isPlaying()) { p.pause(); return; }
+    if (p.getCurrentFrame() >= part.duration - 1) p.seekTo(0);
+    p.play();
+  };
 
   const active = part.captions.find((c) => frame >= c.from && frame < c.to) ?? part.captions[part.captions.length - 1];
   const activeIndex = part.captions.indexOf(active);
 
   const stage = near ? (
+    <>
     <Player
       ref={playerRef}
       component={part.component}
@@ -200,6 +231,12 @@ const PartSection: React.FC<{ part: Part; index: number }> = ({ part, index }) =
       doubleClickToFullscreen={false}
       spaceKeyToPlayOrPause={false}
     />
+    <button type="button" className="playbtn" onClick={togglePlay} aria-label={playing ? "Pause video" : "Play as video"} aria-pressed={playing}>
+      {playing
+        ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg>
+        : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>}
+    </button>
+    </>
   ) : null;
 
   return (
