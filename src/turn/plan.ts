@@ -597,7 +597,9 @@ export interface Step {
   contextIndexOf: (codes: readonly number[], fired: readonly FireMode[], flags: number, counts: readonly number[]) => number;
   /** Whether a substitute rewrites the row's own damage, so it is not its context's PMF. */
   transformed: boolean;
-  /** That substitute's policy: how `Turn.sample` decides a spend. Null where none watches the row. */
+  /** Whether the watching substitute converts the row's first miss into a hit (`on: "first-miss"`). */
+  converts: boolean;
+  /** That substitute's policy: how `Turn.sample` decides a spend. Null where none watches the row, or it converts. */
   policy: SubstitutePolicy | null;
   /** The probability the row happens at all (`AttackOptions.chance`); 1 for a rider. */
   chance: number;
@@ -1707,12 +1709,17 @@ export function buildPlan(
   });
   substitutes.forEach((substitute, index) => {
     const id = substituteIds[index];
-    if (substitute.on !== "first-hit" || substitute.substitute !== "reroll-keep-higher") {
+    const reroll = substitute.on === "first-hit" && substitute.substitute === "reroll-keep-higher";
+    const convert = substitute.on === "first-miss" && substitute.substitute === "hit";
+    if (!reroll && !convert) {
       fail(
         "unsupported-trigger",
         id,
-        `Substitute "${id}" must be { on: "first-hit", substitute: "reroll-keep-higher" }.`
+        `Substitute "${id}" must be { on: "first-hit", substitute: "reroll-keep-higher" } or { on: "first-miss", substitute: "hit" }.`
       );
+    }
+    if (convert && substitute.policy !== undefined) {
+      fail("unsupported-policy", id, `Substitute "${id}" converts the first miss, which takes no policy.`);
     }
     if (substitute.policy?.kind === "optimal") {
       fail(
@@ -2212,6 +2219,36 @@ export function buildPlan(
       }
       substituteBySource.set(sourceId, index);
     }
+  });
+  // A converted miss becomes the row's hit, so the row must roll to hit; and a reroll of the
+  // row's miss resolves before any conversion, so the reroll is what to convert.
+  substitutes.forEach((substitute, index) => {
+    if (substitute.on !== "first-miss") return;
+    const id = substituteIds[index];
+    for (const sourceId of sourceIdsByNode[riderCount + index]) {
+      if (slicesOf(sourceId) === null) {
+        fail("not-an-attack", id, `Substitute "${id}" converts a miss of "${sourceId}", which rolls no attack.`);
+      }
+    }
+    riders.forEach((rider, riderIndex) => {
+      if (!isReroll[riderIndex]) return;
+      // An any-miss reroll's step runs after every declared attack, not right after the miss it rerolls: converting it would
+      // spend the conversion out of turn order.
+      if (rider.on === "any-miss" && substituteBySource.get(riderIds[riderIndex]) === index) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Substitute "${id}" converts a miss of "${riderIds[riderIndex]}", an any-miss reroll that resolves after every declared attack. Use onFirstMiss, which resolves right after the miss.`
+        );
+      }
+      const rerolled = sourceIdsByNode[riderIndex].find((sourceId) => substituteBySource.get(sourceId) === index);
+      if (rerolled === undefined) return;
+      fail(
+        "unsupported-trigger",
+        id,
+        `Substitute "${id}" converts a miss of "${rerolled}", which rider "${riderIds[riderIndex]}" rerolls first. Convert the reroll instead: leave "${rerolled}" out of \`of\`.`
+      );
+    });
   });
 
   // --- groups --------------------------------------------------------------
@@ -3318,6 +3355,28 @@ export function buildPlan(
   };
 
   /**
+   * The unit-mass hit damage a converted miss deals where the row itself cannot hit (only a natural
+   * 20 lands, as a crit): the base payload when the draws split it, else the row's hit outcome
+   * re-rolled as an auto-hit in its own context.
+   */
+  const convertedHit = (sourceId: string, payload: BasePayload | null, rowContext: RowContext | undefined): PMF => {
+    if (payload?.base) return Mixture.mix([["hit", payload.base.hit, 1]], eps);
+    const source = damageOf(sourceId);
+    if (rowContext !== undefined && isContextual(source)) {
+      // Never a crit: an attack that crits on every hit (its own `alwaysCrits()`, or a crit-on-hit grant) rolls with no crit.
+      const plain = source as ContextualSource & { noCrit?: () => ContextualSource };
+      const rolled = typeof plain.noCrit === "function" ? plain.noCrit() : source;
+      const hit = pmfUnder(rolled, { ...rowContext, autoHit: true, critOnHit: false }, eps, sourceId).filterOutcome("hit");
+      if (hit.mass() > 0) return hit.scaleMass(1 / hit.mass());
+    }
+    return fail(
+      "not-an-attack",
+      sourceId,
+      `"${sourceId}" never hits without a crit and has no hit payload to re-roll, so a converted miss has no hit damage.`
+    );
+  };
+
+  /**
    * The draws for `sourceId`: hit and crit, each split by exact match probability
    * when a `dice-match` trigger reads it, and into spend/hold parts under a
    * substitute's `policy`; then the separate channels; then the `every-hit` fold
@@ -3327,7 +3386,8 @@ export function buildPlan(
    *
    * `fixed` draws belong to every variant. Each of `choices` is an above-threshold
    * landing that is held or spent depending on the walk state, so a variant takes
-   * either its `hold` or its `spend` draws.
+   * either its `hold` or its `spend` draws. With `convert`, the miss mass is drawn as the row's
+   * hit damage instead, in draws that spend: a converted miss (`first-miss` substitute).
    */
   const drawsFor = (
     sourceId: string,
@@ -3336,7 +3396,8 @@ export function buildPlan(
     mask: number,
     vulnerable = false,
     joined: readonly string[] = [],
-    rowContext?: RowContext
+    rowContext?: RowContext,
+    convert = false
   ): { fixed: Draw[]; choices: HoldChoice[] } => {
     const match = matchNeeded.has(sourceId) ? matchInfoOf(sourceId) : null;
     // With neither split, the slices already carry the channels — draw them as they are.
@@ -3392,6 +3453,12 @@ export function buildPlan(
         return [...draw(matched, true, spends), ...draw(unmatched, false, spends)];
       };
 
+      // A converted miss: the miss mass drawn as this row's hit damage, and it spends.
+      const missMass = convert && outcome === "hit" ? slices.miss.mass() : 0;
+      if (missMass > 0) {
+        const hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext);
+        fixed.push(...drawsOf(hit.scaleMass(missMass), true));
+      }
       if (!policy || mass <= 0) {
         fixed.push(...drawsOf(base, false));
         continue;
@@ -3428,7 +3495,9 @@ export function buildPlan(
         });
       }
     }
-    // A miss lands the riders that land on anything; the rest it lands nothing.
+    // A converted miss is the miss mass drawn as the row's hit (above); otherwise a miss lands the
+    // riders that land on anything, and the rest it lands nothing.
+    if (convert) return { fixed, choices };
     if ((perHitBySource.get(sourceId) ?? []).some((payload) => payload.landing === "any" && !payload.critOnly)) {
       fixed.push({
         outcome: "miss",
@@ -3638,6 +3707,7 @@ export function buildPlan(
     const substitute = slices ? substituteBySource.get(entry.id) : undefined;
     const spendSlot =
       substitute === undefined ? -1 : (fireSlots.get(substituteIds[substitute]) as number);
+    const converts = substitute !== undefined && substitutes[substitute].on === "first-miss";
 
     /** The distinct capped counters watching this step's source: bit i of a cap mask is `capped[i]`'s with-rider flag. */
     const capped = countersBySource.get(entry.id) ?? [];
@@ -3658,6 +3728,11 @@ export function buildPlan(
     ): { variants: StepVariant[]; select: Step["select"] } => {
       const plain = drawsFor(entry.id, contextSlices, null, cap, vulnerable, joined, rowContext).fixed;
       if (substitute === undefined) return { variants: [plain], select: plainSelect };
+      if (converts) {
+        // Variant 1 converts the miss; it is drawn while the conversion is unspent.
+        const converted = drawsFor(entry.id, contextSlices, null, cap, vulnerable, joined, rowContext, true).fixed;
+        return { variants: [plain, converted], select: (_codes, fired) => (fired[spendSlot] === null ? 1 : 0) };
+      }
       const { fixed, choices } = drawsFor(
         entry.id,
         contextSlices,
@@ -4037,7 +4112,8 @@ export function buildPlan(
       contextRowContexts,
       contextIndexOf,
       transformed: substitute !== undefined,
-      policy: substitute === undefined ? null : (substitutes[substitute].policy ?? { kind: "always" }),
+      converts,
+      policy: substitute === undefined || converts ? null : (substitutes[substitute].policy ?? { kind: "always" }),
       chance,
     });
   });

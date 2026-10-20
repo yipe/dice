@@ -792,6 +792,33 @@ export class Turn {
   }
 
   /**
+   * The first watched attack that misses hits instead, once per turn, in turn order: Boon of
+   * Combat Prowess. Any miss converts, a natural 1 included, after the roll's own advantage or
+   * reroll; the converted row is a plain hit (its hit damage, never a crit) and lands every rider
+   * and condition a hit lands. Every watched source must roll to hit; one an attack-shaped miss
+   * rider rerolls is refused (convert the reroll instead). A conversion is a substitute: a second
+   * over any of the same attacks is `duplicate-substitute`, and `fireProbability(id)` is
+   * P(converted).
+   *
+   * ```ts
+   * turn([sword, sword]).convertFirstMiss().mean();
+   * ```
+   */
+  convertFirstMiss(options: { id?: string; of?: string | readonly string[] } = {}): Turn {
+    const substitute: SubstituteSpec = {
+      ...(options.id === undefined ? {} : { id: options.id }),
+      on: "first-miss",
+      of: listed(options).of ?? this.defaultOf(),
+      substitute: "hit",
+    };
+    return this.with({
+      substitutes: [...this.state.substitutes, substitute],
+      defaulted: this.state.defaulted || options.of === undefined,
+      last: { kind: "substitute", index: this.state.substitutes.length },
+    });
+  }
+
+  /**
    * Fires once if any source crit, always in crit mode. Divine Smite: nothing is
    * lost by holding it for a crit, so this is "any", not "first".
    *

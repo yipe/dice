@@ -1,6 +1,7 @@
 import { cases as alongside } from './alongside'
 import { cases as cappedRiders } from './cappedRiders'
 import { cases as conditions } from './conditions'
+import { cases as convertFirstMiss } from './convertFirstMiss'
 import { cases as gated } from './gated'
 import { cases as grantFormat } from './grantFormat'
 import { cases as optional } from './optional'
@@ -16,6 +17,7 @@ export const FAMILIES: Readonly<Record<string, readonly OracleCase[]>> = {
   alongside,
   cappedRiders,
   conditions,
+  convertFirstMiss,
   gated,
   grantFormat,
   optional,
