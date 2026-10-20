@@ -1220,6 +1220,17 @@ export class Turn {
       });
     }
     const occurs = Math.min(1, happened / total);
+    if (rows.some((s) => steps[s].converts)) {
+      // A converted miss draws the row's hit: its marginal is what its draws dealt, read off the reader walk.
+      const parts: [PMF, number][] = [];
+      for (const s of rows) {
+        for (const [own, mass] of tally.ownDraws[s]) parts.push([own.scaleMass(1 / own.mass()), mass]);
+      }
+      const drawn = parts.reduce((sum, [, mass]) => sum + mass, 0);
+      if (drawn <= 0) return { pmf: PMF.missNone(this.eps), whenHappens: PMF.delta(0, this.eps), occurs, rollType };
+      const whenHappens = parts.length === 1 ? parts[0][0] : PMF.mix(parts.map(([pmf, mass]) => [pmf, mass / drawn]), 0);
+      return { pmf: whenHappens.applyHitFrequency(occurs), whenHappens, occurs, rollType };
+    }
     if (rows.some((s) => steps[s].transformed)) {
       const pmf = this.projectedMarginal(id);
       return { pmf, whenHappens: occurs > 0 ? unthinned(pmf, occurs) : PMF.delta(0, this.eps), occurs, rollType };
