@@ -148,6 +148,14 @@
     border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--canvas);
     box-shadow: 0 30px 80px -30px #000c;
   }
+  .stage { position: relative; }
+  .playbtn {
+    position: absolute; right: 10px; bottom: 10px; width: 40px; height: 40px; padding: 0; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 50%; background: #000a; color: var(--fg); cursor: pointer;
+    -webkit-tap-highlight-color: transparent; transition: background 0.15s;
+  }
+  .playbtn:hover, .playbtn:focus-visible { background: #000e; border-color: var(--accent); }
+  .playbtn svg { width: 20px; height: 20px; fill: currentColor; }
   .meter { display: flex; gap: 5px; width: min(100%, 520px); margin-inline: auto; }
   .meter span { height: 3px; border-radius: 2px; background: var(--border); transition: background 0.3s; }
   .meter .done { background: var(--accent); }
