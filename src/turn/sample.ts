@@ -382,10 +382,24 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       spent = draw.spends;
     } else {
       const roll = sampleRow(step, roller, rng);
-      const { outcome, attack } = roll;
+      let { outcome, attack } = roll;
       let ownTotal = roll.total;
       rowDice = roll.dice;
       rowResult = roll.result;
+
+      // A conversion: the first watched miss while it is unspent hits instead, a plain hit with
+      // the row's hit payload rolled fresh (the d20s stand as rolled).
+      if (step.converts && outcome === "miss" && attack !== undefined && fired[step.spendSlot] === null) {
+        const payload = attack.builder.samplePayload("hit", rng, roller.context);
+        const total = scaleValue(payload.base.total + payload.separate.reduce((sum, s) => sum + s.total, 0), payload.scale, "floor");
+        const damage = [...payload.base.dice, ...payload.separate.flatMap((s) => s.dice)];
+        attack = { builder: attack.builder, sample: { ...attack.sample, outcome: "hit", damage, total, payload } };
+        outcome = "hit";
+        ownTotal = total;
+        rowResult = "hit";
+        rowDice = [...traced(attack.sample.check, "attack", "you", step.id), ...traced(damage, "damage", "you", step.id)];
+        spent = true;
+      }
 
       // Which draws the dice could have come from: the outcome; the base dice's match where the
       // step tracks it; a save's class, or an attack's "dealt damage" kind, where the draws carry one.
