@@ -250,6 +250,19 @@
     .sticky { gap: 10px; }
     .formula { padding: 18px 14px; }
     .sheet { transform: none; }
+  }
+  /* phones turned sideways: very little height, so the pinned title becomes one slim row, the caption shrinks,
+     and the stage gets the rest instead of a thumbnail */
+  @media (orientation: landscape) and (max-height: 520px) {
+    .part { padding-top: 6vh; }
+    .intro { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 0 12px; padding: 6px 0 4px; }
+    .intro .eyebrow { font-size: 11px; }
+    .intro h2 { font-size: 20px; }
+    .intro::before { inset: calc(-1 * var(--safe-top)) 0 -12px; }
+    .sticky { justify-content: center; padding-bottom: 6px; gap: 6px; }
+    .caption { font-size: 15px; max-width: 70ch; }
+    .stage { width: min(100%, calc((100svh - var(--safe-top) - var(--hdr, 0px) - 76px) * 1920 / 880)); }
+  }
   </style>
 </head>
 <body>
