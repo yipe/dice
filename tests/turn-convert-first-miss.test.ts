@@ -41,6 +41,11 @@ describe("convertFirstMiss", () => {
     expect(turn([sure]).convertFirstMiss().mean()).toBeCloseTo(0.05 * 12 + 0.95 * 7.5, 12);
   });
 
+  it("converts to a plain hit where every hit crits", () => {
+    const paralyzed = d20.plus(5).ac(15).alwaysCrits().onHit(roll(1, d8).plus(3));
+    expect(turn([paralyzed]).convertFirstMiss().mean()).toBeCloseTo(0.55 * 12 + 0.45 * 7.5, 12);
+  });
+
   it("is never a crit: the crit odds and a crit-only rider are unchanged", () => {
     const plain = turn([a, b, c]).onAnyCrit(roll(2, d8), { id: "smite" });
     const converted = turn([a, b, c]).convertFirstMiss().onAnyCrit(roll(2, d8), { id: "smite" });
@@ -102,6 +107,9 @@ describe("convertFirstMiss", () => {
     );
     expect(turn([a]).onFirstMiss(a, { id: "reroll" }).convertFirstMiss({ of: ["reroll"] }).mean()).toBeGreaterThan(
       turn([a]).onFirstMiss(a, { id: "reroll" }).mean()
+    );
+    expect(refused(() => turn([a, b]).onAnyMiss(a, { id: "reroll" }).convertFirstMiss({ of: ["reroll"] })).code).toBe(
+      "unsupported-trigger"
     );
     expect(
       refused(() => Turn.from({ attacks: [a], substitutes: [{ on: "first-miss", substitute: "hit", policy: { kind: "always" } }] })).code
