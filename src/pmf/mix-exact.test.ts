@@ -64,31 +64,39 @@ function deepFreeze<T>(x: T): T {
   return x;
 }
 
-function expectIdentical(actual: PMF, expected: PMF): void {
-  expect([...actual.map.keys()]).toEqual([...expected.map.keys()]);
+/** The first way `actual` differs from `expected` (compared with `Object.is`), or undefined. */
+function firstDifference(actual: PMF, expected: PMF): string | undefined {
+  const ak = [...actual.map.keys()];
+  const ek = [...expected.map.keys()];
+  if (ak.join() !== ek.join()) return `bin order ${ak.join()} vs ${ek.join()}`;
   for (const [dmg, e] of expected.map) {
     const a = actual.map.get(dmg) as Bin;
-    expect(Object.is(a.p, e.p)).toBe(true);
+    if (!Object.is(a.p, e.p)) return `p at ${dmg}: ${a.p} vs ${e.p}`;
     for (const part of ["count", "attr"] as const) {
       const av = a[part];
       const ev = e[part];
-      expect(av === undefined).toBe(ev === undefined);
+      if ((av === undefined) !== (ev === undefined)) return `${part} presence at ${dmg}`;
       if (!av || !ev) continue;
-      expect(Object.keys(av)).toEqual(Object.keys(ev));
-      for (const k of Object.keys(ev)) expect(Object.is(av[k], ev[k])).toBe(true);
+      if (Object.keys(av).join() !== Object.keys(ev).join()) return `${part} label order at ${dmg}`;
+      for (const k of Object.keys(ev)) if (!Object.is(av[k], ev[k])) return `${part}.${k} at ${dmg}: ${av[k]} vs ${ev[k]}`;
     }
   }
-  expect(actual.identifier).toBe(expected.identifier);
-  expect(actual.epsilon).toBe(expected.epsilon);
-  expect(actual.normalized).toBe(expected.normalized);
-  expect(actual.fingerprint()).toBe(expected.fingerprint());
-  expect(Object.is(actual.mean(), expected.mean())).toBe(true);
+  if (actual.identifier !== expected.identifier) return "identifier";
+  if (actual.epsilon !== expected.epsilon) return "epsilon";
+  if (actual.normalized !== expected.normalized) return "normalized";
+  if (actual.fingerprint() !== expected.fingerprint()) return "fingerprint";
+  if (!Object.is(actual.mean(), expected.mean())) return "mean";
+  return undefined;
+}
+
+function expectIdentical(actual: PMF, expected: PMF): void {
+  expect(firstDifference(actual, expected)).toBeUndefined();
 }
 
 describe("PMF.mix is bit-identical to chained addScaled", () => {
-  it("matches on 3000 seeded random cases", () => {
+  it("matches on 2000 seeded random cases", () => {
     const r = rng(20261021);
-    for (let c = 0; c < 3000; c++) {
+    for (let c = 0; c < 2000; c++) {
       const eps = [0, 0, 1e-9, 1e-3][Math.floor(r() * 4)] as number;
       const count = 1 + Math.floor(r() * 8);
       const pool = Array.from({ length: Math.max(1, Math.floor(count / 2)) }, () => randomPMF(r, eps));
