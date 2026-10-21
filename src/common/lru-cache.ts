@@ -36,8 +36,16 @@ export interface LRUCacheOptions<V> {
   followsCachingToggle?: boolean;
 }
 
+interface Entry<V> {
+  value: V;
+  /** The cache's `appends` count when this entry was last put at the newest end. */
+  stamp: number;
+}
+
 export class LRUCache<K, V> {
-  private cache = new Map<K, V>();
+  private cache = new Map<K, Entry<V>>();
+  /** Entries appended to the newest end of `cache`: by a `set` that stores, or a move on a hit. */
+  private appends = 0;
   private readonly onInsert?: (value: V) => void;
   private readonly followsCachingToggle: boolean;
   private generation = cacheGeneration;
@@ -69,12 +77,20 @@ export class LRUCache<K, V> {
 
   get(key: K): V | undefined {
     if (!this.storing) return undefined;
-    const value = this.cache.get(key);
-    if (value === undefined) return undefined;
+    const entry = this.cache.get(key);
+    if (entry === undefined) return undefined;
 
-    this.cache.delete(key);
-    this.cache.set(key, value);
-    return value;
+    // Recency is approximate: a hit moves its entry to the newest end only once more than a quarter
+    // of the capacity has been appended since it was last placed. A key read at least once every
+    // `floor(maxSize / 4)` appends is therefore never evicted (for maxSize >= 8), and a hot key's
+    // hits cost one lookup. Which entry is evicted may differ from strict LRU; what a lookup
+    // returns never does.
+    if (this.appends - entry.stamp > this.maxSize / 4) {
+      this.cache.delete(key);
+      entry.stamp = ++this.appends;
+      this.cache.set(key, entry);
+    }
+    return entry.value;
   }
 
   delete(key: K): void {
@@ -89,7 +105,7 @@ export class LRUCache<K, V> {
       const oldestKey = this.cache.keys().next().value;
       this.cache.delete(oldestKey as K);
     }
-    this.cache.set(key, value);
+    this.cache.set(key, { value, stamp: ++this.appends });
     return this;
   }
 
@@ -113,6 +129,15 @@ export class LRUCache<K, V> {
 
   values(): IterableIterator<V> {
     this.sync();
-    return this.cache.values();
+    const entries = this.cache.values();
+    return {
+      next: () => {
+        const r = entries.next();
+        return r.done ? r : { done: false, value: r.value.value };
+      },
+      [Symbol.iterator]() {
+        return this;
+      },
+    };
   }
 }
