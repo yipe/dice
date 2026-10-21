@@ -1,3 +1,4 @@
+import { rollConfigsKey } from "./roll-cache-key";
 import type { ACBuilder } from "./ac";
 import type { CritConfig } from "../common/types";
 import type { Rng } from "../common/rng";
@@ -203,10 +204,7 @@ export class RollBuilder {
    * `null` to opt OUT of caching — a conservative miss is always safe; a wrong key would corrupt DPR.
    */
   cacheKey(): string | null {
-    // Non-finite numbers are kept distinct: JSON.stringify alone writes ±Infinity and NaN as null.
-    return (this._cacheKey ??= JSON.stringify(this.subRollConfigs, (_key, value: unknown) =>
-      typeof value === "number" && !Number.isFinite(value) ? `#${value}` : value
-    ));
+    return (this._cacheKey ??= rollConfigsKey(this.subRollConfigs));
   }
 
   // for testing
