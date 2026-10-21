@@ -5,7 +5,8 @@
  */
 import { bench, describe } from "vitest";
 import { advantage, d20, d6, d8, roll, turn } from "../src/builder";
-import { PMF, type Bin } from "../src/pmf/pmf";
+import type { Bin } from "../src/common/types";
+import { PMF } from "../src/pmf/pmf";
 
 /** ~40 bins, each carrying count and attr labels. */
 const labelled = (seed: number): PMF => {

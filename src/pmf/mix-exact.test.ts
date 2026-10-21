@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PMF, type Bin } from "./pmf";
+import type { Bin } from "../common/types";
+import { PMF } from "./pmf";
 
 type Option = { pmf: PMF; weight: number } | [PMF, number];
 
