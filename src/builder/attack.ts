@@ -124,6 +124,9 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     readonly damageType?: string,
     /** Names a turn's `of` and `to` can watch this attack by, set by {@link tagged}. */
     readonly tags: readonly string[] = [],
+    // Damage dealt only when the kept d20 shows a natural 20, verbatim (never doubled): see
+    // `plusNatural20Damage()`. Several calls accumulate.
+    private readonly natural20Damage: readonly RollBuilder[] = [],
     /**
      * 2 for the attack {@link rollUnder} returns in a vulnerable context: every landing's total is
      * doubled as a whole roll, in the PMF and in {@link sample}, so the builder's PMF is `under(context)`.
@@ -168,7 +171,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -200,7 +204,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      [...new Set([...this.tags, ...tags])]
+      [...new Set([...this.tags, ...tags])],
+      this.natural20Damage
     );
   }
 
@@ -241,7 +246,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -271,11 +277,13 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
   noCrit(): AttackBuilder {
+    if (this.natural20Damage.length > 0) throw AttackBuilder.natural20NoCritError();
     return new AttackBuilder(
       this.check,
       this.hitEffect,
@@ -288,7 +296,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -311,7 +320,53 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
+    );
+  }
+
+  /**
+   * Adds damage dealt only when the attack's d20 shows a natural 20 ("when you roll a 20 on the
+   * d20 for an attack roll": Boon of Irresistible Offense, Vicious, Sharpness, Life Stealing),
+   * on top of the crit payload. The natural 20 is the kept die: with advantage either d20 showing
+   * 20 (P = 1 - (19/20)^2), with three-dice advantage any of three, with disadvantage both. A crit
+   * from a crit range (`critOn(18)`), from `alwaysCrits()` or from a crit-on-hit grant on a natural
+   * 2..19 does not deal it; an always-hitting, always-critting check still rolls its d20 for it,
+   * and a check with no d20 never does. The damage is dealt verbatim: its dice never double on the
+   * crit (double them first for a rule that says so), and like `plusSeparateDamage` it is outside
+   * the base payload, so `rerollDamage`, `rerollDamageUpTo` and a turn's reroll substitution never
+   * touch it. A vulnerable target doubles it with the rest of the landing. Chainable; several calls
+   * accumulate. A natural 20 always crits, so the extra rides the crit branch: `resolve().crit` is
+   * `critBase` with `critSeparate`, whose share P(natural 20) / P(crit) carries the extra. Refuses
+   * `noCrit()`, which leaves a natural 20 no crit branch to ride; `toExpression()` has no spelling.
+   *
+   * ```ts
+   * // Champion (crits on 18-20) with Boon of Irresistible Offense (+5 on a natural 20 only).
+   * const boon = d20.plus(9).ac(17).critOn(18).onHit(d8.plus(5)).plusNatural20Damage(flat(5));
+   * ```
+   */
+  plusNatural20Damage(damage: RollBuilder): AttackBuilder {
+    if (this.critEffect === null) throw AttackBuilder.natural20NoCritError();
+    return new AttackBuilder(
+      this.check,
+      this.hitEffect,
+      this.critEffect,
+      this.missEffect,
+      this.separateDamage,
+      this.rerollThreshold,
+      this.minimumDieValue,
+      this.halfOnMissFlag,
+      this.attached,
+      this.rerollPool,
+      this.damageType,
+      this.tags,
+      [...this.natural20Damage, damage]
+    );
+  }
+
+  private static natural20NoCritError(): Error {
+    return new Error(
+      "plusNatural20Damage() cannot be combined with noCrit(): a natural 20 always crits, and its damage rides the crit branch noCrit() removes."
     );
   }
 
@@ -352,7 +407,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -388,7 +444,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -432,7 +489,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       spec,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -461,7 +519,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -489,7 +548,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       this.attached,
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -577,6 +637,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       attack.rerollPool,
       attack.damageType,
       attack.tags,
+      attack.natural20Damage,
       2
     );
   }
@@ -611,22 +672,29 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * One roll of this attack as {@link under} weighs it: the check ({@link ACBuilder.sampleCheck}:
    * the d20s, then the bonus dice), then the landing payload (the base pool, doubled on a crit,
    * then each separate channel in order), or on a miss the miss payload (`onMiss`), or the whole
-   * hit payload halved and floored (`halfOnMiss`). `alwaysHits().alwaysCrits()` draws no check.
+   * hit payload halved and floored (`halfOnMiss`). `alwaysHits().alwaysCrits()` draws no check,
+   * unless the attack has `plusNatural20Damage`, which reads its natural roll.
    * `context.vulnerable` doubles a landing's total as a whole roll and never redraws.
    */
   sample(rng: Rng, context?: RowContext): AttackSample {
     const attack = context ? this.inContext(context) : this;
     const check = attack.check;
     let checkDice: SampledDie[] = [];
+    let natural = 0;
     let outcome: AttackSample["outcome"];
     if (check instanceof AlwaysCritBuilder && check.fromAlwaysHit) {
       outcome = "crit";
+      if (attack.natural20Damage.length > 0) {
+        const drawn = check.sampleCheck(rng);
+        checkDice = drawn.check;
+        natural = drawn.natural;
+      }
     } else {
       // `resolveProbabilities`: a natural 1 misses, a natural 20 crits, any other roll has to reach
       // the AC, inside or outside the crit range. A dieless check's natural roll is a certain 0.
       const drawn = check.sampleCheck(rng);
       checkDice = drawn.check;
-      const r = drawn.natural;
+      const r = (natural = drawn.natural);
       const inCritRange = r === 20 || (r >= 1 && r >= check.critThreshold);
       if (check instanceof AlwaysHitBuilder) outcome = inCritRange ? "crit" : "hit";
       else if (r === 1) outcome = "miss";
@@ -655,7 +723,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       }
       return { outcome, check: checkDice, damage, total };
     }
-    const payload = attack.samplePayload(outcome, rng, context);
+    const payload = attack.samplePayload(outcome, rng, context, outcome === "crit" && natural === 20);
     const { base, separate } = payload;
     const total = scaleValue(base.total + separate.reduce((sum, s) => sum + s.total, 0), payload.scale, "floor");
     return { outcome, check: checkDice, damage: [...base.dice, ...separate.flatMap((s) => s.dice)], total, payload };
@@ -664,16 +732,18 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
   /**
    * The dice of one landing's payload as {@link sample} draws them, split at the base: the base
    * payload (the doubled pool on a crit unless `onCrit` names one, the `rerollDamageUpTo` budget
-   * applied), then each separate channel, unscaled; `scale` is what the landing's total is then
+   * applied), then each separate channel, unscaled, then, on a crit with `natural20`, each
+   * `plusNatural20Damage` payload; `scale` is what the landing's total is then
    * multiplied by as a whole roll (2 for a vulnerable `context`, or an attack {@link rollUnder}
    * built for one; else 1). `outcome` is the landing as {@link sample} reports it (`noCrit()`
    * already downgraded). What a turn's substitute re-rolls and a `dice-match` reads.
    */
-  samplePayload(outcome: "hit" | "crit", rng: Rng, context?: RowContext): AttackPayloadSample {
+  samplePayload(outcome: "hit" | "crit", rng: Rng, context?: RowContext, natural20 = false): AttackPayloadSample {
     const attack = context ? this.inContext(context) : this;
     const effect = outcome === "crit" ? (attack.critEffect ?? attack.hitEffect?.copy().doubleDice()) : attack.hitEffect;
     const base = effect ? attack.pooled(effect).sample(rng) : { total: 0, dice: [] };
     const separate = attack.separateDamage.map((channel) => (outcome === "crit" ? channel.copy().doubleDice() : channel).sample(rng));
+    if (outcome === "crit" && natural20) separate.push(...attack.natural20Damage.map((extra) => extra.sample(rng)));
     return { base, separate, scale: context?.vulnerable || attack.landingScale === 2 ? 2 : 1 };
   }
 
@@ -748,7 +818,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       ],
       this.rerollPool,
       this.damageType,
-      this.tags
+      this.tags,
+      this.natural20Damage
     );
   }
 
@@ -900,6 +971,11 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     if (this.separateDamage.length > 0 || this.halfOnMissFlag) {
       throw new Error(
         "toExpression() cannot represent plusSeparateDamage() or halfOnMiss(): the expression grammar has no separate damage channel or half-on-miss clause. Use toPMF() instead."
+      );
+    }
+    if (this.natural20Damage.length > 0) {
+      throw new Error(
+        "toExpression() cannot represent plusNatural20Damage(): the expression grammar has no natural-20 clause. Use toPMF() instead."
       );
     }
     if (this.rerollPool) {
@@ -1070,18 +1146,28 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // still reads base ⊛ doubled channels. The one exception: when no roll can crit and a channel
     // has no single doubled form (a die rolled with advantage, an ambiguous keep), the branch
     // nobody reads is not forced through `doubleDice()`, and `crit`/`critSeparate` are `delta(0)`.
-    const hasChannels = this.separateDamage.length > 0;
-    const hitChannelsPMF = hasChannels
-      ? PMF.convolveMany(this.separateDamage.map((r) => toEffectPMF(r)), eps)
-      : null;
+    // `plusNatural20Damage` joins the crit channels on the natural-20 share of the crit branch
+    // (see `withNatural20`); with it and no channel the channels are `delta(0)`, so `hit` is still
+    // a PMF of its own and a turn reads the base payload apart from the extra.
+    const hasChannels = this.separateDamage.length > 0 || this.natural20Damage.length > 0;
+    const convolveChannels = (channels: readonly RollBuilder[]): PMF =>
+      channels.length > 0 ? PMF.convolveMany(channels.map((r) => toEffectPMF(r)), eps) : PMF.delta(0, eps);
+    const hitChannelsPMF = hasChannels ? convolveChannels(this.separateDamage) : null;
+    // A natural 20 always crits, so the crits that deal `plusNatural20Damage` are the share
+    // P(natural 20) / P(crit) of the crit branch; the kept d20 is independent of the damage dice,
+    // so that share is a mix inside the crit channels. A forced crit on a 2..19 is the other share.
+    const withNatural20 = (channels: PMF): PMF => {
+      if (this.natural20Damage.length === 0 || !(pcrit > 0)) return channels;
+      const share = Math.min(1, resolveRootD20(this.check).pAt(20) / pcrit);
+      if (share <= 0) return channels;
+      const dealt = PMF.convolveMany([channels, convolveChannels(this.natural20Damage)], eps);
+      return share >= 1 ? dealt : channels.scaleMass(1 - share).add(dealt.scaleMass(share));
+    };
     let critChannelsPMF: PMF | null = null;
     let critPMF: PMF | null = critBasePMF;
     if (critBasePMF !== null && hasChannels) {
       try {
-        critChannelsPMF = PMF.convolveMany(
-          this.separateDamage.map((r) => toEffectPMF(r.copy().doubleDice())),
-          eps
-        );
+        critChannelsPMF = withNatural20(convolveChannels(this.separateDamage.map((r) => r.copy().doubleDice())));
         critPMF = PMF.convolveMany([critBasePMF, critChannelsPMF], eps);
       } catch (error) {
         if (pcrit > 0 || !(error instanceof AmbiguousCritDoublingError)) throw error;
@@ -1371,9 +1457,15 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       if (k === null) return null;
       channelsKey += `|${k}`;
     }
+    let natural20Key = "";
+    for (const r of this.natural20Damage) {
+      const k = r.cacheKey();
+      if (k === null) return null;
+      natural20Key += `|${k}`;
+    }
 
     const poolKey = this.rerollPool ? `${this.rerollPool.budget}x${this.rerollPool.rolls}` : "";
-    return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*S${channelsKey}*half${
+    return `${checkKey}*H${hitKey}*C${critKey}*M${missKey}*S${channelsKey}*N${natural20Key}*half${
       this.halfOnMissFlag ? 1 : 0
     }*U${poolKey}*V${this.landingScale}*e${eps}`;
   }
