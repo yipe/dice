@@ -248,8 +248,13 @@ export function nodeRange(node: ExpressionNode): [number, number] {
     }
     case "d20Roll":
     case "maxOf":
-    case "rerollUpTo":
       return nodeRange(node.child);
+    case "rerollUpTo": {
+      const [lo, hi] = nodeRange(node.child);
+      if (!node.rolledOnce) return [lo, hi];
+      const [onceLo, onceHi] = nodeRange(node.rolledOnce);
+      return [lo + onceLo, hi + onceHi];
+    }
     case "half": {
       const [lo, hi] = nodeRange(node.child);
       return [Math.floor(lo / 2), Math.floor(hi / 2)];

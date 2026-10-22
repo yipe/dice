@@ -1315,6 +1315,9 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     let pool = attackPool;
     if (effect instanceof RerollUpToRollBuilder) {
       const node = effect.toAST();
+      if (node.type === "rerollUpTo" && node.rolledOnce) {
+        return "the damage is a rerollUpTo pool with dice rolled once beside dice rolled again, whose match odds are not modelled";
+      }
       if (node.type === "rerollUpTo") pool = { budget: node.budget, rolls: node.rolls };
     } else if (effect.cacheKey() === null) {
       // `cacheKey() === null` is exactly the signal this class already uses for "PMF not fully
