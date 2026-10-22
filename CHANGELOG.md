@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-21
+
+### Changed
+
+- **Faster source-PMF cache hits and `PMF.mix`; results are bit-identical.** `RollBuilder.cacheKey()` is built from the
+  config fields directly instead of through `JSON.stringify`, `LRUCache.get` no longer reorders an entry on every hit, and
+  `PMF.mix` accumulates in one pass instead of chaining `addScaled`.
+
 ## [0.22.0] - 2026-10-21
 
 ### Added
