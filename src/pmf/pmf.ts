@@ -414,12 +414,36 @@ export class PMF {
       }
     }
 
-    let out = PMF.empty(eps);
+    // One pass, contribution by contribution in option order: the same arithmetic as chaining
+    // `addScaled`, without copying the growing map at every step. Inputs are never aliased or mutated.
+    const map = new Map<number, Bin>();
+    let used = false;
     for (const { pmf, weight } of items) {
-      if (Math.abs(weight) <= eps) continue; // ignore crumbs
-      out = out.addScaled(pmf, weight);
+      if (Math.abs(weight) <= eps || weight === 0) continue; // ignore crumbs; addScaled(0) is a no-op
+      used = true;
+      const unit = weight === 1;
+      for (const [dmg, added] of pmf.map) {
+        const existing = map.get(dmg);
+        if (existing === undefined) {
+          map.set(dmg, unit ? PMF.cloneBin(added) : PMF.scaleBin(added, weight));
+          continue;
+        }
+        existing.p = existing.p + (unit ? added.p : added.p * weight);
+        const count = existing.count;
+        for (const labelKey in added.count) {
+          const value = unit ? (added.count[labelKey] as number) : (added.count[labelKey] as number) * weight;
+          count[labelKey] = (count[labelKey] || 0) + value;
+        }
+        if (added.attr) {
+          const attr = (existing.attr ??= {});
+          for (const labelKey in added.attr) {
+            const value = unit ? (added.attr[labelKey] as number) : (added.attr[labelKey] as number) * weight;
+            attr[labelKey] = (attr[labelKey] || 0) + value;
+          }
+        }
+      }
     }
-    return out;
+    return used ? new PMF(map, eps, false) : PMF.empty(eps);
   }
   /**
    * Adds damage attribution metadata to this PMF based on existing count metadata.
