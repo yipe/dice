@@ -137,6 +137,18 @@ export interface RerollUpToOptions {
   rolls?: number;
 }
 
+/** Options of {@link RollBuilder.rerollUpTo}: {@link RerollUpToOptions} and the dice rolled once. */
+export interface RollRerollUpToOptions extends RerollUpToOptions {
+  /**
+   * Plain dice (and flats) in the same reroll pool that are rolled once whatever `rolls` is:
+   * Savage Attacker rolls only the weapon's dice twice, so a rider's dice (a Flame Tongue's 2d6,
+   * Sneak Attack) go here. The roll of this roll's own dice is chosen with them in view, by its
+   * expected total once the budget is spent over it and them; then up to `budget` dice among the
+   * kept roll and these are rerolled.
+   */
+  rolledOnce?: RollBuilder;
+}
+
 /**
  * Index of the config holding a check's natural roll — the die whose 1 misses and whose 20 hits and
  * crits — or -1 when no config can be one. Only a rolled, added die can: a subtracted or zero-count
@@ -816,10 +828,17 @@ export class RollBuilder {
    * `rolls` rolls the whole base payload again, and the budget never reaches `plusSeparateDamage`
    * channels.
    *
+   * With `{ rolls: n, rolledOnce }` only this roll's dice are rolled `n` times; the `rolledOnce`
+   * dice are rolled once, in view when the roll is chosen, and share the budget with the kept roll:
+   * `roll(1, d8).plus(3).rerollUpTo(1, { rolls: 2, rolledOnce: roll(1, d10) })` is a rapier with a
+   * 1d10 rider under Savage Attacker and Piercer (mean 3 + 8170/640 = 15.7656). A crit doubles the
+   * dice of both. `rolledOnce` must be plain dice too, and is no `rerollUpTo()` pool itself.
+   *
    * As an attack's hit or crit payload, a `dice-match` trigger reads the dice that land after the
-   * rerolls, the caster rerolling for the most damage as above (`AttackBuilder.diceMatchInfo`).
+   * rerolls, the caster rerolling for the most damage as above (`AttackBuilder.diceMatchInfo`); a
+   * pool with `rolledOnce` dice has no match odds and is refused.
    */
-  rerollUpTo(budget: number, options?: RerollUpToOptions): RerollUpToRollBuilder {
+  rerollUpTo(budget: number, options?: RollRerollUpToOptions): RerollUpToRollBuilder {
     const { budget: dice, rolls } = rerollUpToArguments(budget, options, "rerollUpTo()");
     if (this instanceof RerollUpToRollBuilder) {
       throw new Error(
@@ -835,7 +854,16 @@ export class RollBuilder {
     }
     const pool = new RollBuilder(this.getSubRollConfigs());
     rerollablePool(pool.toAST());
-    return new RerollUpToRollBuilder(pool, dice, rolls);
+    const once = options?.rolledOnce;
+    if (once === undefined) return new RerollUpToRollBuilder(pool, dice, rolls);
+    if (once instanceof TransformedRollBuilder || once.hasHiddenState()) {
+      throw new Error(
+        "rerollUpTo(): rolledOnce must be plain dice, not a half, scaled, max-of, pooled, parsed, summed or rerollUpTo() roll."
+      );
+    }
+    const oncePool = new RollBuilder(once.getSubRollConfigs());
+    rerollablePool(oncePool.toAST());
+    return new RerollUpToRollBuilder(pool, dice, rolls, oncePool);
   }
 
   // These methods are implemented via prototype augmentation in ac.ts and dc.ts
@@ -1082,7 +1110,7 @@ export class MaxOfRollBuilder extends TransformedRollBuilder {
 /**
  * A pool of plain dice that may reroll up to `budget` of them, keeping each new roll: see
  * {@link RollBuilder.rerollUpTo}. Built only by that method. Crit doubling scales the dice inside
- * and keeps the budget.
+ * (the rolled-once dice too) and keeps the budget.
  */
 export class RerollUpToRollBuilder extends TransformedRollBuilder {
   protected readonly verb = "rerollUpTo()";
@@ -1090,7 +1118,9 @@ export class RerollUpToRollBuilder extends TransformedRollBuilder {
   constructor(
     private readonly innerRoll: RollBuilder,
     private readonly budget: number,
-    private readonly rolls: number = 1
+    private readonly rolls: number = 1,
+    /** Dice of the pool rolled once whatever `rolls` is: `RollRerollUpToOptions.rolledOnce`. */
+    private readonly rolledOnce?: RollBuilder
   ) {
     super(0); // dummy, we override methods
   }
@@ -1108,11 +1138,18 @@ export class RerollUpToRollBuilder extends TransformedRollBuilder {
   }
 
   override getSubRollConfigs(): readonly RollConfig[] {
-    return this.innerRoll.getSubRollConfigs();
+    const own = this.innerRoll.getSubRollConfigs();
+    return this.rolledOnce ? [...own, ...this.rolledOnce.getSubRollConfigs()] : own;
   }
 
   override toAST(): ExpressionNode {
-    return { type: "rerollUpTo", budget: this.budget, rolls: this.rolls, child: this.innerRoll.toAST() };
+    return {
+      type: "rerollUpTo",
+      budget: this.budget,
+      rolls: this.rolls,
+      child: this.innerRoll.toAST(),
+      ...(this.rolledOnce ? { rolledOnce: this.rolledOnce.toAST() } : {}),
+    };
   }
 
   /** Always throws: the string grammar has no reroll-up-to-k syntax. */
@@ -1126,11 +1163,16 @@ export class RerollUpToRollBuilder extends TransformedRollBuilder {
 
   /** Scales the dice inside the pool; the reroll budget and the number of rolls stay. */
   override scaleDice(scale: number): RollBuilder {
-    return new RerollUpToRollBuilder(this.innerRoll.scaleDice(scale), this.budget, this.rolls);
+    return new RerollUpToRollBuilder(
+      this.innerRoll.scaleDice(scale),
+      this.budget,
+      this.rolls,
+      this.rolledOnce?.scaleDice(scale)
+    );
   }
 
   override copy(): RerollUpToRollBuilder {
-    return new RerollUpToRollBuilder(this.innerRoll.copy(), this.budget, this.rolls);
+    return new RerollUpToRollBuilder(this.innerRoll.copy(), this.budget, this.rolls, this.rolledOnce?.copy());
   }
 }
 
