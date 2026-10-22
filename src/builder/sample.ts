@@ -213,7 +213,7 @@ export function sampleNode(node: ExpressionNode, rng: Rng): RollSample {
       return keepBest(node.children.map((c) => sampleNode(c, rng)));
 
     case "rerollUpTo":
-      return sampleRerollUpTo(node.child, node.budget, node.rolls, rng);
+      return sampleRerollUpTo(node.child, node.budget, node.rolls, rng, node.rolledOnce);
   }
 }
 
@@ -237,7 +237,7 @@ interface PoolDie {
 
 interface PoolRoll {
   pool: PoolDie[];
-  /** Pool indices to reroll, the up-to-`budget` dice with the largest positive gain. */
+  /** Indices into `pool` then the rolled-once dice to reroll, the up-to-`budget` dice with the largest positive gain. */
   chosen: Set<number>;
   /** Kept faces plus the means of the rerolled dice: the roll's worth after its rerolls. */
   score: number;
@@ -247,14 +247,23 @@ interface PoolRoll {
  * The `reroll-pool.ts` policy: reroll the up-to-`budget` dice with the largest positive expected
  * gain `mean - shown`, ties to the kind with the higher mean (then the lower faces key), then to
  * the lower face. With `rolls` above 1 the pool is rolled that many times and the roll scoring
- * highest is the one rerolled; a tie keeps the earlier roll.
+ * highest is the one rerolled; a tie keeps the earlier roll. `rolledOnce` dice are drawn once,
+ * after every roll of the pool, and are scored and rerolled with each roll.
  *
  * The dice are drawn and emitted in the child's source order (`roll(2, 6).plus(d8)` draws d6, d6,
- * d8); the canonical mean order only settles which dice take the budget.
+ * d8), the rolled-once dice after; the canonical mean order only settles which dice take the budget.
  */
-function sampleRerollUpTo(child: ExpressionNode, budget: number, rolls: number, rng: Rng): RollSample {
-  const { groups, flat } = rerollablePool(child);
-  const scored = groups.map(({ die, count, sign }) => {
+function sampleRerollUpTo(
+  child: ExpressionNode,
+  budget: number,
+  rolls: number,
+  rng: Rng,
+  rolledOnce?: ExpressionNode
+): RollSample {
+  const own = rerollablePool(child);
+  const once = rolledOnce ? rerollablePool(rolledOnce) : { groups: [], flat: 0 };
+  const ownGroups = own.groups.length;
+  const scored = [...own.groups, ...once.groups].map(({ die, count, sign }) => {
     const single = resolveSingleDie(die);
     const faces = single.support();
     const mean = faces.reduce((m, f) => m + sign * f * single.pAt(f), 0);
@@ -271,51 +280,55 @@ function sampleRerollUpTo(child: ExpressionNode, budget: number, rolls: number, 
   const capacity = Math.max(0, Math.floor(budget));
   const trials = Math.max(1, Math.floor(rolls));
 
-  const rollOne = (): PoolRoll => {
-    const pool = kinds.flatMap((kind, k) =>
+  const draw = (from: number, to: number): PoolDie[] =>
+    kinds.slice(from, to).flatMap((kind, offset) =>
       Array.from({ length: kind.count }, () => {
         const s = sampleDie(kind.die, rng);
-        return { kind: k, value: kind.sign * s.face, dice: s.dice };
+        return { kind: from + offset, value: kind.sign * s.face, dice: s.dice };
       })
     );
-    const gain = (i: number) => Math.round((kinds[pool[i].kind].mean - pool[i].value) * GRID);
+  const pools = Array.from({ length: trials }, () => draw(0, ownGroups));
+  const oncePool = draw(ownGroups, kinds.length);
+
+  const attempts = pools.map((pool): PoolRoll => {
+    const seen = [...pool, ...oncePool];
+    const gain = (i: number) => Math.round((kinds[seen[i].kind].mean - seen[i].value) * GRID);
     const chosen = new Set(
-      pool
+      seen
         .map((_, i) => i)
         .filter((i) => gain(i) > 0)
-        .sort((a, b) => gain(b) - gain(a) || kinds[pool[a].kind].rank - kinds[pool[b].kind].rank || pool[a].value - pool[b].value)
+        .sort((a, b) => gain(b) - gain(a) || kinds[seen[a].kind].rank - kinds[seen[b].kind].rank || seen[a].value - seen[b].value)
         .slice(0, capacity)
     );
-    const score = pool.reduce((s, d, i) => s + (chosen.has(i) ? kinds[d.kind].mean : d.value), 0);
+    const score = seen.reduce((s, d, i) => s + (chosen.has(i) ? kinds[d.kind].mean : d.value), 0);
     return { pool, chosen, score };
-  };
-
-  const attempts = Array.from({ length: trials }, rollOne);
+  });
   // Scores compare on the grid exactly as `rerollUpToPMF` keys them; the first highest wins.
   let best = 0;
   attempts.forEach((a, i) => {
     if (Math.round(a.score * GRID) > Math.round(attempts[best].score * GRID)) best = i;
   });
 
-  let total = flat;
+  let total = own.flat + once.flat;
   const dice: SampledDie[] = [];
-  attempts.forEach((attempt, i) => {
-    if (i !== best) {
-      dice.push(...attempt.pool.flatMap((d) => dropped(d.dice)));
+  const { pool: kept, chosen } = attempts[best];
+  // `j` indexes the kept roll then the rolled-once dice, as `chosen` does.
+  const play = (d: PoolDie, j: number): void => {
+    if (!chosen.has(j)) {
+      total += d.value;
+      dice.push(...d.dice);
       return;
     }
-    attempt.pool.forEach((d, j) => {
-      if (!attempt.chosen.has(j)) {
-        total += d.value;
-        dice.push(...d.dice);
-        return;
-      }
-      dice.push(...dropped(d.dice));
-      const kind = kinds[d.kind];
-      const s = sampleDie(kind.die, rng);
-      total += kind.sign * s.face;
-      dice.push(...s.dice.map((x) => ({ ...x, reroll: true as const })));
-    });
+    dice.push(...dropped(d.dice));
+    const kind = kinds[d.kind];
+    const s = sampleDie(kind.die, rng);
+    total += kind.sign * s.face;
+    dice.push(...s.dice.map((x) => ({ ...x, reroll: true as const })));
+  };
+  attempts.forEach((attempt, i) => {
+    if (i === best) kept.forEach(play);
+    else dice.push(...attempt.pool.flatMap((d) => dropped(d.dice)));
   });
+  oncePool.forEach((d, j) => play(d, kept.length + j));
   return { total, dice };
 }

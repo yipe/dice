@@ -93,11 +93,14 @@ export type ScaleNode = {
  * the dice are what rerolls act on, the flats never change. With `rolls` above 1 the pool is
  * rolled that many times and the roll whose expected total after its own rerolls is highest is
  * kept (rolls worth the same are interchangeable, so a tie changes nothing), then rerolled: Savage
- * Attacker with a reroll budget.
+ * Attacker with a reroll budget. `rolledOnce` holds plain dice and flats rolled once whatever
+ * `rolls` is (Savage Attacker rolls only the weapon's dice again): they are seen when the roll is
+ * chosen and share the reroll budget with it. Absent when every die is rolled `rolls` times.
  */
 export type RerollUpToNode = {
   type: "rerollUpTo";
   budget: number;
   rolls: number;
   child: ExpressionNode;
+  rolledOnce?: ExpressionNode;
 };

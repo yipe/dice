@@ -56,6 +56,11 @@ interface Face {
   readonly after: number;
 }
 
+/** The identity of a kind of die: its signed faces and their probabilities. */
+function kindKey(kind: PoolDieKind): string {
+  return `${kind.values.join(",")}|${kind.probs.join(",")}`;
+}
+
 /**
  * Dice with the same faces are one kind. Kinds come out in a canonical order (higher mean first,
  * then by faces), which is the order that settles ties for the reroll budget.
@@ -64,7 +69,7 @@ function mergeKinds(kinds: readonly PoolDieKind[]): Kind[] {
   const byKey = new Map<string, { kind: PoolDieKind; count: number }>();
   for (const kind of kinds) {
     if (!(kind.count > 0) || kind.values.length === 0) continue;
-    const key = `${kind.values.join(",")}|${kind.probs.join(",")}`;
+    const key = kindKey(kind);
     const existing = byKey.get(key);
     if (existing) existing.count += kind.count;
     else byKey.set(key, { kind, count: kind.count });
@@ -289,6 +294,127 @@ export function rerollUpToPMF(
       const kept = weightOf ? pr * weightOf(sum + offset) : pr;
       for (const [roll, pf] of newRolls) out.set(sum + roll, (out.get(sum + roll) ?? 0) + kept * pf);
     }
+  }
+  return PMF.fromMap(out, eps);
+}
+
+/**
+ * Most (repeated summary, once summary) pairs {@link rerollUpToPartialPMF} scores before it gives
+ * up: about a second of work.
+ */
+const PARTIAL_WORK_LIMIT = 2e7;
+
+/**
+ * Distribution of a pool's total (flats excluded) whose `repeatedKinds` dice are rolled `rolls`
+ * times and whose `onceKinds` dice are rolled once (Savage Attacker rolls only the weapon's dice
+ * again): the roll of the repeated dice worth the most once its rerolls are spent is kept, then
+ * up to `budget` dice of that roll and the once-rolled dice are rerolled, keeping the new rolls
+ * (Piercer). The policy is {@link rerollUpToPMF}'s, over the dice of both sides: reroll the
+ * largest positive gains, ties to the higher-ranked kind; score a roll by its kept faces plus the
+ * means of the dice it rerolls.
+ *
+ * The dice rerolled are the up-to-`budget` largest gains of the kept roll and the once dice
+ * together, so they are among the up-to-`budget` largest of each side. A side's roll is therefore
+ * summarized by its sum and its top `budget` reroll candidates (faces in {@link orderedFaces}
+ * order); a DP over each side's dice gives the summaries' masses. For every once-rolled summary,
+ * each repeated summary is scored with the merged candidates, the best of `rolls` is weighted by
+ * {@link bestOfRollsWeights}, and the kept sum is tallied by the kinds rerolled, whose fresh rolls
+ * are convolved in last. Rolls worth the same are interchangeable, as in {@link rerollUpToPMF}.
+ */
+export function rerollUpToPartialPMF(
+  repeatedKinds: readonly PoolDieKind[],
+  onceKinds: readonly PoolDieKind[],
+  budget: number,
+  rolls: number,
+  eps: number
+): PMF {
+  const kinds = mergeKinds([...repeatedKinds, ...onceKinds]);
+  const indexOf = new Map(kinds.map((kind, index) => [kind.key, index]));
+  const faces = orderedFaces(kinds);
+  const capacity = Math.max(0, Math.floor(budget));
+  const trials = Math.max(1, Math.floor(rolls));
+  // A reroll candidate is a positive-gain face's index in `faces`: a lower index rerolls first.
+  const candidateOf = kinds.map(() => new Map<number, number>());
+  faces.forEach((face, index) => {
+    if (face.gain > 0) candidateOf[face.kind].set(face.value, index);
+  });
+  const byOrder = (a: number, b: number): number => a - b;
+
+  interface Summary {
+    sum: number;
+    /** The roll's up-to-`capacity` best reroll candidates, best first. */
+    top: number[];
+    p: number;
+  }
+  const summaries = (side: readonly PoolDieKind[]): Summary[] => {
+    let states = new Map<string, Summary>([["0|", { sum: 0, top: [], p: 1 }]]);
+    for (const sideKind of side) {
+      if (!(sideKind.count > 0) || sideKind.values.length === 0) continue;
+      const k = indexOf.get(kindKey(sideKind)) as number;
+      for (let die = 0; die < sideKind.count; die++) {
+        const next = new Map<string, Summary>();
+        for (const state of states.values()) {
+          for (const [value, pv] of kinds[k].single) {
+            const candidate = candidateOf[k].get(value);
+            const top =
+              candidate === undefined || capacity === 0
+                ? state.top
+                : [...state.top, candidate].sort(byOrder).slice(0, capacity);
+            const sum = state.sum + value;
+            const key = `${sum}|${top.join(",")}`;
+            const existing = next.get(key);
+            if (existing) existing.p += state.p * pv;
+            else next.set(key, { sum, top, p: state.p * pv });
+          }
+        }
+        states = next;
+      }
+    }
+    return [...states.values()];
+  };
+  const repeated = summaries(repeatedKinds);
+  const once = summaries(onceKinds);
+  if (repeated.length * once.length > PARTIAL_WORK_LIMIT) {
+    throw new Error("rerollUpTo(): the pool has too many dice of too many kinds to enumerate.");
+  }
+
+  // Kept sums by the kinds rerolled (a sorted list of kind indices).
+  const keptByRerolled = new Map<string, Dist>();
+  for (const rest of once) {
+    const plays = repeated.map((roll) => {
+      const top = [...roll.top, ...rest.top].sort(byOrder).slice(0, capacity);
+      let kept = roll.sum + rest.sum;
+      let score = kept;
+      for (const index of top) {
+        kept -= faces[index].value;
+        score += kinds[faces[index].kind].mean - faces[index].value;
+      }
+      return { roll, top, kept, score };
+    });
+    let weightOf: ((score: number) => number) | undefined;
+    if (trials > 1) {
+      const scoreMass = new Map<number, number>();
+      for (const { roll, score } of plays) {
+        const grid = Math.round(score * GRID);
+        scoreMass.set(grid, (scoreMass.get(grid) ?? 0) + roll.p);
+      }
+      weightOf = bestOfRollsWeights(scoreMass, trials);
+    }
+    for (const { roll, top, kept, score } of plays) {
+      const mass = rest.p * roll.p * (weightOf ? weightOf(score) : 1);
+      if (!(mass > 0)) continue;
+      const rerolled = top.map((index) => faces[index].kind).sort(byOrder).join(",");
+      let dist = keptByRerolled.get(rerolled);
+      if (dist === undefined) keptByRerolled.set(rerolled, (dist = new Map()));
+      dist.set(kept, (dist.get(kept) ?? 0) + mass);
+    }
+  }
+
+  const out: Dist = new Map();
+  for (const [rerolled, kept] of keptByRerolled) {
+    let fresh: Dist = new Map([[0, 1]]);
+    for (const kind of rerolled === "" ? [] : rerolled.split(",")) fresh = convolve(fresh, kinds[Number(kind)].single);
+    for (const [sum, p] of convolve(kept, fresh)) out.set(sum, (out.get(sum) ?? 0) + p);
   }
   return PMF.fromMap(out, eps);
 }

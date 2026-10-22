@@ -11,7 +11,7 @@ import type {
   MaxOfNode,
   SumNode,
 } from "./nodes";
-import { rerollUpToPMF, type PoolDieKind } from "./reroll-pool";
+import { rerollUpToPartialPMF, rerollUpToPMF, type PoolDieKind } from "./reroll-pool";
 import { naturalRollIndex, type RollBuilder } from "./roll";
 import type { RollConfig, RollType } from "./types";
 
@@ -277,17 +277,25 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
       }
 
       case "rerollUpTo": {
-        const { groups, flat } = rerollablePool(node.child);
-        const kinds: PoolDieKind[] = groups.map(({ die, count, sign }) => {
-          const single = resolveSingleDie(die, eps);
-          const faces = single.support();
-          return {
-            values: faces.map((face) => sign * face),
-            probs: faces.map((face) => single.pAt(face)),
-            count,
-          };
-        });
-        const rerolled = rerollUpToPMF(kinds, node.budget, node.rolls, eps);
+        const kindsOf = (pool: ExpressionNode): { kinds: PoolDieKind[]; flat: number } => {
+          const { groups, flat } = rerollablePool(pool);
+          const kinds = groups.map(({ die, count, sign }) => {
+            const single = resolveSingleDie(die, eps);
+            const faces = single.support();
+            return {
+              values: faces.map((face) => sign * face),
+              probs: faces.map((face) => single.pAt(face)),
+              count,
+            };
+          });
+          return { kinds, flat };
+        };
+        const repeated = kindsOf(node.child);
+        const once = node.rolledOnce ? kindsOf(node.rolledOnce) : undefined;
+        const rerolled = once
+          ? rerollUpToPartialPMF(repeated.kinds, once.kinds, node.budget, node.rolls, eps)
+          : rerollUpToPMF(repeated.kinds, node.budget, node.rolls, eps);
+        const flat = repeated.flat + (once?.flat ?? 0);
         return flat === 0 ? rerolled : rerolled.mapDamage((v) => v + flat);
       }
     }
@@ -892,7 +900,9 @@ export function getASTSignature(node: ExpressionNode): string {
         node.rounding
       },ch:${getASTSignature(node.child)}}`;
     case "rerollUpTo":
-      return `rerollUpTo{b:${node.budget},r:${node.rolls},ch:${getASTSignature(node.child)}}`;
+      return `rerollUpTo{b:${node.budget},r:${node.rolls},ch:${getASTSignature(node.child)}${
+        node.rolledOnce ? `,once:${getASTSignature(node.rolledOnce)}` : ""
+      }}`;
     case "max":
       return `max[${node.children.map(getASTSignature).join(",")}]`;
     case "add": {

@@ -170,6 +170,14 @@ no die at all (`(15 AC 12) * (1d6)`, `(25 AC d20) * (1d6)`) has no natural roll,
 and a `crit (…)` or `xcrit N` clause on it is inert: `(15 AC 12) * (1d6) crit (2d6)` means 3.5, like
 `roll.flat(15).ac(12).onHit(d6)`, which emits that string.
 
+**Damage on a natural 20 only.** "When you roll a 20 on the d20" (Boon of Irresistible Offense,
+Vicious, Sharpness, Life Stealing) is not every crit: `plusNatural20Damage(flat(5))` adds 5 only when
+the kept d20 shows 20. A Champion who crits on 18-20 deals it on 1/20 of attacks, not 3/20; with
+advantage on 1 - (19/20)^2, with three-dice advantage on 1 - (19/20)^3, with disadvantage on 1/400. A
+crit forced on a 2..19 (`alwaysCrits()`, a crit-on-hit grant) does not deal it, and a check with no
+d20 never does. The damage is added verbatim, never doubled, on top of the crit payload, outside the
+base payload (rerolls and a turn's substitute never touch it). `noCrit()` refuses it.
+
 ### Refused mix shapes
 
 **`&` shapes that are refused.** An `&` mix weights each side by its count of outcomes, so these
@@ -269,6 +277,12 @@ final total.
 `rolls` models "choose the Savage roll, then Piercer rerolls a die in it". A player who may use the
 reroll before choosing does better (1d8: 6.469 against 6.156; 1d12: 9.479 against 8.993; 2d6: 9.302
 against 9.197), and that order is not modelled.
+Savage Attacker rolls only the weapon's dice twice: `rolledOnce` names the dice of the same reroll
+pool that are rolled once. `roll(1, d8).plus(3).rerollUpTo(1, { rolls: 2, rolledOnce: roll(1, d10) })`
+is a rapier with a 1d10 rider: the d8 is rolled twice, the d10 once, the d8 roll worth more with the
+d10 in view (after the best reroll among it and the d10) is kept, then one die of the two is
+rerolled (mean 3 + 8170/640 = 15.7656). A crit doubles both sides' dice; a `dice-match` trigger
+refuses such a pool.
 On an attack, `rerollDamageUpTo(k, { rolls })` does the same for the base payload only (hit, and an
 explicit `onCrit`; a crit's auto-doubled dice reroll up to the same k), leaving
 `plusSeparateDamage` channels alone, in any call order with `rerollDamage`, `minimumDamageDie` and
@@ -282,7 +296,7 @@ rerolling for the most damage as the PMF does (see `diceMatchInfo()`).
 builder's own distribution: a term after the first is parenthesised when it is an expression of its
 own, `~+` joins a term to a running total that can be 0, and an attack always carries its crit clause
 (`noCrit()` prints `xcrit0 (<hit payload>)`, which crits on no natural face). Explode, pool-wide explode, `scaleResult(…, "round")`,
-fractional scale factors, `plusSeparateDamage()`, `halfOnMiss()`, `rerollUpTo()` and `rerollDamageUpTo()` have no spelling and throw.
+fractional scale factors, `plusSeparateDamage()`, `plusNatural20Damage()`, `halfOnMiss()`, `rerollUpTo()` and `rerollDamageUpTo()` have no spelling and throw.
 Strings have no natural-1 miss or natural-20 hit.
 
 ## Turns: attacks and conditional damage

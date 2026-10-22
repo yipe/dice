@@ -5,6 +5,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`AttackBuilder.plusNatural20Damage(roll)`**: damage dealt only when the kept d20 shows a natural 20
+  ("when you roll a 20 on the d20": Boon of Irresistible Offense, Vicious, Sharpness, Life Stealing),
+  not on every crit. A crit range (`critOn(18)`), `alwaysCrits()` or a crit-on-hit grant on a natural
+  2..19 does not deal it; advantage, three-dice advantage and disadvantage read the kept die. Added
+  verbatim (never doubled) on top of the crit payload and outside the base payload; it rides the
+  natural-20 share P(natural 20) / P(crit) of `critSeparate`, so a turn's substitute and `under(context)`
+  keep it exact. `noCrit()` refuses it and `toExpression()` has no spelling.
+- **`rerollUpTo(k, { rolls, rolledOnce })`**: dice of the reroll pool rolled once beside dice rolled
+  `rolls` times (Savage Attacker rolls only the weapon's dice twice). The kept roll is chosen with the
+  rolled-once dice in view, then up to k dice among it and them are rerolled (Piercer), exactly:
+  `roll(1, d8).plus(3).rerollUpTo(1, { rolls: 2, rolledOnce: roll(1, d10) })` has mean 3 + 8170/640.
+  A crit doubles both sides' dice; a `dice-match` trigger refuses the pool.
+
 ## [0.21.1] - 2026-10-20
 
 ### Fixed

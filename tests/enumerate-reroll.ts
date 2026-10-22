@@ -139,3 +139,83 @@ export function bruteForceRerollUpTo(dice: readonly OracleDie[], budget: number,
   });
   return out;
 }
+
+/**
+ * Distribution of a pool whose `repeated` dice are rolled `rolls` times and whose `once` dice are
+ * rolled once (Savage Attacker on the weapon dice beside a rider's dice), then up to `budget` dice
+ * of the kept roll and the once-rolled dice are rerolled, the new rolls kept (Piercer). Every roll
+ * of every die is listed; for each, every repeated roll is tried with every subset of at most
+ * `budget` of its dice and the once dice, and the roll and subset with the highest expected total
+ * are played (the first roll on a tie, which does not change the distribution; ties between
+ * subsets as {@link bruteForceRerollUpTo} settles them).
+ */
+export function bruteForcePartialRerollUpTo(
+  repeated: readonly OracleDie[],
+  once: readonly OracleDie[],
+  budget: number,
+  rolls: number
+): Dist {
+  const dice = [...repeated, ...once];
+  const means = dice.map((die) => meanOf(die.faces));
+  const kinds = kindIds(dice);
+  const tieKey = (set: number[]): number[] => [set.length, ...set.map((i) => kinds[i] * 1000 + i).sort((a, b) => a - b)];
+  const earlier = (a: number[], b: number[]): boolean => {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] < b[i];
+    return a.length < b.length;
+  };
+
+  /** Every joint roll of `pool`: the faces in order and their probability. */
+  const rollsOf = (pool: readonly OracleDie[]): [number[], number][] => {
+    let out: [number[], number][] = [[[], 1]];
+    for (const die of pool) {
+      const next: [number[], number][] = [];
+      for (const [values, p] of out) for (const [value, pv] of die.faces) next.push([[...values, value], p * pv]);
+      out = next;
+    }
+    return out;
+  };
+  const repeatedRolls = rollsOf(repeated);
+  const onceRolls = rollsOf(once);
+
+  /** The best subset of `values` (repeated then once) to reroll, by trying every one. */
+  const bestSet = (values: number[]): { set: number[]; expected: number } => {
+    let best: { set: number[]; expected: number } | undefined;
+    for (let mask = 0; mask < 1 << dice.length; mask++) {
+      const set = [...Array(dice.length).keys()].filter((i) => mask & (1 << i));
+      if (set.length > budget) continue;
+      const expected = values.reduce((total, v, i) => total + (set.includes(i) ? means[i] : v), 0);
+      if (
+        !best ||
+        expected > best.expected + TOLERANCE ||
+        (Math.abs(expected - best.expected) <= TOLERANCE && earlier(tieKey(set), tieKey(best.set)))
+      ) {
+        best = { set, expected };
+      }
+    }
+    return best!;
+  };
+
+  const out: Dist = new Map();
+  const play = (trial: number, leader: { values: number[]; set: number[]; expected: number } | undefined, onceValues: number[], p: number): void => {
+    if (trial === rolls) {
+      let after: Dist = new Map([[leader!.values.reduce((total, v, i) => total + (leader!.set.includes(i) ? 0 : v), 0), 1]]);
+      for (const i of leader!.set) {
+        const next: Dist = new Map();
+        for (const [total, pt] of after) {
+          for (const [value, pv] of dice[i].faces) next.set(total + value, (next.get(total + value) ?? 0) + pt * pv);
+        }
+        after = next;
+      }
+      for (const [total, pt] of after) out.set(total, (out.get(total) ?? 0) + p * pt);
+      return;
+    }
+    for (const [values, pv] of repeatedRolls) {
+      const all = [...values, ...onceValues];
+      const candidate = { values: all, ...bestSet(all) };
+      const next = !leader || candidate.expected > leader.expected + TOLERANCE ? candidate : leader;
+      play(trial + 1, next, onceValues, p * pv);
+    }
+  };
+  for (const [onceValues, p] of onceRolls) play(0, undefined, onceValues, p);
+  return out;
+}
