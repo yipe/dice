@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sum's PMF no longer depends on which term order resolved it first.** The builder cache key for an `add` node sorts its terms
+  (addition commutes), but `resolve` folded them with `convolveMany` in the order they were written, and a float convolution does not
+  associate bit for bit. Two sums with one key therefore computed different last bits, and the first one resolved decided what every later
+  one got back: a scoring's result depended on what the process had scored before (a few ulps, seen as ~1e-16 differences in a
+  DPR sweep). Terms are now folded in the key's own order, so equal key means equal bits, cold or cached. **Results can change in the last
+  bit for sums whose terms were not already written in key order**; they are now reproducible.
+
 ## [0.22.1] - 2026-10-21
 
 ### Changed
