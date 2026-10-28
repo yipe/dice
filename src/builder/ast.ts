@@ -214,15 +214,23 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
 
       case "add": {
         let shift = 0;
-        const parts: PMF[] = [];
+        const terms: { sig: string; pmf: PMF }[] = [];
         for (const c of node.children) {
           if (c.node.type === "constant") {
             shift += c.sign * c.node.value;
           } else {
             const p = resolve(c.node, eps);
-            parts.push(c.sign === 1 ? p : p.mapDamage((v) => -v));
+            terms.push({
+              sig: `${c.sign === -1 ? "-" : "+"}${getASTSignature(c.node)}`,
+              pmf: c.sign === 1 ? p : p.mapDamage((v) => -v),
+            });
           }
         }
+        // The cache key (`getASTSignature`) sorts an add's terms because addition commutes, but a float
+        // convolution does not associate bit for bit: fold in the key's own order, so every node that
+        // shares a key computes the same bits and a cache hit equals a fresh build whatever order its terms came in.
+        terms.sort((a, b) => (a.sig < b.sig ? -1 : a.sig > b.sig ? 1 : 0));
+        const parts = terms.map((t) => t.pmf);
         if (parts.length === 0) return PMF.delta(shift, eps);
         let res = parts.length === 1 ? parts[0] : PMF.convolveMany(parts, eps);
         if (shift !== 0) res = res.mapDamage((v) => v + shift);
