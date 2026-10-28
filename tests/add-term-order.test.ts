@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "../src/builder/ast";
-import type { ExpressionNode } from "../src/builder/ast";
+import type { ExpressionNode } from "../src/builder/nodes";
 import { builderPMFCache } from "../src/builder/factory";
 import { PMF } from "../src/index";
 
@@ -54,7 +54,7 @@ describe("a sum is the same bits in every term order", () => {
     }
     for (const first of cold.keys()) {
       clearCaches();
-      resolve(sumOf(first), 0);
+      void resolve(sumOf(first), 0);
       for (const [second, bits] of cold) expect(resolve(sumOf(second), 0).fingerprint()).toBe(bits);
     }
   });
