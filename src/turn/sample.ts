@@ -16,9 +16,9 @@ import type { Rng } from "../common/rng";
 import type { PMF } from "../pmf/pmf";
 import { samplePMF, scaleValue } from "../pmf/sample";
 import { contextOf, isContextual } from "./context";
-import { fireMode, grantApplies, released } from "./plan";
+import { fireMode, gateOpen, grantApplies, released } from "./plan";
 import type { Draw, EvaluatedRider, FireMode, Step, TurnPlan } from "./plan";
-import { advance, FIRST_NONE, START_CODE } from "./state";
+import { advance, START_CODE } from "./state";
 import type { StepOutcome } from "./state";
 import { SAMPLER_VERSION } from "./trace";
 import type { DieRole, DieRoll, OutcomeResult, Trace, Wave } from "./trace";
@@ -304,13 +304,10 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       if (counts.length) counts = counts.map((count, counter) => (count <= step.settled[counter] ? 0 : count));
     };
 
-    if (step.gate !== undefined) {
-      const code = codes[step.gate.slot];
-      if (step.gate.any ? code === START_CODE : ((code >> 2) & 0b11) === FIRST_NONE) {
-        outcomeOf(step.id, "skipped", 0);
-        settle();
-        return;
-      }
+    if (step.gate !== undefined && !gateOpen(step.gate, codes, fired)) {
+      outcomeOf(step.id, "skipped", 0);
+      settle();
+      return;
     }
     const mode = fireMode(step, codes, fired);
     if (mode === null) {
