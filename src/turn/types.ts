@@ -343,9 +343,20 @@ export interface AttackOptions {
   /** The creature the attack is aimed at; defaults to `"target"`. Effects on that creature apply to it. */
   target?: string;
   /**
-   * The attack happens only where the earlier attack `of` landed for `landing` (a hit, damage
-   * dealt, or `"any"`: it happened), at its own place in the turn. An attack that does not happen
-   * consumes nothing; its `chance` is a further coin.
+   * The attack happens only where an earlier row `of` landed, at its own place in the turn. An attack
+   * that does not happen consumes nothing; its `chance` is a further coin.
+   *
+   * - `of` names an earlier attack: it happens where that attack landed for `landing` (a hit, damage
+   *   dealt, or `"any"`: it happened).
+   * - `of` names a rider: it happens where that rider fired this turn, the event whose probability is
+   *   `fireProbability(rider)` ("immediately after you deal Sneak Attack damage"). For a `first-hit`
+   *   rider over several attacks that is "some attack hit", not "the first attack hit". A rider is
+   *   read as a whole, so `"hit"`, `"damage"` and `"any"` all mean the rider fired; the rider's own
+   *   `landing` says what counts as its landing. Every row in the rider's `of` must come before the
+   *   gated attack (`unknown-id` otherwise). A `not-fired` rider, a rider that rolls its own attack and
+   *   a rider that may not happen (`happens` below 1) are `unsupported-trigger`.
+   *
+   * A name that is both an attack and a rider is `duplicate-id`, so there is no ambiguity.
    */
   after?: { of: string; landing: "hit" | "damage" | "any" };
 }

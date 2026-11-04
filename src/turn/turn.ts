@@ -9,7 +9,7 @@ import { effectSpec, gateFields, isGrant, isSaveGated, isTransform, lastingForTu
 import type { Draw, EffectSource, FireMode, Step, TurnPlan } from "./plan";
 import { ReaderTally, canonicalCodes, cappedPmf, codeNeeds, readerLedger, EFFECT_NAMES } from "./readers";
 import type { EffectName, LandingPattern, ReaderDamage, RowLanding } from "./readers";
-import { buildPlan, checkDuplicateIds, checkSaveRowAbility, checkStateLimit, declaredAttacks, fireMode, grantApplies, isStateless, released } from "./plan";
+import { buildPlan, checkDuplicateIds, checkSaveRowAbility, checkStateLimit, declaredAttacks, fireMode, gateOpen, grantApplies, isStateless, released } from "./plan";
 import { contextOf, rowCheckOf } from "./context";
 import { advance, CRIT_BIT, FIRST_NONE, START_CODE } from "./state";
 import { sampleTurn } from "./sample";
@@ -1767,13 +1767,10 @@ export class Turn {
           if (contexts) context = step.contextIndexOf(state.codes, state.fired, state.flags, state.counts);
           tally.reach(stepIndex, context, state.flags, ledger.mass(state.damage));
         }
-        // A gated attack whose parent did not land does not happen: it deals, lands and consumes nothing.
-        if (step.gate !== undefined) {
-          const code = state.codes[step.gate.slot];
-          if (step.gate.any ? code === START_CODE : ((code >> 2) & 0b11) === FIRST_NONE) {
-            merge(state);
-            continue;
-          }
+        // A gated attack whose parent did not land (or whose rider did not fire) does not happen: it deals, lands and consumes nothing.
+        if (step.gate !== undefined && !gateOpen(step.gate, state.codes, state.fired)) {
+          merge(state);
+          continue;
         }
         const mode = fireMode(step, state.codes, state.fired);
 

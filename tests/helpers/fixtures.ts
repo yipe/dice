@@ -162,6 +162,24 @@ export const FIXTURES: Record<string, () => Turn> = {
       { source: sword, id: "a" },
       { source: dagger, id: "b" },
     ]).rider({ id: "sneak", on: "first-hit", damage: sneakPerAttack }),
+  "attack gated on a first-hit rider (Wails from the Grave)": () =>
+    Turn.from({
+      attacks: [
+        { source: sword, id: "a" },
+        { source: dagger, id: "b" },
+        { source: roll(1, 6), id: "wails", target: "second", after: { of: "sneak", landing: "damage" } },
+      ],
+      riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: roll(3, 6) }],
+    }),
+  "attack gated on a rider folded into its rows (payload per attack)": () =>
+    Turn.from({
+      attacks: [
+        { source: sword, id: "a" },
+        { source: dagger, id: "b" },
+        { source: roll(1, 6), id: "wails", after: { of: "sneak", landing: "hit" } },
+      ],
+      riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: sneakPerAttack }],
+    }),
 };
 
 /** Builders with a `.sample` (a DC check: `sampleCheck`): the draw-order snapshot covers each kind of builder's own draw order. */

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-04
+
+### Added
+
+- **`AttackOptions.after.of` takes a rider id: an attack gated on a rider firing** ("immediately after you deal Sneak Attack damage":
+  Wails from the Grave). The attack happens only where that rider fired this turn, the event whose probability is
+  `fireProbability(rider)`, so a `first-hit` rider over several attacks opens it with `1 - Π(1 - P(hit_i))`, not `P(the first attack
+  hits)`. It is as exact as an attack-gated row (the gate reads the rider's own group, or its fire slot when the rider is folded into
+  its rows' draws): joint with the rider's damage, in the `pmf`, every reader and `Turn.sample`. A rider is read as a whole, so
+  `landing: "hit"`, `"damage"` and `"any"` all mean it fired; the rider's own `landing` says what counts as its landing. Every row in
+  the rider's `of` must come before the gated attack (`unknown-id` naming the rider and the offending row). A `not-fired` rider, a rider
+  that rolls its own attack and a rider with `happens` below 1 (its coin would have to be shared with the gated row) are
+  `unsupported-trigger`. An attack id keeps its meaning, and an id that is both an attack and a rider is still `duplicate-id`.
+
+### Fixed
+
+- **A threshold substitute no longer waits for a gated row that is closed.** `Substitute` look-ahead (the `below` policy holds an
+  above-threshold landing only while a later watched row can still land) read every later row as able to happen, so a row gated by
+  `AttackOptions.after` whose parent had not landed (or whose rider had not fired) still counted as a landing to wait for, and the
+  substitute held where it should have spent. The look-ahead now reads the gate. **Results change only for a turn that has a `below`
+  substitute watching a gated row**; every other turn, gated or not, is bit for bit what it was.
+
+## [0.22.2] - 2026-10-28
+
 ### Fixed
 
 - **A sum's PMF no longer depends on which term order resolved it first.** The builder cache key for an `add` node sorts its terms

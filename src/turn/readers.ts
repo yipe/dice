@@ -15,7 +15,7 @@ import {
   MOD_SAVE_DISADVANTAGE,
   MOD_VULNERABLE,
 } from "./context";
-import type { Draw, Step, TurnPlan } from "./plan";
+import type { Draw, GateReads, Step, TurnPlan } from "./plan";
 import { CRIT_BIT, CRIT_MATCH_BIT, FIRST_CRIT, FIRST_HIT, FIRST_NONE, MATCH_BIT, MISS_BIT } from "./state";
 
 /** What a later reader needs of a group code (bits of a needs mask). */
@@ -33,6 +33,15 @@ const TRIGGER_NEEDS: Record<string, number> = {
   "first-miss": NEED_MISS,
   "any-miss": NEED_MISS,
   "dice-match": NEED_MATCH,
+};
+
+/** What a gate reads of its group's code (see `gateOpen`); a gate on a fire slot reads no code. */
+const GATE_NEEDS: Record<GateReads, number> = {
+  first: NEED_FIRST,
+  any: NEED_FIRST | NEED_MISS,
+  crit: NEED_CRIT,
+  miss: NEED_MISS,
+  match: NEED_MATCH,
 };
 
 /**
@@ -62,7 +71,7 @@ export function codeNeeds(plan: TurnPlan): number[][] | undefined {
     for (const app of step.grants) {
       if (app.rider === undefined && app.tried === 0 && app.reads !== -1) at[app.reads] |= TRIGGER_NEEDS[app.on] ?? 0;
     }
-    if (step.gate !== undefined) at[step.gate.slot] |= step.gate.any ? NEED_FIRST | NEED_MISS : NEED_FIRST;
+    if (step.gate !== undefined && step.gate.kind === "group") at[step.gate.slot] |= GATE_NEEDS[step.gate.reads];
     after = at;
   }
   return needs;

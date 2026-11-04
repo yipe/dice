@@ -505,6 +505,16 @@ export function grantApplies(
   }
 }
 
+/** What a gate reads of a group's code: a landing, any outcome, or what a rider's trigger reads of it. */
+export type GateReads = "first" | "any" | "crit" | "miss" | "match";
+
+/**
+ * What decides whether a gated attack happens (`AttackOptions.after`): the code of a group slot, read
+ * as `reads` says (an attack's landing, or what a rider's trigger reads of its sources), or the fire
+ * slot of a rider folded into its sources' draws, which marks it where it lands. See {@link gateOpen}.
+ */
+export type Gate = { kind: "group"; slot: number; reads: GateReads } | { kind: "fired"; slot: number };
+
 /**
  * One step of the turn. A non-empty `variants` ⇒ the step rolls its own attack and
  * advances the groups listed in `updates`; empty ⇒ it is pure damage whose amount
@@ -565,10 +575,10 @@ export interface Step {
   /** Bits of the conditions damage ends that this step finds set: a `wounded` draw clears them. */
   wounds: number;
   /**
-   * For an attack gated on an earlier one (`AttackOptions.after`): the group slot it reads, and
-   * whether any outcome opens it (else a landing). Where it is closed the attack does not happen.
+   * For an attack gated on an earlier row (`AttackOptions.after`): what it reads to know whether
+   * that row landed, or that rider fired. Where it is closed the attack does not happen.
    */
-  gate: { slot: number; any: boolean } | undefined;
+  gate: Gate | undefined;
   /** Conditions this step's outcome may apply, in declaration order. */
   grants: readonly GrantApplication[];
   /** Flag bits this step reads that grant advantage. */
@@ -762,6 +772,29 @@ export function fireMode(
     default:
       // `every-hit` never becomes a step — it is folded into its sources' slices.
       return null;
+  }
+}
+
+/**
+ * Whether a gated attack happens in state (`codes`, `fired`): the earlier attack landed, or the rider
+ * it follows fired. A rider fires exactly where its own step would (see {@link fireMode}) or, for one
+ * folded into its sources' draws, where `fireProbability` counts it: the gate reads the same group,
+ * so the two agree in every state.
+ */
+export function gateOpen(gate: Gate, codes: readonly number[], fired: readonly FireMode[]): boolean {
+  if (gate.kind === "fired") return fired[gate.slot] !== null;
+  const code = codes[gate.slot];
+  switch (gate.reads) {
+    case "first":
+      return ((code >> 2) & 0b11) !== FIRST_NONE;
+    case "any":
+      return code !== START_CODE;
+    case "crit":
+      return (code & CRIT_BIT) !== 0;
+    case "miss":
+      return (code & MISS_BIT) !== 0;
+    case "match":
+      return (code & MATCH_BIT) !== 0;
   }
 }
 
@@ -2133,13 +2166,47 @@ export function buildPlan(
       }
     }
   });
-  // An attack gated on an earlier one: validated here, before the parent's draws are split.
+  // An attack gated on an earlier row: validated here, before the parent's draws are split. The row is an
+  // attack, or a rider that must have fired.
+  /** Refuses a gate on rider `node` that could not be read: what it watches must all resolve before the attack. */
+  const checkRiderGate = (id: string, index: number, riderId: string, node: number): void => {
+    const rider = riders[node];
+    if (rider.on === "not-fired") {
+      fail("unsupported-trigger", id, `Attack "${id}" happens after "${riderId}", a not-fired rider. Only a rider that reads attacks can gate an attack.`);
+    }
+    if (attackLists[node] || slicesOf(riderId) !== null) {
+      fail("unsupported-trigger", id, `Attack "${id}" happens after "${riderId}", a rider that rolls its own attack. Only a rider that deals damage can gate an attack.`);
+    }
+    if ((rider.happens ?? 1) !== 1) {
+      fail(
+        "unsupported-trigger",
+        id,
+        `Attack "${id}" happens after "${riderId}", a rider that may not happen (happens ${String(rider.happens)}). Its coin would have to be shared by the rider's damage and the gated attack, which a gate cannot do.`
+      );
+    }
+    for (const source of sourceIdsByNode[node]) {
+      const watched = attackIndexById.get(source);
+      if (watched === undefined) {
+        fail("unknown-id", riderId, `Attack "${id}" happens after rider "${riderId}", which watches "${source}", a rider that resolves after every declared attack.`);
+      }
+      if ((watched as number) >= index) {
+        fail("unknown-id", riderId, `Attack "${id}" happens after rider "${riderId}", which watches "${source}", an attack that does not come before it.`);
+      }
+    }
+  };
   attackAfters.forEach((after, index) => {
     if (after === undefined) return;
     const id = attackIds[index];
     const parent = attackIndexById.get(after.of);
-    if (parent === undefined) fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which is not an attack in this turn.`);
-    if ((parent as number) >= index) fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which does not come before it.`);
+    const riderNode = riderIndexById.get(after.of);
+    if (parent === undefined && riderNode === undefined) {
+      fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which is not an attack or a rider in this turn.`);
+    }
+    if (parent !== undefined) {
+      if (parent >= index) fail("unknown-id", after.of, `Attack "${id}" happens after "${after.of}", which does not come before it.`);
+    } else {
+      checkRiderGate(id, index, after.of, riderNode as number);
+    }
     if (after.landing !== "hit" && after.landing !== "damage" && after.landing !== "any") {
       fail("unsupported-trigger", id, `Attack "${id}" happens after a landing of "${String(after.landing)}". Use "hit", "damage" or "any".`);
     }
@@ -2294,13 +2361,22 @@ export function buildPlan(
     readsByRider.set(node, group);
     if (rider.on === "every-hit") everyHitGroups.set(riderIds[node], group);
   }
+  // A gated attack reads its parent's group: a hit (`first`), damage dealt (`first` under the
+  // `damage` kind), or anything (a failure or a pass of a save alike, any change of its code). One
+  // gated on a rider reads that rider's own group, so it opens where the rider fired; a rider folded
+  // into its sources' draws has no group, and the gate reads its fire slot (see `gateAt`).
+  const gateRiders = attackAfters.map((after) =>
+    after === undefined || attackIndexById.has(after.of) ? -1 : (riderIndexById.get(after.of) as number)
+  );
+  const gateGroups = attackAfters.map((after, index) =>
+    after === undefined
+      ? -1
+      : gateRiders[index] !== -1
+        ? (readsByRider.get(gateRiders[index]) ?? -1)
+        : groupOf([after.of], after.landing === "hit" ? undefined : after.landing === "any" ? "fail" : "damage")
+  );
   // A condition reuses the group its `of` already has: a first-hit grant and a first-hit
   // rider over the same attacks share one. Only first-hit / first-miss read it.
-  // A gated attack reads its parent's group: a hit (`first`), damage dealt (`first` under the
-  // `damage` kind), or anything (a failure or a pass of a save alike, any change of its code).
-  const gateGroups = attackAfters.map((after) =>
-    after === undefined ? -1 : groupOf([after.of], after.landing === "hit" ? undefined : after.landing === "any" ? "fail" : "damage")
-  );
   const conditionGroups = conditions.map((condition, index) =>
     GRANT_TRIGGERS[condition.on].readsGroup ? groupOf(conditionSources[index], condition.landing) : -1
   );
@@ -3525,6 +3601,35 @@ export function buildPlan(
     }
   });
 
+  /** What a gate on rider `node` reads of its group's code: what the rider's trigger reads, or for an every-hit rider, its landing. */
+  const riderReads = (node: number): GateReads => {
+    const rider = riders[node];
+    switch (rider.on) {
+      case "any-crit":
+        return "crit";
+      case "any-miss":
+      case "first-miss":
+        return "miss";
+      case "dice-match":
+        return "match";
+      case "every-hit":
+        // As `Turn.tally` reads it: a crit-only rider fired iff something crit, one that lands on anything iff a watched row happened.
+        return critOnly.has(node) ? "crit" : rider.landing === "any" ? "any" : "first";
+      default:
+        return "first";
+    }
+  };
+  /** The gate of declared attack `attack` (`AttackOptions.after`), or undefined where it has none. */
+  const gateAt = (attack: number): Gate | undefined => {
+    const after = attackAfters[attack];
+    if (after === undefined) return undefined;
+    const rider = gateRiders[attack];
+    if (rider === -1) return { kind: "group", slot: slotOf(gateGroups[attack]), reads: after.landing === "any" ? "any" : "first" };
+    // A first-hit rider folded into its sources' draws has no group: it marks its fire slot where it lands.
+    if (gateGroups[attack] === -1) return { kind: "fired", slot: fireSlots.get(after.of) as number };
+    return { kind: "group", slot: slotOf(gateGroups[attack]), reads: riderReads(rider) };
+  };
+
   const steps: Step[] = [];
   /**
    * `fired` after `sourceId` lands: a first-hit rider with a payload per source is folded into its
@@ -3619,7 +3724,8 @@ export function buildPlan(
       const known = memo.get(key);
       if (known !== undefined) return known;
       const step = steps[from];
-      const mode = fireMode(step, codes, fired);
+      // A gated attack that is closed does not happen: it lands nothing, and the next step reads the same state.
+      const mode = step.gate !== undefined && !gateOpen(step.gate, codes, fired) ? null : fireMode(step, codes, fired);
       let result: boolean;
       if (mode === null) {
         result = canLand(from + 1, released(codes, step.releases), fired);
@@ -4092,10 +4198,7 @@ export function buildPlan(
       consumes: consumesAt[stepIndex],
       hitConsumes: hitConsumesAt[stepIndex],
       wounds: woundsAt[stepIndex],
-      gate:
-        entry.attack !== -1 && gateGroups[entry.attack] !== -1
-          ? { slot: slotOf(gateGroups[entry.attack]), any: attackAfters[entry.attack]?.landing === "any" }
-          : undefined,
+      gate: entry.attack === -1 ? undefined : gateAt(entry.attack),
       grants: grantsAt[stepIndex],
       readAdvantage,
       readDisadvantage,

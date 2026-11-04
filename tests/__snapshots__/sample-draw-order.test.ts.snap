@@ -395,6 +395,642 @@ exports[`draw order is a contract: Turn.sample > any-miss reroll (GWM-like): fix
 ]
 `;
 
+exports[`draw order is a contract: Turn.sample > attack gated on a first-hit rider (Wails from the Grave): fixed seeds, fixed draws 1`] = `
+[
+  {
+    "samplerVersion": 1,
+    "total": 21,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 4,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 7,
+            "result": "hit",
+            "source": "b",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 6,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 1,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 8,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 27,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 7,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 10,
+            "result": "hit",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "b",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 3,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 14,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 24,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 16,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 1,
+            "kept": true,
+            "role": "damage",
+            "sides": 4,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 4,
+            "result": "hit",
+            "source": "b",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 4,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 16,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+    ],
+  },
+]
+`;
+
+exports[`draw order is a contract: Turn.sample > attack gated on a rider folded into its rows (payload per attack): fixed seeds, fixed draws 1`] = `
+[
+  {
+    "samplerVersion": 1,
+    "total": 21,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 4,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 7,
+            "result": "hit",
+            "source": "b",
+          },
+          {
+            "damage": 13,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 1,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 1,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 30,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 7,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 2,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 10,
+            "result": "hit",
+            "source": "a",
+          },
+          {
+            "damage": 11,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 2,
+            "kept": true,
+            "role": "damage",
+            "sides": 4,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 5,
+            "result": "hit",
+            "source": "b",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 4,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 24,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 16,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 1,
+            "kept": true,
+            "role": "damage",
+            "sides": 4,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": true,
+            "role": "rider",
+            "sides": 6,
+            "source": "sneak",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 4,
+            "result": "hit",
+            "source": "b",
+          },
+          {
+            "damage": 14,
+            "result": "fired",
+            "source": "sneak",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 6,
+            "kept": true,
+            "role": "damage",
+            "sides": 6,
+            "source": "wails",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 6,
+            "result": "hit",
+            "source": "wails",
+          },
+        ],
+      },
+    ],
+  },
+]
+`;
+
 exports[`draw order is a contract: Turn.sample > chance and after gates: fixed seeds, fixed draws 1`] = `
 [
   {
