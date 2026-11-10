@@ -41,6 +41,13 @@ export function isContextual(source: unknown): source is ContextualSource {
   return rowCheckOf(source) !== undefined;
 }
 
+/** Whether `source` says what its row rolls once a first-hit reroll is spent on it ({@link ContextualSource.rerolledUnder}). */
+export function hasRerolledUnder(
+  source: unknown
+): source is ContextualSource & Required<Pick<ContextualSource, "rerolledUnder">> {
+  return isContextual(source) && typeof source.rerolledUnder === "function";
+}
+
 /**
  * Set on a {@link ContextualSource} whose `under` does not roll `context.joined` riders' dice into its
  * own roll (the library's `AttackBuilder` and `SaveBuilder`): no rider may join its row (`Rider.joins`).

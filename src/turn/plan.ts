@@ -14,6 +14,7 @@ import {
   combineRollType,
   contextKey,
   contextOf,
+  hasRerolledUnder,
   IGNORES_JOINED,
   isContextual,
   MOD_ADVANTAGE,
@@ -847,6 +848,15 @@ function pmfUnder(source: ContextualSource, context: RowContext, eps: number, id
   const resolved = (source.under as (context: RowContext, eps?: number) => unknown)(context, eps);
   if (!(resolved instanceof PMF)) {
     throw new TurnSpecError("not-an-attack", id, `"${id}" has an under() that did not return a PMF.`);
+  }
+  return resolved;
+}
+
+/** `source`'s PMF under `context` once the first-hit reroll is spent on it, checked like {@link pmfUnder}. */
+function rerolledPmfUnder(source: ContextualSource, context: RowContext, eps: number, id: string): PMF {
+  const resolved = (source.rerolledUnder as (context: RowContext, eps?: number) => unknown)(context, eps);
+  if (!(resolved instanceof PMF)) {
+    throw new TurnSpecError("not-an-attack", id, `"${id}" has a rerolledUnder() that did not return a PMF.`);
   }
   return resolved;
 }
@@ -2287,6 +2297,29 @@ export function buildPlan(
       substituteBySource.set(sourceId, index);
     }
   });
+  // A source that says what its own reroll rolls (`rerolledUnder`) spends on every landing: a
+  // threshold would read its base payload, and a dice-match its base dice, which it does not expose.
+  substitutes.forEach((substitute, index) => {
+    if (substitute.on !== "first-hit") return;
+    const id = substituteIds[index];
+    for (const sourceId of sourceIdsByNode[riderCount + index]) {
+      if (!hasRerolledUnder(damageOf(sourceId))) continue;
+      if (substitute.policy?.kind === "below") {
+        fail(
+          "unsupported-policy",
+          id,
+          `Substitute "${id}" spends below a threshold, but "${sourceId}" supplies its own reroll (rerolledUnder), which has no base payload to compare. Drop the policy.`
+        );
+      }
+      if (riders.some((rider, riderIndex) => rider.on === "dice-match" && sourceIdsByNode[riderIndex].includes(sourceId))) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Substitute "${id}" rerolls "${sourceId}", which supplies its own reroll (rerolledUnder) and a dice-match rider reads: the rerolled dice have no match odds.`
+        );
+      }
+    }
+  });
   // A converted miss becomes the row's hit, so the row must roll to hit; and a reroll of the
   // row's miss resolves before any conversion, so the reroll is what to convert.
   substitutes.forEach((substitute, index) => {
@@ -3430,6 +3463,21 @@ export function buildPlan(
     return payload;
   };
 
+  /** Per source with `rerolledUnder`, its rerolled PMF under each context it is asked for in. */
+  const rerolledPmfs = new Map<unknown, Map<string, PMF>>();
+  /** The row's whole PMF once the first-hit reroll is spent on it in `rowContext`; `undefined` for a source that does not say. */
+  const rerolledOf = (sourceId: string, rowContext: RowContext | undefined): PMF | undefined => {
+    const source = damageOf(sourceId);
+    if (!hasRerolledUnder(source)) return undefined;
+    const context = rowContext ?? contextOf(source.rowCheck, 0);
+    let byContext = rerolledPmfs.get(source);
+    if (byContext === undefined) rerolledPmfs.set(source, (byContext = new Map()));
+    const key = contextKey(context);
+    let pmf = byContext.get(key);
+    if (pmf === undefined) byContext.set(key, (pmf = rerolledPmfUnder(source, context, eps, sourceId)));
+    return pmf;
+  };
+
   /**
    * The unit-mass hit damage a converted miss deals where the row itself cannot hit (only a natural
    * 20 lands, as a crit): the base payload when the draws split it, else the row's hit outcome
@@ -3478,12 +3526,15 @@ export function buildPlan(
     const match = matchNeeded.has(sourceId) ? matchInfoOf(sourceId) : null;
     // With neither split, the slices already carry the channels — draw them as they are.
     const payload = policy || match ? basePayload(sourceId) : null;
+    // Under a substitute, a source that says what its reroll rolls (`rerolledUnder`) spends into that:
+    // the whole row, its separate channels and joined dice in, so nothing convolves onto it.
+    const rerolled = policy ? rerolledOf(sourceId, rowContext) : undefined;
     const fixed: Draw[] = [];
     const choices: HoldChoice[] = [];
     for (const outcome of ["hit", "crit"] as const) {
       const slice = slices[outcome];
       const mass = slice.mass();
-      const separate = payload?.separate?.[outcome];
+      const separate = rerolled ? undefined : payload?.separate?.[outcome];
       // The base payload as an outcome-labelled slice of this outcome's mass.
       const base =
         payload?.base && mass > 0
@@ -3540,7 +3591,21 @@ export function buildPlan(
         continue;
       }
       if (policy.kind !== "below") {
-        fixed.push(...drawsOf(base.maxOfTwo(), true));
+        if (rerolled === undefined) {
+          fixed.push(...drawsOf(base.maxOfTwo(), true));
+          continue;
+        }
+        // The d20 stands as the row rolled it: the reroll's own outcome odds are normalised away.
+        const alternative = rerolled.filterOutcome(outcome);
+        const alternativeMass = alternative.mass();
+        if (alternativeMass <= 0) {
+          fail(
+            "not-an-attack",
+            sourceId,
+            `"${sourceId}" can land as a ${outcome}, but its rerolledUnder() has no ${outcome} outcome.`
+          );
+        }
+        fixed.push(...drawsOf(alternative.scaleMass(1 / alternativeMass).scaleMass(mass), true));
         continue;
       }
       // The threshold reads the base payload total as it stands — dice plus the

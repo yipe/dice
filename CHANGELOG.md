@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-09
+
+### Added
+
+- **`ContextualSource.rerolledUnder(context)`: a first-hit reroll that composes with the row's own dice.** A row's source may say
+  what it rolls once a first-hit substitute (`reroll-keep-higher`) is spent on it, in the row's context; a spent landing then draws
+  that PMF instead of keep-higher of the whole base payload. Savage Attacker rolls only the weapon's dice twice, so dice a rider pools
+  into the row (`Rider.joins`, `context.joined`) are rolled once: `maxOf2(weapon) ⊕ pool`, not the better of two whole pools. A reroll
+  that must use the new roll (Piercer) is expressible too. The d20 stands as `under(context)` rolled it: hit and crit each read the
+  rerolled PMF's damage for that outcome, normalised to the row's own odds.
+  It is exact in the `pmf`, every reader and `Turn.sample` (which draws a spent row's damage from
+  the reroll and shows the first roll's damage dice as not kept). Such a row spends on every landing: a `below` policy over it is
+  `unsupported-policy`, and a `dice-match` rider over it `unsupported-trigger`. A `rerolledUnder()` that returns no PMF, or no PMF for
+  an outcome the row lands with, is `not-an-attack`. **A source without `rerolledUnder` is bit for bit what it was.**
+
 ## [0.23.0] - 2026-11-04
 
 ### Added

@@ -476,6 +476,32 @@ trigger reading the same attack.
 `fireProbability(id)` reports P(spent). A second transform over any of the same attacks throws
 `duplicate-substitute`, and a transform passed to any other verb throws `unsupported-trigger`.
 
+When the reroll is not keep-higher of the whole payload, the row says what it is. A
+`ContextualSource` with `rerolledUnder(context)` returns the row's PMF once the reroll is spent on it,
+and a spent landing draws that instead: Savage Attacker rolls only the weapon's dice twice, so dice a
+rider pools into the row (`context.joined`) are rolled once; a reroll that must use the new roll is
+not keep-higher at all. The d20 stands as `under(context)` rolled it: each of hit and crit reads the
+rerolled PMF's damage for that outcome at the row's own odds.
+
+```ts
+import type { ContextualSource } from "@yipe/dice/builder";
+
+const sword = d20.plus(5).ac(15).onHit(roll(1, d8).plus(3).plus(2, d6));
+const savaged = d20.plus(5).ac(15).onHit(roll(1, d8).maxOf(2).plus(3).plus(2, d6));
+const row: ContextualSource = {
+  rowCheck: sword.rowCheck,
+  under: (context) => sword.under(context),
+  rerolledUnder: (context) => savaged.under(context),
+};
+
+turn([sword, sword]).onFirstHit(keepBestDamage()).mean(); // 18.6634: the 2d6 rerolled too
+turn([row, row]).onFirstHit(keepBestDamage()).mean();     // 18.1854: only the d8
+```
+
+Such a row spends on every landing: `ifBelow` over it throws `unsupported-policy` (there is no base
+payload to compare), and a `dice-match` rider over it `unsupported-trigger`. `Turn.sample` draws a
+spent row's damage from `rerolledUnder` and shows the first roll's damage dice as not kept.
+
 ### Once per turn: the first miss hits instead
 
 `convertFirstMiss()` turns the first watched attack that misses into a hit, once per turn, in turn

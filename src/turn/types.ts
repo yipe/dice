@@ -167,6 +167,20 @@ export interface ContextualSource {
   /** The row's outcome-labelled PMF in the given context. */
   under(context: RowContext): PMF;
   /**
+   * The row's outcome-labelled PMF in `context` once a first-hit substitute (`reroll-keep-higher`)
+   * is spent on it: what the reroll actually does to this row, in place of the keep-higher of its
+   * base payload. Use it where the reroll is not keep-higher of the whole payload: dice that join
+   * the row in some states (`context.joined`), a reroll of only some of the dice (`maxOf2(weapon) ⊕
+   * rider`), or one that must use the new roll. Read per landing outcome and normalised: the d20
+   * stands as `under(context)` rolled it, so a hit spends into this PMF's hit damage at the row's
+   * own hit odds, and a crit likewise. Absent means keep-higher of the base payload.
+   *
+   * Such a row spends on every landing: a `below` policy or a `dice-match` rider over it is
+   * refused (`unsupported-policy`, `unsupported-trigger`). `Turn.sample` draws a spent row's
+   * damage from this PMF, with the first roll's damage dice shown as not kept.
+   */
+  rerolledUnder?(context: RowContext): PMF;
+  /**
    * P(the row deals more than 0 damage of `type` after the target's scale), given it lands as a hit
    * and as a crit, in `context` (its `joined` riders' dice included; a `vulnerable` context has the
    * target's scales off). Read where a condition with `dealing` watches the row.
