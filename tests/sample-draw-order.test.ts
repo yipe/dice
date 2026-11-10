@@ -11,8 +11,8 @@ describe("draw order is a contract: builders", () => {
 });
 
 describe("FIXTURES", () => {
-  it("has the 21 turns and each resolves to a PMF", () => {
-    expect(Object.keys(FIXTURES)).toHaveLength(21);
+  it("has the 22 turns and each resolves to a PMF", () => {
+    expect(Object.keys(FIXTURES)).toHaveLength(22);
     for (const build of Object.values(FIXTURES)) expect(build().pmf.mean()).toBeGreaterThan(0);
   });
   it("paralyzed fixture auto-crits the later melee attack", () => {

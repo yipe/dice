@@ -3062,6 +3062,262 @@ exports[`draw order is a contract: Turn.sample > rerollUpTo + explode pool paylo
 ]
 `;
 
+exports[`draw order is a contract: Turn.sample > rerolledUnder: Savage Attacker over a row the sneak dice join: fixed seeds, fixed draws 1`] = `
+[
+  {
+    "samplerVersion": 1,
+    "total": 15,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 8,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": false,
+            "role": "damage",
+            "sides": 8,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 15,
+            "result": "hit",
+            "source": "b",
+          },
+          {
+            "damage": 0,
+            "result": "fired",
+            "source": "sa",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 19,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 7,
+            "kept": false,
+            "role": "damage",
+            "sides": 8,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 2,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 3,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "a",
+          },
+          {
+            "by": "you",
+            "face": 6,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 14,
+            "result": "hit",
+            "source": "a",
+          },
+          {
+            "damage": 0,
+            "result": "fired",
+            "source": "sa",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 14,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 2,
+            "kept": true,
+            "role": "damage",
+            "sides": 8,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 5,
+            "result": "hit",
+            "source": "b",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    "samplerVersion": 1,
+    "total": 19,
+    "waves": [
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 3,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "a",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 0,
+            "result": "miss",
+            "source": "a",
+          },
+        ],
+      },
+      {
+        "dice": [
+          {
+            "by": "you",
+            "face": 16,
+            "kept": true,
+            "role": "attack",
+            "sides": 20,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": false,
+            "role": "damage",
+            "sides": 8,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 4,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+          {
+            "by": "you",
+            "face": 5,
+            "kept": false,
+            "role": "damage",
+            "sides": 6,
+            "source": "b",
+          },
+        ],
+        "outcomes": [
+          {
+            "damage": 19,
+            "result": "hit",
+            "source": "b",
+          },
+          {
+            "damage": 0,
+            "result": "fired",
+            "source": "sa",
+          },
+        ],
+      },
+    ],
+  },
+]
+`;
+
 exports[`draw order is a contract: Turn.sample > rider payload per attack with rollAt: fixed seeds, fixed draws 1`] = `
 [
   {

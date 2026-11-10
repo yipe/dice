@@ -15,7 +15,7 @@ import { SaveBuilder } from "../builder/save";
 import type { Rng } from "../common/rng";
 import type { PMF } from "../pmf/pmf";
 import { samplePMF, scaleValue } from "../pmf/sample";
-import { contextOf, isContextual } from "./context";
+import { contextOf, hasRerolledUnder, isContextual } from "./context";
 import { fireMode, gateOpen, grantApplies, released } from "./plan";
 import type { Draw, EvaluatedRider, FireMode, Step, TurnPlan } from "./plan";
 import { advance, START_CODE } from "./state";
@@ -410,7 +410,19 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       // Live while its fire slot is empty (`select` reads the same slot: the variant index itself is
       // offset by cap block and context, so it does not say).
       const unspent = step.spendSlot !== -1 && fired[step.spendSlot] === null;
-      if (attack?.sample.payload !== undefined && step.policy !== null && unspent && (outcome === "hit" || outcome === "crit")) {
+      const spendDraws =
+        step.policy !== null && unspent && (outcome === "hit" || outcome === "crit") && hasRerolledUnder(plan.sourceOf.get(step.id))
+          ? candidates.filter((each) => each.spends)
+          : [];
+      if (spendDraws.length > 0) {
+        // The source says what its reroll rolls (`rerolledUnder`), which is no keep-higher of these
+        // dice: the row's damage is drawn from the plan's spend law for this landing, and the first
+        // roll's damage dice stand as not kept. Such a row has no policy but spend, and no match.
+        spent = true;
+        const spend = pickByMass(spendDraws, rng);
+        ownTotal = samplePMF(spend.own ?? spend.slice, rng).total;
+        rowDice = rowDice.map((die) => (die.role === "attack" ? die : { ...die, kept: false }));
+      } else if (attack?.sample.payload !== undefined && step.policy !== null && unspent && (outcome === "hit" || outcome === "crit")) {
         const { base, separate, scale } = attack.sample.payload;
         const holdAvailable = candidates.some((each) => !each.spends && each.matched === matched);
         spent =

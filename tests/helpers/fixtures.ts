@@ -25,6 +25,16 @@ const poolingRow: ContextualSource = {
   under: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).under(context),
   rollUnder: (context: RowContext) => (context.joined.includes("sa") ? pooled : sword).rollUnder(context),
 };
+/** {@link poolingRow} with the reroll it takes (`rerolledUnder`): Savage Attacker rolls the weapon's d8 twice, the pool's 3d6 once. */
+const savagePoolingRow: ContextualSource = {
+  ...poolingRow,
+  rerolledUnder: (context: RowContext) =>
+    d20
+      .plus(5)
+      .ac(15)
+      .onHit(context.joined.includes("sa") ? roll(1, d8).maxOf(2).plus(3).plus(3, d6) : roll(1, d8).maxOf(2).plus(3))
+      .under(context),
+};
 
 const breathCheck = d20.plus(3).dc(15).ability("wis");
 /**
@@ -179,6 +189,15 @@ export const FIXTURES: Record<string, () => Turn> = {
         { source: roll(1, 6), id: "wails", after: { of: "sneak", landing: "hit" } },
       ],
       riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: sneakPerAttack }],
+    }),
+  "rerolledUnder: Savage Attacker over a row the sneak dice join": () =>
+    Turn.from({
+      attacks: [
+        { id: "a", source: savagePoolingRow },
+        { id: "b", source: savagePoolingRow },
+      ],
+      riders: [{ id: "sa", on: "first-hit", damage: roll(3, d6), joins: ["a", "b"] }],
+      substitutes: [{ id: "savage", on: "first-hit", substitute: "reroll-keep-higher" }],
     }),
 };
 
