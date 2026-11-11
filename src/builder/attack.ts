@@ -53,7 +53,7 @@ export interface AttachedCondition {
 /** What gates an attached condition's grants: the same fields `Turn`'s trigger verbs accept. */
 export type ConditionGate = Pick<
   ConditionOptions,
-  "save" | "chance" | "onSave" | "landing" | "dealing" | "optional"
+  "save" | "chance" | "onSave" | "landing" | "dealing" | "optional" | "targetHas"
 >;
 
 /**
