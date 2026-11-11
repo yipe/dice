@@ -11,7 +11,7 @@ describe("onFirstHit with targetHas", () => {
     const typed = () => turn([sword, sword]).onFirstHit(keepBestDamage(), { targetHas: "prone" });
     expect(typed).toThrow(TurnSpecError);
     try {
-      typed();
+      expect(typed()).toBeUndefined();
     } catch (error) {
       expect((error as TurnSpecError).code).toBe("unsupported-trigger");
       expect((error as Error).message).toContain("targetHas");
