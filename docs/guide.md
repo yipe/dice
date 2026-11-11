@@ -1094,16 +1094,16 @@ or `strength`, in a save and in a rule's `save` keys alike.
 
 By edition, as functions:
 
-- `grappledRule("2014")` is `{}` (speed only). `grappledRule("2024")` is `own.attack`: disadvantage ("against any target other than the grappler").
+- `grappledRule("2014")` is `{}` (speed only). `grappledRule("2024")` is `own.attack`: disadvantage ("against any target other than the grappler"). That exception is not encoded: `own.attack` disadvantage does not apply to attacks against the grappler, and the turn engine never reads `own`, so a consumer applying `own` must handle it.
 - `exhaustionRule(level, edition)`, level 1 to 6 (`RangeError` otherwise).
   - 2014 (cumulative): level 1 and up, `own.check` disadvantage; level 3 and up, `own.attack` disadvantage and `saveDisadvantage` on all six saves.
   - 2024: `d20Penalty = 2 × level`.
   - Speed, hit point maximum and death (levels 2, 4, 5, 6) are not roll effects and are not modelled.
 - Effects: `charmed()`, `deafened()`, `frightened()`, `incapacitated()`, `invisible()`, `petrified()`, `poisoned()`, `grappled(edition)`, `exhaustion(level, edition)`.
 
-A condition whose rule changes no roll (charmed, deafened, frightened, incapacitated, poisoned: no `attack`, `save` or `d20Penalty`) is not read by any attack, so it never splits the walk's states and its `fireProbability` is 0.
+A condition whose rule changes no roll (charmed, deafened, frightened, incapacitated, poisoned: no `attack`, `save` or `d20Penalty`) is not read by any attack, so it never splits the walk's states and its `fireProbability` is 0. This holds only when no `targetHas` gate reads the condition: a gate does read it (see example 1 under `targetHas`, `frightened`), and then it splits state.
 
-Pins (`ranged` and `sword` are `d20.plus(7).ac(16)` with `1d8 + 4`): `turn([sword]).atStart(invisible())` is 3.07125; `turn([ranged]).atStart(petrified())` is 7.57875; `turn([sword]).atStart(frightened())` is 5.325 (no row changes).
+Pins (`ranged` and `sword` are `d20.plus(7).ac(16)` with `1d8 + 4`): `turn([sword]).atStart(invisible())` is 3.07125 (attacker cannot see the target; `invisibleRule({ attackerSees: true })` is `{}`, the no-condition mean); `turn([ranged]).atStart(petrified())` is 7.57875; `turn([sword]).atStart(frightened())` is 5.325 (no row changes).
 
 ### `d20Penalty`
 
