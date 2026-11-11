@@ -1775,11 +1775,11 @@ export function buildPlan(
           if (typeof penalty !== "number" || !Number.isInteger(penalty) || penalty < 0) {
             throw new RangeError(`Condition "${id}" has a d20Penalty of ${String(penalty)}; use a whole number of 0 or more.`);
           }
-          if (penalty > 0 && Object.keys(rule?.save ?? {}).length > 0) {
+          if (penalty > 0 && (Object.keys(rule?.attack ?? {}).length > 0 || Object.keys(rule?.save ?? {}).length > 0)) {
             fail(
               "unsupported-trigger",
               id,
-              `Condition "${id}" has a rule with a d20Penalty and save modifiers. A turn reads a d20Penalty as penalty dice on the saves, so give the modifiers to another rule.`
+              `Condition "${id}" has a rule with a d20Penalty and attack or save modifiers. A turn reads a d20Penalty as penalty dice on the saves, so give the modifiers to another rule.`
             );
           }
         }
@@ -2679,18 +2679,7 @@ export function buildPlan(
           reads.set(position, modifiers);
         }
       });
-      // A rule that changes no row of any turn (`own` is data for consumers: Charmed, Frightened) is still
-      // applied wherever an attack roll follows on its creature, so it counts as read there: what
-      // `fireProbability` says about the condition, and what the optional fallback attempts.
-      const inert =
-        "rule" in effect &&
-        effect.rule.attack === undefined &&
-        effect.rule.save === undefined &&
-        !effect.rule.d20Penalty &&
-        effect.rule.onEnd === undefined;
-      const readers = inert
-        ? sequence.flatMap((_, position) => (position > first && creatureAt[position] === creature && rollsAttack[position] ? [position] : []))
-        : [...reads.keys()];
+      const readers = [...reads.keys()];
       return {
         name: `"${id}" ${label}${creatures.length > 1 ? ` on "${creature}"` : ""}`,
         condition: id,
