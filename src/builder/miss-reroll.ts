@@ -59,6 +59,16 @@ function rerollDie(check: RerollCheck): RollConfig {
   if (root === undefined || root.sides !== 20) {
     throw new Error("rerollMisses() needs a check with a d20 natural roll: only a d20 is rolled again.");
   }
+  if (root.explode > 0 || root.explodePoolBudget > 0) {
+    throw new Error("rerollMisses(): the d20 explodes, so its natural roll can exceed 20.");
+  }
+  if (root.minimum > 20 || root.minimum < 0) {
+    throw new Error(`rerollMisses(): the d20 minimum ${root.minimum} is outside the faces 1..20.`);
+  }
+  const mass = dieCdf(root)[20];
+  if (Math.abs(mass - 1) > 1e-9) {
+    throw new Error(`rerollMisses(): the d20 puts ${1 - mass} of its probability outside the faces 1..20.`);
+  }
   return root;
 }
 
@@ -122,10 +132,10 @@ function plainBonusFaces(config: RollConfig): { sides: number; dice: number; sig
     !(config.explode > 0) &&
     !(config.explodePoolBudget > 0) &&
     config.minimum <= 1 &&
-    config.bestOf <= 1 &&
+    !(config.bestOf > 0 && config.bestOf < config.count) &&
     config.keep === undefined;
   if (!plain) {
-    throw new Error("rerollMisses has no expression spelling: a bonus die rerolls, explodes, keeps or has a minimum.");
+    throw new Error("toExpression: rerollMisses has no expression spelling: a bonus die rerolls, explodes, keeps or has a minimum.");
   }
   const negative = config.isSubtraction === true || config.count < 0;
   return { sides: config.sides, dice: Math.floor(Math.abs(config.count)), sign: negative ? -1 : 1 };
