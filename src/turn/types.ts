@@ -1,6 +1,6 @@
 import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
-import type { AbilityName } from "../builder/types";
+import type { AbilityName, MissRerollMode } from "../builder/types";
 import type { AttackBuilder } from "../builder/attack";
 import type { RollBuilder } from "../builder/roll";
 import type { SaveBuilder } from "../builder/save";
@@ -11,7 +11,7 @@ export type { DiceMatchInfo, HasDiceMatchInfo };
  * The version of the plain-data `TurnSpec` v2 contract this module declares. A consumer holding
  * its own copy of the contract can assert it matches.
  */
-export const CONTRACT_REVISION = 5;
+export const CONTRACT_REVISION = 6;
 
 /**
  * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
@@ -197,6 +197,12 @@ export interface ContextualSource {
    * cannot build such a roll for a context returns `undefined` there.
    */
   rollUnder?(context: RowContext): AttackBuilder | SaveBuilder | RollBuilder | undefined;
+  /**
+   * The row's outcome-labelled PMF over its miss branch once that miss is rolled again by `mode` in
+   * `context` (see `AttackBuilder.missRerolled`). Absent: the turn uses `rollUnder(context)` when it
+   * returns an AttackBuilder, else refuses (`no-rebindable-source`).
+   */
+  missRerolledUnder?(context: RowContext, mode: MissRerollMode): PMF;
 }
 
 /**
@@ -424,7 +430,9 @@ export interface SubstituteSpec {
    */
   of?: readonly string[];
   /** Named transform, so a {@link TurnSpec} stays JSON-safe and persistable. */
-  substitute: "reroll-keep-higher" | "hit";
+  substitute: "reroll-keep-higher" | "hit" | "reroll";
+  /** `reroll` only; default `"reroll"`. */
+  mode?: MissRerollMode;
   /** Defaults to `{ kind: "always" }`. `first-hit` only. */
   policy?: SubstitutePolicy;
 }

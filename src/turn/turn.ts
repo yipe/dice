@@ -1,4 +1,4 @@
-import type { Check } from "../builder/types";
+import type { Check, MissRerollMode } from "../builder/types";
 import type { Bin, RollType } from "../common/types";
 import type { Rng } from "../common/rng";
 import { DenseTotal } from "../pmf/dense-total";
@@ -825,6 +825,32 @@ export class Turn {
   }
 
   /**
+   * The first watched miss is rolled again, once per turn: Heroic Inspiration (`mode: "reroll"`, the
+   * default: the kept d20 is replaced and the new roll stands) or 2014 Lucky (`"add-d20"`: one more
+   * d20, the best kept). Call it again to stack: a miss goes to the first unspent reroll, in call
+   * order, and a reroll that still misses is final. A rerolled hit or crit is a landing for every
+   * rider and condition. `fireProbability(id)` is P(spent).
+   *
+   * ```ts
+   * turn([sword, sword]).rerollFirstMiss().rerollFirstMiss({ mode: "add-d20" }).mean();
+   * ```
+   */
+  rerollFirstMiss(options: { id?: string; of?: string | readonly string[]; mode?: MissRerollMode } = {}): Turn {
+    const substitute: SubstituteSpec = {
+      ...(options.id === undefined ? {} : { id: options.id }),
+      on: "first-miss",
+      of: listed(options).of ?? this.defaultOf(),
+      substitute: "reroll",
+      mode: options.mode ?? "reroll",
+    };
+    return this.with({
+      substitutes: [...this.state.substitutes, substitute],
+      defaulted: this.state.defaulted || options.of === undefined,
+      last: { kind: "substitute", index: this.state.substitutes.length },
+    });
+  }
+
+  /**
    * Fires once if any source crit, always in crit mode. Divine Smite: nothing is
    * lost by holding it for a crit, so this is "any", not "first".
    *
@@ -1226,7 +1252,7 @@ export class Turn {
       });
     }
     const occurs = Math.min(1, happened / total);
-    if (rows.some((s) => steps[s].converts)) {
+    if (rows.some((s) => steps[s].converts || steps[s].rerolls.length !== 0)) {
       // A converted miss draws the row's hit: its marginal is what its draws dealt, read off the reader walk.
       const parts: [PMF, number][] = [];
       for (const s of rows) {
@@ -1868,6 +1894,10 @@ export class Turn {
           if (spends) {
             drawFired = [...fired];
             drawFired[step.spendSlot] = outcome === "crit" ? "crit" : "hit";
+          }
+          if (draw.rerollSlot !== undefined) {
+            if (drawFired === fired) drawFired = [...fired];
+            drawFired[draw.rerollSlot] = outcome === "crit" ? "crit" : "hit";
           }
           if (fires.length !== 0) {
             if (drawFired === fired) drawFired = [...fired];
