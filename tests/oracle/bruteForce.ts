@@ -264,6 +264,13 @@ export interface RiderSpec {
    * smite's, a rider of its own, so the flare lands there only where the smite does. The rider lands once (`max` 1).
    */
   alongside?: ReadonlyArray<{ rider: number; sources: readonly number[] }>
+  /**
+   * Any-of: the rider lands only where, in the state the row rolled in (before the row's own landing applies anything), the row's
+   * creature has at least one of these conditions (the starting condition, or a condition effect a grant put on it). RHW Ancient
+   * Might (Ominous Strikes): "When you hit a creature that has the Frightened condition with an attack roll, that attack deals extra
+   * damage". A landing the gate closes is no landing: it does not spend `max`.
+   */
+  targetHas?: readonly ConditionName[]
 }
 
 /**
@@ -315,7 +322,16 @@ export interface SyntheticTurn {
   startingCondition?: StartingConditionName
 }
 
-export type ConditionName = 'blinded' | 'paralyzed' | 'prone' | 'restrained' | 'stunned' | 'unconscious'
+export type ConditionName =
+  | 'blinded'
+  | 'frightened'
+  | 'invisible'
+  | 'paralyzed'
+  | 'petrified'
+  | 'prone'
+  | 'restrained'
+  | 'stunned'
+  | 'unconscious'
 /** A condition the target can start the turn with: all but Unconscious, which the first damaging row ends. */
 export type StartingConditionName = Exclude<ConditionName, 'unconscious'>
 export type SaveAbilityName = 'strength' | 'dexterity' | 'constitution' | 'intelligence' | 'wisdom' | 'charisma'
@@ -413,6 +429,8 @@ export interface GrantSpec {
   save?: GrantSaveSpec
   chance?: number
   cap: 'unlimited' | 'once'
+  /** Any-of: the grant applies only where the row's creature has one of these conditions when the row rolled (see {@link RiderSpec.targetHas}). */
+  targetHas?: readonly ConditionName[]
   /**
    * A "you can" grant (Topple, Hill's Tumble, Trip, a Cunning Strike option): the player attempts it only when it helps the
    * turn, so the enumeration runs with each subset of the optional grants attempted and keeps the subset with the highest
@@ -1331,6 +1349,8 @@ interface SourceBranch {
   outcomes: Map<number, number>
   /** A miss `convertFirstMiss` turned into this hit: taking the branch spends the conversion. */
   converts?: boolean
+  /** The riders (indexes) with a `targetHas` whose gate was open in the state this row rolled in. */
+  gatesOpen?: ReadonlySet<number>
 }
 
 const NO_DAMAGE: Map<number, number> = new Map([[0, 1]])
@@ -1513,6 +1533,10 @@ interface RiderPlan {
   rows: number[]
   /** The sources where it lands only alongside a partner, and each partner with the sources it opens ({@link RiderSpec.alongside}). */
   alongside?: { rows: ReadonlySet<number>; partners: Array<{ plan: RiderPlan; rows: ReadonlySet<number> }> }
+  /** Its index among the turn's riders. */
+  index: number
+  /** {@link RiderSpec.targetHas}. */
+  targetHas?: readonly ConditionName[]
   trigger: LandingTrigger
   onCrit: boolean
   max: number
@@ -1600,6 +1624,7 @@ function riderLandsOn(rider: RiderPlan, landing: Landing, dealt: boolean): boole
  */
 function riderLandsAt(rider: RiderPlan, row: number, branch: SourceBranch, landings: readonly SourceBranch[]): boolean {
   if (!riderLandsOn(rider, branch.landing, branch.dealt)) return false
+  if (rider.targetHas !== undefined && branch.gatesOpen?.has(rider.index) !== true) return false
   if (!rider.alongside?.rows.has(row)) return true
   return rider.alongside.partners.some(({ plan, rows }) => rows.has(row) && riderAppliesOn(plan, row, branch, landings))
 }
@@ -1698,7 +1723,7 @@ function landingPlans(
       if (turn.attacks[row]!.critDamage) throw new Error(`bruteForce: rider ${i} is pooled on source ${row}, which has an explicit crit payload`)
     }
     if (pooled.size > 0 && r.trigger === 'cast') throw new Error(`bruteForce: rider ${i} is pooled but its trigger is cast, which lands on a miss`)
-    return { rows, trigger: r.trigger, onCrit: r.onCrit === true, max, chance: occurrenceChance(r), payloads, typed, pooled, specs }
+    return { rows, index: i, ...(r.targetHas !== undefined ? { targetHas: r.targetHas } : {}), trigger: r.trigger, onCrit: r.onCrit === true, max, chance: occurrenceChance(r), payloads, typed, pooled, specs }
   })
   riders.forEach((r, i) => {
     if (!r.alongside) return
@@ -1745,7 +1770,7 @@ function landingPlans(
   const riderCache = new Map<string, Array<[number, number]>>()
   const riderDamage = (landings: readonly SourceBranch[], decided: RiderFates): Array<[number, number]> => {
     const key = [
-      landings.map((l) => `${l.landing}${l.dealt ? '+' : '-'}${l.vulnerable ? 'v' : ''}`).join(),
+      landings.map((l) => `${l.landing}${l.dealt ? '+' : '-'}${l.vulnerable ? 'v' : ''}${l.gatesOpen ? `g${[...l.gatesOpen].join('.')}` : ''}`).join(),
       [...decided.fates]
         .map(([where, fate]) => `${where}=${fate.typed}/${fate.woke}`)
         .sort()
@@ -1876,9 +1901,13 @@ function conditionContributions(condition: ConditionName, ctx: ReadContext): Eff
   if (ctx.side === 'attack') {
     switch (condition) {
       case 'blinded':
+      case 'petrified':
       case 'restrained':
       case 'stunned':
         return ['advantage']
+      // "Attack rolls against you have Disadvantage, and your attack rolls have Advantage." (at any range)
+      case 'invisible':
+        return ['disadvantage']
       case 'paralyzed':
         return melee ? ['advantage', 'critOnHit'] : ['advantage']
       case 'prone':
@@ -1892,8 +1921,9 @@ function conditionContributions(condition: ConditionName, ctx: ReadContext): Eff
   }
   const strengthOrDexterity = ctx.ability === 'strength' || ctx.ability === 'dexterity'
   switch (condition) {
-    // "You automatically fail Strength and Dexterity saving throws."
+    // "You automatically fail Strength and Dexterity saving throws." (Petrified: "Attack rolls against you have Advantage ... You automatically fail Strength and Dexterity saving throws.")
     case 'paralyzed':
+    case 'petrified':
     case 'stunned':
     case 'unconscious':
       return strengthOrDexterity ? ['autoFail'] : []
@@ -2061,6 +2091,19 @@ function rowReads(row: WalkRow, index: number, effect: EffectSpec): boolean {
     case 'vulnerability':
       return row.kind === 'attack'
   }
+}
+
+/** Whether `creature` has at least one of `names` in the state `active` (and, for creature 0, the starting condition) describes. */
+function creatureHas(
+  names: readonly ConditionName[],
+  creature: number,
+  startingCondition: ConditionName | undefined,
+  active: readonly EffectInstance[]
+): boolean {
+  if (creature === 0 && startingCondition !== undefined && names.includes(startingCondition)) return true
+  return active.some(
+    (instance) => instance.creature === creature && instance.spec.kind === 'condition' && names.includes(instance.spec.condition)
+  )
 }
 
 /** Whether the effect is the attacker's (`against: 'any'`): no creature owns it, and the next attack at any creature reads it. */
@@ -2374,6 +2417,13 @@ function enumerateSourcesWithRiders(
           branch = { ...resolved, outcomes }
         }
       }
+      // The gates read the state this row rolled in: `state`, before the row's own landing applies anything.
+      if (riderPlans.some((plan) => plan.targetHas !== undefined)) {
+        const gatesOpen = new Set(
+          riderPlans.flatMap((plan) => (plan.targetHas !== undefined && creatureHas(plan.targetHas, row.creature, turn.startingCondition, state.active) ? [plan.index] : []))
+        )
+        branch = { ...branch, gatesOpen }
+      }
       for (const [d, pd] of branch.outcomes) addScaled(perSource[s]!, d, prob * branch.p * pd)
       landings[s] = branch
       const rowDamage = convolveMaps(damage, branch.outcomes)
@@ -2406,6 +2456,7 @@ function enumerateSourcesWithRiders(
             const grant = grants[g]!
             if (
               !grant.of.includes(s) ||
+              (grant.targetHas !== undefined && !creatureHas(grant.targetHas, row.creature, turn.startingCondition, state.active)) ||
               !grantLands(grant, row.kind === 'save', landed, () => riderAppliesOn(riderPlans[grant.rider!]!, s, branch, landings))
             )
               continue

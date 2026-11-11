@@ -441,10 +441,10 @@ function asList(effects: Lasting | readonly Lasting[]): readonly Lasting[] {
  * in the target's state; `chance` is the only fixed gate.
  */
 export function gateFields(
-  options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "optional">,
+  options: Pick<ConditionOptions, "save" | "chance" | "onSave" | "landing" | "dealing" | "optional" | "targetHas">,
   eps: number
 ): Omit<ConditionSpec, "on" | "of" | "grants" | "id"> {
-  const { save, chance, onSave, landing, dealing, optional } = options;
+  const { save, chance, onSave, landing, dealing, optional, targetHas } = options;
   // A plain-JS caller can still pass the `target` the types no longer offer: refuse it rather than drop it.
   if ("target" in options && options.target !== undefined) {
     throw new TurnSpecError(
@@ -472,6 +472,7 @@ export function gateFields(
     ...(grantSaves.length === 0 ? {} : { save: Array.isArray(save) ? grantSaves : grantSaves[0] }),
     ...(saved.length === 0 ? {} : { onSave: saved.map(effectSpec) }),
     ...(optional === undefined ? {} : { optional }),
+    ...(targetHas === undefined ? {} : { targetHas: listOf(targetHas) }),
   };
 }
 

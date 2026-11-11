@@ -459,6 +459,8 @@ export interface GrantApplication {
   countedInForce: boolean;
   /** Bookkeeping only: nothing reads the condition, so a try sets nothing and only counts. */
   countOnly: boolean;
+  /** For a gated condition (`targetHas`): the flag bits that open the gate at this step; it applies only where one is set. */
+  gateMask: number | undefined;
 }
 
 /**
@@ -475,6 +477,7 @@ export function grantApplies(
   typed?: boolean
 ): boolean {
   if (app.dealing && typed !== true) return false;
+  if (app.gateMask !== undefined && (flags & app.gateMask) === 0) return false;
   if (app.rider !== undefined) {
     // It fires where its rider landed, once where it is once per turn.
     if (!riders?.some(([id]) => id === app.rider)) return false;
@@ -659,6 +662,8 @@ interface Flag {
   condition: string;
   /** The creature it is on. */
   creature: string;
+  /** The condition's name for a `rule` effect (or its `onEnd` condition): what a `targetHas` gate reads. */
+  named: string | undefined;
   /** What it puts in force on a row that reads it (`MOD_*` bits). */
   modifiers: number;
   /** The dice it takes off a save that reads it. */
@@ -1355,6 +1360,19 @@ function isContextualPayload(damage: unknown): boolean {
   return typeof candidate.at === "function" && typeof candidate.toPMF !== "function";
 }
 
+/** `value` as a `targetHas`: a non-empty list of non-empty condition names (`undefined` where there is none). */
+function checkedTargetHas(id: string, value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.some((name) => typeof name !== "string" || name === "")) {
+    throw new TurnSpecError(
+      "non-string-id",
+      id,
+      `"${id}" has a targetHas that is not a non-empty list of condition names.`
+    );
+  }
+  return value as readonly string[];
+}
+
 /**
  * Builds the plan of `spec`. `declined` names optional conditions the turn does not attempt
  * (see `Turn`): each stays, with no row it watches, so it never lands.
@@ -1381,7 +1399,22 @@ export function buildPlan(
   // `every-hit` capped at 1 IS `first-hit`: lowered here, before anything reads the riders, so
   // it takes the same step, fire slot, `otherwise` / `not-fired`, `of` naming and arithmetic. Every
   // other field (`happens`, `joins`, `where`, …) is kept.
-  const lowered: readonly EvaluatedRider[] = declaredRiders.map((rider): EvaluatedRider => {
+  const lowered: readonly EvaluatedRider[] = declaredRiders.map((rider, index): EvaluatedRider => {
+    // A rider gated on a condition of its target (`targetHas`) is always folded into its sources' draws,
+    // as an every-hit rider: a first-hit one lands once, on its first landing the gate opens, which is
+    // `every-hit` capped at 1 and is not lowered back (a closed gate spends nothing).
+    if (rider.targetHas !== undefined) {
+      const id = rider.id ?? `rider ${index + 1}`;
+      checkedTargetHas(id, rider.targetHas);
+      if (rider.on !== "every-hit" && rider.on !== "first-hit") {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" has a targetHas on "${String(rider.on)}". Only every-hit and first-hit riders are gated on a condition of the target.`
+        );
+      }
+      return rider.on === "first-hit" ? ({ ...rider, on: "every-hit", max: 1 } as EvaluatedRider) : rider;
+    }
     if (rider.on !== "every-hit" || rider.max !== 1) return rider;
     return { ...rider, on: "first-hit", max: undefined } as EvaluatedRider;
   });
@@ -1700,6 +1733,13 @@ export function buildPlan(
         `Condition "${id}" has onSave grants but no save or chance: there is no other branch to apply them on.`
       );
     }
+    if (checkedTargetHas(id, condition.targetHas) !== undefined && !["every-hit", "any-crit", "any-miss"].includes(condition.on)) {
+      fail(
+        "unsupported-trigger",
+        id,
+        `Condition "${id}" has a targetHas on "${condition.on}". Only every-hit, any-crit and any-miss conditions are gated on a condition of the target: a once-per-turn gate would need a first that counts only open ones.`
+      );
+    }
     if (condition.landing !== undefined && condition.landing !== "fail" && condition.landing !== "damage") {
       fail("unsupported-trigger", id, `Condition "${id}" declares landing "${String(condition.landing)}". Use "fail" or "damage".`);
     }
@@ -1728,6 +1768,20 @@ export function buildPlan(
         const until: unknown = grant.until;
         if (until !== "end-of-turn" && until !== "until-damaged") {
           throw new Error(`Condition "${id}" has a condition lasting "${String(until)}"; use "end-of-turn" or "until-damaged".`);
+        }
+        for (const rule of [grant.rule, grant.rule.onEnd?.rule]) {
+          const penalty: unknown = rule?.d20Penalty;
+          if (penalty === undefined) continue;
+          if (typeof penalty !== "number" || !Number.isInteger(penalty) || penalty < 0) {
+            throw new RangeError(`Condition "${id}" has a d20Penalty of ${String(penalty)}; use a whole number of 0 or more.`);
+          }
+          if (penalty > 0 && Object.keys(rule?.save ?? {}).length > 0) {
+            fail(
+              "unsupported-trigger",
+              id,
+              `Condition "${id}" has a rule with a d20Penalty and save modifiers. A turn reads a d20Penalty as penalty dice on the saves, so give the modifiers to another rule.`
+            );
+          }
         }
         continue;
       }
@@ -2051,7 +2105,32 @@ export function buildPlan(
     }
     return opened;
   });
+  /** Every id a rider, a substitute or a condition names in its `of`. */
+  const namedByOthers = new Set<string>([
+    ...riders.flatMap((rider) => (typeof rider.of === "string" ? [rider.of] : (rider.of ?? []))),
+    ...substitutes.flatMap((substitute) => substitute.of ?? []),
+    ...conditions.flatMap((condition) => condition.of ?? []),
+  ]);
   riders.forEach((rider, index) => {
+    if (rider.targetHas !== undefined) {
+      const id = riderIds[index];
+      const names = typeof rider.of === "string" ? [rider.of] : (rider.of ?? []);
+      const partner = names.find((entry) => riderIndexById.has(entry));
+      if (partner !== undefined) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" has a targetHas and watches the rider "${partner}". A gated rider is folded into attack draws: watch the attacks directly.`
+        );
+      }
+      if (namedByOthers.has(id) || rider.joins !== undefined) {
+        fail(
+          "unsupported-trigger",
+          id,
+          `Rider "${id}" has a targetHas and ${rider.joins !== undefined ? "joins a row's damage roll" : "is named by another entry"}. A gated rider is folded into its attacks' draws and can be neither.`
+        );
+      }
+    }
     for (const key of Object.keys(rider.where ?? {})) {
       if (!partnersOf[index].includes(key)) {
         fail("unknown-id", key, `Rider "${riderIds[index]}" has "where" for "${key}", which is not a partner in its "of".`);
@@ -2388,7 +2467,8 @@ export function buildPlan(
     if (node >= riderCount) continue;
     const rider = riders[node];
     // A folded first-hit rider needs no group: it is applied inside its sources' draws.
-    if (!READS_GROUP[rider.on] || isFirstHitFold(rider)) continue;
+    // A gated rider (`targetHas`) neither: it fires where its gate opened, which only its draws know (a fire slot).
+    if (!READS_GROUP[rider.on] || isFirstHitFold(rider) || rider.targetHas !== undefined) continue;
     // A rider that lands on anything reads a save's every class: a failure or a pass advances its group alike.
     const group = groupOf(sourceIdsByNode[node], rider.landing === "any" ? "fail" : rider.landing);
     readsByRider.set(node, group);
@@ -2422,7 +2502,7 @@ export function buildPlan(
   // --- fire slots ----------------------------------------------------------
   const fireSlots = new Map<string, number>();
   riders.forEach((rider, index) => {
-    if (rider.on !== "every-hit") fireSlots.set(riderIds[index], fireSlots.size);
+    if (rider.on !== "every-hit" || rider.targetHas !== undefined) fireSlots.set(riderIds[index], fireSlots.size);
   });
   for (const id of substituteIds) fireSlots.set(id, fireSlots.size);
 
@@ -2578,6 +2658,13 @@ export function buildPlan(
               : (effect.advantage ? MOD_ADVANTAGE : 0) |
                 (effect.disadvantage ? MOD_DISADVANTAGE : 0) |
                 (effect.critOnHit ? MOD_CRIT_ON_HIT : 0);
+      // A 2024 Exhaustion's `d20Penalty` takes that many off every D20 Test: dice of one side (a d1 is exactly 1).
+      const penalty: PenaltyDice | undefined =
+        "savePenalty" in effect
+          ? effect.savePenalty
+          : "rule" in effect && effect.rule.d20Penalty !== undefined && effect.rule.d20Penalty > 0
+            ? { count: effect.rule.d20Penalty, sides: 1 }
+            : undefined;
       // Every attack roll on the creature after the condition's first source there, attack-shaped
       // riders included; for a save effect, every save row; for a condition, every row its rule changes.
       const reads = new Map<number, number>();
@@ -2586,19 +2673,32 @@ export function buildPlan(
         if (targets !== null && !targets.has(entry.id)) return;
         if ("rule" in effect) {
           const read = ruleRead(effect.condition, effect.rule, position);
-          if (read !== 0) reads.set(position, read);
+          // A `d20Penalty` is penalty dice on the creature's saves, read even where the rule has no save modifier.
+          if (read !== 0 || (penalty !== undefined && savesAt[position])) reads.set(position, read);
         } else if (side === "attack" ? rollsAttack[position] : savesAt[position]) {
           reads.set(position, modifiers);
         }
       });
-      const readers = [...reads.keys()];
+      // A rule that changes no row of any turn (`own` is data for consumers: Charmed, Frightened) is still
+      // applied wherever an attack roll follows on its creature, so it counts as read there: what
+      // `fireProbability` says about the condition, and what the optional fallback attempts.
+      const inert =
+        "rule" in effect &&
+        effect.rule.attack === undefined &&
+        effect.rule.save === undefined &&
+        !effect.rule.d20Penalty &&
+        effect.rule.onEnd === undefined;
+      const readers = inert
+        ? sequence.flatMap((_, position) => (position > first && creatureAt[position] === creature && rollsAttack[position] ? [position] : []))
+        : [...reads.keys()];
       return {
         name: `"${id}" ${label}${creatures.length > 1 ? ` on "${creature}"` : ""}`,
         condition: id,
         creature,
+        named: "rule" in effect ? effect.condition : undefined,
         modifiers,
         reads,
-        penalty: "savePenalty" in effect ? effect.savePenalty : undefined,
+        penalty,
         side,
         // A grant's own save is no row: it reads what lasts (not a `next-save` effect) and is not scoped with `to`.
         grantSaveReads: side !== "attack" && to === undefined && effect.until !== "next-save",
@@ -2671,6 +2771,34 @@ export function buildPlan(
     }
   });
 
+  // A `targetHas` gate reads, at each row it gates, the conditions on that row's creature in the state
+  // the row rolled in: every flag of a condition it names, set before the row, stays live through it.
+  // A rider is gated at the rows it watches, a condition where it applies.
+  const gatedFlagsAt = (names: readonly string[], position: number): Flag[] =>
+    allFlags.filter(
+      (flag) =>
+        flag.named !== undefined && names.includes(flag.named) && flag.creature === creatureAt[position] && flag.first < position
+    );
+  const gates: { names: readonly string[]; positions: number[] }[] = [
+    ...riders.flatMap((rider, index) => {
+      if (rider.targetHas === undefined) return [];
+      const watched = new Set(sourceIdsByNode[index]);
+      return [{ names: rider.targetHas, positions: sequence.flatMap((entry, position) => (watched.has(entry.id) ? [position] : [])) }];
+    }),
+    ...conditions.flatMap((condition, index) =>
+      condition.targetHas === undefined ? [] : [{ names: condition.targetHas, positions: conditionFlags[index].applyAt }]
+    ),
+  ];
+  for (const { names, positions } of gates) {
+    for (const position of positions) {
+      for (const flag of gatedFlagsAt(names, position)) {
+        flag.lastRead = Math.max(flag.lastRead, position);
+        if (!flag.readers.includes(position)) flag.readers.push(position);
+      }
+    }
+  }
+  for (const flag of allFlags) flag.readers.sort((a, b) => a - b);
+
   // A once-per-turn condition (`first-*`) is tried only on a landing where a later row on that
   // landing's creature reads one of its effects: a landing with no reader after it keeps the try
   // for a later one (the engine's rule). With one creature the readers only thin out along the turn,
@@ -2694,6 +2822,7 @@ export function buildPlan(
       name: `"${riderIds[index]}" happens`,
       condition: riderIds[index],
       creature: DEFAULT_CREATURE,
+      named: undefined,
       modifiers: 0,
       reads: new Map(),
       penalty: undefined,
@@ -2729,6 +2858,7 @@ export function buildPlan(
       name: `"${conditionIds[index]}" tried`,
       condition: conditionIds[index],
       creature: DEFAULT_CREATURE,
+      named: undefined,
       modifiers: 0,
       reads: new Map(),
       penalty: undefined,
@@ -2764,6 +2894,9 @@ export function buildPlan(
       `A turn may carry at most ${MAX_FLAG_BITS} effects live at once; this one needs ${busyUntil.length}: ${liveFlags.map((flag) => flag.name).join(", ")}.`
     );
   }
+  /** The flag bits that open a `targetHas` gate on `names` at step `position`: any of them set means the creature has the condition. */
+  const gateMaskAt = (names: readonly string[], position: number): number =>
+    gatedFlagsAt(names, position).reduce((mask, flag) => (flag.bit === -1 ? mask : mask | (1 << flag.bit)), 0);
   /** The bits of `flags` still needed once step `step` is done. */
   const liveBitsOf = (flags: readonly Flag[], step: number): number =>
     flags.reduce((mask, flag) => (flag.bit !== -1 && liveAfter(flag, step) ? mask | (1 << flag.bit) : mask), 0);
@@ -2954,6 +3087,7 @@ export function buildPlan(
           counted: true,
           countedInForce,
           countOnly: true,
+          gateMask: condition.targetHas === undefined ? undefined : gateMaskAt(condition.targetHas, position),
         });
       }
       return;
@@ -2994,6 +3128,7 @@ export function buildPlan(
         counted: !once || follows,
         countedInForce,
         countOnly: false,
+        gateMask: condition.targetHas === undefined ? undefined : gateMaskAt(condition.targetHas, position),
       });
     }
   });
@@ -3027,6 +3162,8 @@ export function buildPlan(
     vulnerable: () => { hit: PMF; crit: PMF };
     /** The bit of a source's variant mask that says its coin (`happens`) came up, or 0 when it has none. */
     coinBit: number;
+    /** The bit of a source's variant mask that says its `targetHas` gate is open on that row, or 0 when it has none. */
+    gateBit: number;
     /** On a row a partner opens to it: the partners, one of which must land in the same draw. */
     partners: readonly string[];
     /** P(its payload on this row deals `type`), as a plain hit and as a crit; for a `dealing` condition. */
@@ -3042,6 +3179,8 @@ export function buildPlan(
   const counterDealt: boolean[] = [];
   /** Per counter, whether its riders land alongside a partner on some row. */
   const counterPartnered: boolean[] = [];
+  /** Per counter, whether its riders are gated on a condition of the target (`targetHas`): it counts the landings the gate opened. */
+  const counterGated: boolean[] = [];
   const counterIdByKey = new Map<string, number>();
   const perHitBySource = new Map<string, HitPayload[]>();
   /**
@@ -3062,6 +3201,8 @@ export function buildPlan(
     happens === 1 ? pmf : pmf.scaleMass(happens).add(PMF.delta(0, eps).scaleMass(1 - happens));
   /** Per source, the coins (rider indexes) whose riders fold into it, in payload order. */
   const coinsBySource = new Map<string, number[]>();
+  /** Per source, the gated riders (rider indexes) folded into it, in payload order. */
+  const gatedBySource = new Map<string, number[]>();
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
@@ -3083,7 +3224,10 @@ export function buildPlan(
     // grants, step statistics and the crit check live there, and a fold skips all three. A
     // plain every-hit rider keeps folding whatever it rolls, as it always has.
     const folded =
-      rider.on === "first-hit" || (rider.on === "every-hit" && rider.max !== undefined) || own.size > 0;
+      rider.on === "first-hit" ||
+      (rider.on === "every-hit" && rider.max !== undefined) ||
+      own.size > 0 ||
+      rider.targetHas !== undefined;
     if (folded) {
       const payloads: [string, RiderDamage | undefined][] = [
         ["its damage", rider.damage],
@@ -3097,7 +3241,12 @@ export function buildPlan(
         if (damage === undefined) continue;
         const parts = Array.isArray(damage) ? damage : [damage as Damage];
         if (attackPartCount(parts, eps, id) > 0) {
-          const kind = rider.on === "first-hit" ? "a payload per source" : "a cap or a payload per source";
+          const kind =
+            rider.targetHas !== undefined
+              ? "a targetHas gate"
+              : rider.on === "first-hit"
+                ? "a payload per source"
+                : "a cap or a payload per source";
           fail(
             "unsupported-trigger",
             id,
@@ -3144,6 +3293,7 @@ export function buildPlan(
         ...(critOnly.has(node) ? ["crit"] : []),
         ...(dealtOnly ? ["dealt"] : []),
         ...(partnersOf[node].length > 0 ? [riderIds[node]] : []),
+        ...(rider.targetHas !== undefined ? ["gate", [...rider.targetHas].sort()] : []),
       ]);
       let known = counterIdByKey.get(key);
       if (known === undefined) {
@@ -3152,12 +3302,13 @@ export function buildPlan(
         counterCritOnly.push(critOnly.has(node));
         counterDealt.push(dealtOnly);
         counterPartnered.push(partnersOf[node].length > 0);
+        counterGated.push(rider.targetHas !== undefined);
         counterIdByKey.set(key, known);
       }
       counter = known;
     }
     const applyIndex = everyHitIds.indexOf(id);
-    const slot = rider.on === "first-hit" ? (fireSlots.get(id) as number) : -1;
+    const slot = rider.on === "first-hit" || rider.targetHas !== undefined ? (fireSlots.get(id) as number) : -1;
     for (const sourceId of sources) {
       const each = own.get(sourceId);
       const landing = contextual?.at(sourceId);
@@ -3196,6 +3347,11 @@ export function buildPlan(
         coins.push(node);
         coinsBySource.set(sourceId, coins);
       }
+      if (rider.targetHas !== undefined) {
+        const gated = gatedBySource.get(sourceId) ?? [];
+        gated.push(node);
+        gatedBySource.set(sourceId, gated);
+      }
       const entry = {
         rider: applyIndex,
         id,
@@ -3204,6 +3360,7 @@ export function buildPlan(
         landing: rider.landing,
         critOnly: critOnly.has(node),
         coinBit: coined ? -1 : 0,
+        gateBit: rider.targetHas !== undefined ? -1 : 0,
         // A row of its own it lands on for its trigger; a row only a partner opens, alongside that partner.
         partners: ownRows.includes(sourceId) ? [] : (openedBy[node].get(sourceId) ?? []),
         typedOdds:
@@ -3225,6 +3382,13 @@ export function buildPlan(
     const base = (countersBySource.get(sourceId) ?? []).length;
     for (const payload of perHitBySource.get(sourceId) ?? []) {
       if (payload.coinBit === -1) payload.coinBit = 1 << (base + coins.indexOf(riderIndexById.get(payload.id) as number));
+    }
+  }
+  // A gate's bit comes after the counters' and the coins'.
+  for (const [sourceId, gated] of gatedBySource) {
+    const base = (countersBySource.get(sourceId) ?? []).length + (coinsBySource.get(sourceId) ?? []).length;
+    for (const payload of perHitBySource.get(sourceId) ?? []) {
+      if (payload.gateBit === -1) payload.gateBit = 1 << (base + gated.indexOf(riderIndexById.get(payload.id) as number));
     }
   }
   for (const [sourceId, counters] of countersBySource) {
@@ -3262,6 +3426,7 @@ export function buildPlan(
     const lands = (perHitBySource.get(sourceId) ?? []).filter(
       (payload) =>
         (payload.bit === 0 || (mask & payload.bit) !== 0) &&
+        (payload.gateBit === 0 || (mask & payload.gateBit) !== 0) &&
         (!payload.critOnly || outcome === "crit") &&
         // "When you deal damage": a hit that dealt nothing is no landing for it.
         !(dealt === false && payload.landing === "damage") &&
@@ -3334,7 +3499,9 @@ export function buildPlan(
           !(dealt === false && counterDealt[counter]) &&
           (outcome !== "miss" || (counterLanding[counter] === "any" && !counterCritOnly[counter])) &&
           // A counter of a rider a partner gates here counts only where it landed.
-          (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local))
+          (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local)) &&
+          // A gated counter counts only the landings its gate opened.
+          (!counterGated[counter] || active.some((payload) => payload.bit === 1 << local))
       ),
       fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
     };
@@ -3714,6 +3881,8 @@ export function buildPlan(
       (perHitBySource.get(sourceId) ?? []).filter(
         (payload) =>
           payload.slot !== -1 &&
+          // A gated rider's slot is marked where its gate opened, which the plain variant cannot say.
+          payload.gateBit === 0 &&
           fired[payload.slot] === null &&
           (draw?.byKind === undefined || payload.landing === "any" || draw.byKind[payload.landing ?? "fail"] === "hit")
       )
@@ -3741,6 +3910,7 @@ export function buildPlan(
           (payload) =>
             (payload.bit === 0 || (mask & payload.bit) !== 0) &&
             (payload.coinBit === 0 || (mask & payload.coinBit) !== 0) &&
+            (payload.gateBit === 0 || (mask & payload.gateBit) !== 0) &&
             !payload.critOnly &&
             (payload.landing === "any" || CLASS_LANDS[index][payload.landing ?? "fail"])
         )
@@ -3760,7 +3930,8 @@ export function buildPlan(
             !counterCritOnly[counter] &&
             (counterLanding[counter] === "any" || CLASS_LANDS[index][(counterLanding[counter] as SaveLanding | undefined) ?? "fail"]) &&
             // A counter of a rider a partner gates here counts only where it landed.
-            (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local))
+            (!counterPartnered[counter] || active.some((payload) => payload.bit === 1 << local)) &&
+            (!counterGated[counter] || active.some((payload) => payload.bit === 1 << local))
         ),
         fires: active.flatMap((payload) => (payload.slot === -1 ? [] : [payload.slot])),
         slice: folded,
@@ -3884,6 +4055,10 @@ export function buildPlan(
     const capped = countersBySource.get(entry.id) ?? [];
     /** The coins of the riders folded here: bit `capped.length + k` of a variant mask says coin k came up. */
     const coined = coinsBySource.get(entry.id) ?? [];
+    /** The gated riders folded here: bit `capped.length + coined.length + k` of a variant mask says gate k is open. */
+    const gated = gatedBySource.get(entry.id) ?? [];
+    /** Per gate, the flag bits that open it at this step. */
+    const gateMasks = gated.map((node) => gateMaskAt(riders[node].targetHas as readonly string[], stepIndex));
 
     /**
      * The plain draws and, under a substitute, one variant per hold mask (variant 1 +
@@ -3962,7 +4137,7 @@ export function buildPlan(
       target: StepVariant[],
       offset: number
     ): { select: Step["select"] } => {
-      const blockCount = 1 << (capped.length + coined.length);
+      const blockCount = 1 << (capped.length + coined.length + gated.length);
       const first = make(0);
       // Every block has the same hold choices (they read the base payload, not the fold), so
       // block 0's variant count and choice rule serve for all.
@@ -3984,6 +4159,9 @@ export function buildPlan(
           });
           coined.forEach((node, k) => {
             if (flags & (1 << (coinFlags[node] as Flag).bit)) cap |= 1 << (capped.length + k);
+          });
+          gateMasks.forEach((open, k) => {
+            if (flags & open) cap |= 1 << (capped.length + coined.length + k);
           });
           if (!built[cap]) fill(cap, make(cap));
           return offset + cap * size + local(codes, fired, flags, counts);
