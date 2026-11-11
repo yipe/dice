@@ -800,7 +800,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit) || root?.sides !== 20) {
       throw new Error("sampleMissReroll() needs an attack check with a d20 natural roll.");
     }
-    const { naturals, bonus } = readCheckDice(check, first.check);
+    const { naturals, bonus, rolled } = readCheckDice(check, first.check);
     const drawn = sampleDie(dieNodeFromConfig(root), rng);
     const faces = naturals.map((n) => n.face);
     // The others of an advantage roll all missed: only the new die can land, so the best face is the result.
@@ -817,8 +817,6 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     else outcome = check instanceof AlwaysCritBuilder || natural >= check.critThreshold ? "crit" : "hit";
 
     // The d20s as rolled, dropped, then the new one, then the bonus dice; the kept d20 is the first final showing `natural`.
-    const listed = first.check.findIndex((die) => die.sides !== 20);
-    const rolled = listed === -1 ? first.check.length : listed;
     const dice: SampledDie[] = [
       ...first.check.slice(0, rolled).map((die) => ({ ...die, kept: false })),
       ...drawn.dice.map((die) => ({ ...die, kept: false })),
