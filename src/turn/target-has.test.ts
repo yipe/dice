@@ -289,6 +289,15 @@ describe("d20Penalty (2024 Exhaustion)", () => {
     const exhausted = turn([conSave]).atStart(exhaustion(3, "2014"));
     close(exhausted.mean(), 25.114375);
   });
+  it("refuses a d20Penalty beside attack or save modifiers (unsupported-trigger)", () => {
+    for (const rule of [{ attack: { melee: ["advantage"] }, d20Penalty: 2 }, { save: { dexterity: ["autoFail"] }, d20Penalty: 2 }] as const) {
+      const spec: TurnSpec = {
+        attacks: [sword],
+        conditions: [{ on: "start", grants: [{ condition: "x", rule, until: "end-of-turn" }] }],
+      };
+      expect(codeOf(() => Turn.from(spec))).toBe("unsupported-trigger");
+    }
+  });
   it("refuses a negative or fractional penalty", () => {
     for (const d20Penalty of [-1, 1.5]) {
       const spec: TurnSpec = {

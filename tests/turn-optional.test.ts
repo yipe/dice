@@ -60,7 +60,7 @@ describe("optional conditions past the search: the engine's melee-leaning fallba
         };
         const t = Turn.from(spec);
         for (const first of [0, 1, 2, 3]) {
-          const attempted = t.fireProbability(`c${first}`) > 0;
+          const attempted = t.attemptProbability(`c${first}`) > 0;
           expect(attempted, `${name} ${ranges.join(",")} c${first}`).toBe(engineLeans(ranges, first));
         }
       }
