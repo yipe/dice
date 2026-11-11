@@ -77,6 +77,9 @@ const MAX_FLAG_BITS = 30;
 /** The creature an attack, or a `start` condition, is on when it names none. */
 const DEFAULT_CREATURE = "target";
 
+/** The most bits of one attack's variant mask (capped counters, coins, distinct `targetHas` sets): JS bit operations are 32-bit signed. */
+const MAX_VARIANT_BITS = 30;
+
 /** The default `TurnSpec.stateLimit`: the engine's `MAX_CONDITION_STATES`. */
 export const MAX_TURN_STATES = 16_384;
 
@@ -3246,8 +3249,12 @@ export function buildPlan(
     happens === 1 ? pmf : pmf.scaleMass(happens).add(PMF.delta(0, eps).scaleMass(1 - happens));
   /** Per source, the coins (rider indexes) whose riders fold into it, in payload order. */
   const coinsBySource = new Map<string, number[]>();
-  /** Per source, the gated riders (rider indexes) folded into it, in payload order. */
-  const gatedBySource = new Map<string, number[]>();
+  /**
+   * Per source, the distinct `targetHas` sets of the gated riders folded into it, in first-seen order. Riders
+   * reading the same set share one bit of a variant mask: it is a property of the creature, not of the rider.
+   */
+  const gateSetsBySource = new Map<string, Map<string, readonly string[]>>();
+  const gateKeyOf = (names: readonly string[]): string => [...new Set(names)].sort().join("\u0000");
   for (const node of order) {
     if (node >= riderCount) continue;
     const rider = riders[node];
@@ -3393,9 +3400,9 @@ export function buildPlan(
         coinsBySource.set(sourceId, coins);
       }
       if (rider.targetHas !== undefined) {
-        const gated = gatedBySource.get(sourceId) ?? [];
-        gated.push(node);
-        gatedBySource.set(sourceId, gated);
+        const sets = gateSetsBySource.get(sourceId) ?? new Map<string, readonly string[]>();
+        sets.set(gateKeyOf(rider.targetHas), rider.targetHas);
+        gateSetsBySource.set(sourceId, sets);
       }
       const entry = {
         rider: applyIndex,
@@ -3429,11 +3436,22 @@ export function buildPlan(
       if (payload.coinBit === -1) payload.coinBit = 1 << (base + coins.indexOf(riderIndexById.get(payload.id) as number));
     }
   }
-  // A gate's bit comes after the counters' and the coins'.
-  for (const [sourceId, gated] of gatedBySource) {
+  // A gate's bit comes after the counters' and the coins': one per distinct `targetHas` set.
+  for (const [sourceId, sets] of gateSetsBySource) {
     const base = (countersBySource.get(sourceId) ?? []).length + (coinsBySource.get(sourceId) ?? []).length;
+    if (base + sets.size > MAX_VARIANT_BITS) {
+      fail(
+        "too-many-states",
+        sourceId,
+        `"${sourceId}" carries ${base + sets.size} variant bits (capped counters, coins and distinct targetHas sets); a turn may have at most ${MAX_VARIANT_BITS} per attack. Each doubles the draws that attack may carry.`
+      );
+    }
+    const keys = [...sets.keys()];
     for (const payload of perHitBySource.get(sourceId) ?? []) {
-      if (payload.gateBit === -1) payload.gateBit = 1 << (base + gated.indexOf(riderIndexById.get(payload.id) as number));
+      if (payload.gateBit === -1) {
+        const names = riders[riderIndexById.get(payload.id) as number].targetHas as readonly string[];
+        payload.gateBit = 1 << (base + keys.indexOf(gateKeyOf(names)));
+      }
     }
   }
   for (const [sourceId, counters] of countersBySource) {
@@ -4176,10 +4194,8 @@ export function buildPlan(
     const capped = countersBySource.get(entry.id) ?? [];
     /** The coins of the riders folded here: bit `capped.length + k` of a variant mask says coin k came up. */
     const coined = coinsBySource.get(entry.id) ?? [];
-    /** The gated riders folded here: bit `capped.length + coined.length + k` of a variant mask says gate k is open. */
-    const gated = gatedBySource.get(entry.id) ?? [];
-    /** Per gate, the flag bits that open it at this step. */
-    const gateMasks = gated.map((node) => gateMaskAt(riders[node].targetHas as readonly string[], stepIndex));
+    /** Per distinct `targetHas` set of the riders folded here, the flag bits that open it at this step: bit `capped.length + coined.length + k` of a variant mask says gate set k is open. */
+    const gateMasks = [...(gateSetsBySource.get(entry.id)?.values() ?? [])].map((names) => gateMaskAt(names, stepIndex));
 
     /**
      * The plain draws and, under a substitute, one variant per hold mask (variant 1 +
@@ -4277,28 +4293,29 @@ export function buildPlan(
      * applies no capped rider. An uncapped step is one block, `tableAt` itself.
      *
      * Block 0 is built now (it validates the row, and `laterLandings` reads a step's first variant);
-     * every other block the first time a walk selects it. A walk reaches few of the `2^n` cap masks a
-     * step has, and the blocks it never reaches cost nothing. `select` returns the index into `target`.
+     * every other block the first time a walk selects it, appended to `target` where it stands. A walk
+     * reaches few of the `2^n` cap masks a step has, and the blocks it never reaches cost nothing, not
+     * even a slot. `select` returns the index into `target`.
      */
     const blocked = (
       make: (cap: number) => { variants: StepVariant[]; select: Step["select"] },
       target: StepVariant[],
       offset: number
     ): { select: Step["select"] } => {
-      const blockCount = 1 << (capped.length + coined.length + gated.length);
       const first = make(0);
       // Every block has the same hold choices (they read the base payload, not the fold), so
       // block 0's variant count and choice rule serve for all.
       const size = first.variants.length;
       const local = first.select;
-      const built: boolean[] = new Array<boolean>(blockCount).fill(false);
-      target.length = offset + blockCount * size;
-      const fill = (cap: number, block: { variants: StepVariant[] }): void => {
-        for (let i = 0; i < size; i++) target[offset + cap * size + i] = finish(block.variants[i]);
-        built[cap] = true;
+      /** Per cap mask reached, where its block starts in `target`: block 0 at `offset`, each other where it was first built. */
+      const blockAt = new Map<number, number>();
+      const fill = (cap: number, at: number, block: { variants: StepVariant[] }): number => {
+        for (let i = 0; i < size; i++) target[at + i] = finish(block.variants[i]);
+        blockAt.set(cap, at);
+        return at;
       };
-      fill(0, first);
-      if (blockCount === 1) return { select: (codes, fired, flags, counts) => offset + local(codes, fired, flags, counts) };
+      fill(0, offset, first);
+      if (capped.length + coined.length + gateMasks.length === 0) return { select: (codes, fired, flags, counts) => offset + local(codes, fired, flags, counts) };
       return {
         select: (codes, fired, flags, counts) => {
           let cap = 0;
@@ -4311,8 +4328,8 @@ export function buildPlan(
           gateMasks.forEach((open, k) => {
             if (flags & open) cap |= 1 << (capped.length + coined.length + k);
           });
-          if (!built[cap]) fill(cap, make(cap));
-          return offset + cap * size + local(codes, fired, flags, counts);
+          const at = blockAt.get(cap) ?? fill(cap, target.length, make(cap));
+          return at + local(codes, fired, flags, counts);
         },
       };
     };
