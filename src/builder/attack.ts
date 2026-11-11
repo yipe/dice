@@ -804,10 +804,13 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     const drawn = sampleDie(dieNodeFromConfig(root), rng);
     const faces = naturals.map((n) => n.face);
     // The others of an advantage roll all missed: only the new die can land, so the best face is the result.
+    // A flat check has one d20 and the reroll replaces it: only the new die counts.
     const natural =
-      check.rollType === "disadvantage" && mode === "reroll"
-        ? Math.min(Math.max(...faces), drawn.face)
-        : Math.max(...faces, drawn.face);
+      mode === "reroll" && faces.length === 1
+        ? drawn.face
+        : check.rollType === "disadvantage" && mode === "reroll"
+          ? Math.min(Math.max(...faces), drawn.face)
+          : Math.max(...faces, drawn.face);
 
     const ac = check.attackConfig.ac ?? 0;
     let outcome: AttackSample["outcome"];
@@ -824,7 +827,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       ...drawn.dice.map((die) => ({ ...die, kept: false })),
       ...first.check.slice(rolled),
     ];
-    const finals = [...naturals.map((n) => n.index), rolled + drawn.dice.length - 1];
+    const newIndex = rolled + drawn.dice.length - 1;
+    const finals = mode === "reroll" && faces.length === 1 ? [newIndex] : [...naturals.map((n) => n.index), newIndex];
     const kept = finals.find((index) => dice[index].face === natural);
     if (kept !== undefined) dice[kept] = { ...dice[kept], kept: true };
     return attack.finishSample(outcome, natural, dice, rng, context);
