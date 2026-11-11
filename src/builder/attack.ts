@@ -8,8 +8,9 @@ import type { DiceQuery } from "../pmf/query";
 import { scaleValue } from "../pmf/sample";
 import { AmbiguousCritDoublingError } from "../parser/scaleDice";
 import type { ACBuilder } from "./ac";
-import { pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
-import type { RollSample, SampledDie } from "./sample";
+import { dieNodeFromConfig, naturalDieConfig, pmfFromRollBuilder, rerollablePool, resolveRootD20 } from "./ast";
+import { missRerollCheckExpression, missRerollOdds, missRerollOf } from "./miss-reroll";
+import { readCheckDice, sampleDie, type RollSample, type SampledDie } from "./sample";
 import { splitAtThreshold } from "./prob";
 import { checkExpression, rootDieExpression } from "./expression";
 import { requireFinite, rerollUpToArguments } from "./arguments";
@@ -23,7 +24,7 @@ import {
   RollBuilder,
   type RerollUpToOptions,
 } from "./roll";
-import type { AttackRange, AttackResolution, Check, CheckBuilder, RollConfig, RollType } from "./types";
+import type { AttackRange, AttackResolution, Check, CheckBuilder, MissRerollMode, RollConfig, RollType } from "./types";
 import type { ConditionOptions, Lasting, SaveGated } from "../turn/effects";
 import { isSaveGated, unpackSave } from "../turn/effects";
 import type { ContextualSource, RowCheck, RowContext } from "../turn/types";
@@ -525,6 +526,46 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
   }
 
   /**
+   * A missed attack roll is rolled again, once: Heroic Inspiration (`reroll`: the kept d20 is replaced and
+   * the new roll stands) or 2014 Lucky (`add-d20`, the default: one more d20, the best of every d20 rolled
+   * is kept). Exact in the PMF and in {@link sample}; see {@link ACBuilder.rerollMisses}. An attack that
+   * always hits has no miss: `this`. Throws for a check with no d20 natural roll.
+   */
+  rerollMisses(mode: MissRerollMode = "add-d20"): AttackBuilder {
+    const check = this.check;
+    if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit)) return this;
+    return this.withCheck((c) => ({ ...c, missReroll: mode }));
+  }
+
+  /**
+   * The outcome-labelled PMF over this attack's MISS branch once that miss's d20 is rolled again by `mode`:
+   * total mass P(miss) in `context`; the hit and crit parts carry the row's own hit and crit payload (natural-20
+   * damage at the reroll's own share), the rest stays the miss payload. Empty for an always-hit check.
+   *
+   * @throws if the check already rerolls its misses (`rerollMisses`).
+   */
+  missRerolled(mode: MissRerollMode, context?: RowContext, eps: number = 0): PMF {
+    const attack = context ? this.rollUnder(context) : this;
+    const check = attack.check;
+    if (missRerollOf(check) !== undefined) {
+      throw new Error("missRerolled() needs a check that does not already rerollMisses().");
+    }
+    if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit)) {
+      return PMF.empty(eps);
+    }
+    const odds = missRerollOdds(check, mode, eps);
+    const rerolled = odds.hit + odds.crit + odds.miss;
+    if (!(rerolled > 0)) return PMF.empty(eps);
+    const slices = attack.resolveWeighted(eps, attack.landingScale, {
+      pHit: odds.hit,
+      pCrit: odds.crit,
+      pMiss: odds.miss,
+      natural20Share: odds.crit > 0 ? Math.min(1, odds.natural20 / odds.crit) : 0,
+    });
+    return slices.pmf.scaleMass(rerolled);
+  }
+
+  /**
    * The one way to re-derive hit/crit/miss probabilities for an existing attack: `vsAC` and the
    * turn-level condition variants are both callers. Throws if this attack's check has no AC (an
    * `AlwaysHitBuilder`, or a crit-from-always-hit override) — there is nothing to rebind.
@@ -702,8 +743,24 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       else if (r + check.modifier + drawn.bonus < (check.attackConfig.ac ?? 0)) outcome = "miss";
       else outcome = check instanceof AlwaysCritBuilder || inCritRange ? "crit" : "hit";
     }
+    const mode = missRerollOf(check);
+    if (outcome === "miss" && mode !== undefined) {
+      return attack.sampleMissReroll({ outcome, check: checkDice, damage: [], total: 0 }, mode, rng, context);
+    }
+    return attack.finishSample(outcome, natural, checkDice, rng, context);
+  }
+
+  /** The payload of a sampled roll: what `outcome` deals (see {@link sample}), the check's `checkDice` carried along. */
+  private finishSample(
+    rolled: AttackSample["outcome"],
+    natural: number,
+    checkDice: SampledDie[],
+    rng: Rng,
+    context: RowContext | undefined
+  ): AttackSample {
+    let outcome = rolled;
     // `noCrit()`: the crit's weight lands as a hit (`resolveScaled`).
-    if (outcome === "crit" && attack.critEffect === null) outcome = "hit";
+    if (outcome === "crit" && this.critEffect === null) outcome = "hit";
 
     if (outcome === "miss") {
       const damage: SampledDie[] = [];
@@ -714,19 +771,63 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
         total += s.total;
         damage.push(...s.dice);
       };
-      if (attack.halfOnMissFlag) {
-        if (attack.hitEffect) draw(attack.pooled(attack.hitEffect));
-        for (const channel of attack.separateDamage) draw(channel);
+      if (this.halfOnMissFlag) {
+        if (this.hitEffect) draw(this.pooled(this.hitEffect));
+        for (const channel of this.separateDamage) draw(channel);
         total = scaleValue(total, 0.5, "floor");
       } else {
-        draw(attack.missEffect);
+        draw(this.missEffect);
       }
       return { outcome, check: checkDice, damage, total };
     }
-    const payload = attack.samplePayload(outcome, rng, context, outcome === "crit" && natural === 20);
+    const payload = this.samplePayload(outcome, rng, context, outcome === "crit" && natural === 20);
     const { base, separate } = payload;
     const total = scaleValue(base.total + separate.reduce((sum, s) => sum + s.total, 0), payload.scale, "floor");
     return { outcome, check: checkDice, damage: [...base.dice, ...separate.flatMap((s) => s.dice)], total, payload };
+  }
+
+  /**
+   * `first`, a sampled miss, with its d20 rolled again by `mode` (the bonus dice keep their faces): the
+   * new outcome, natural roll and payload. The new d20 is this check's own single die, rolled flat: its
+   * reroll of 1s and its minimum apply. `first`'s damage is dropped: a rerolled miss deals what the reroll lands as.
+   * The d20s it listed stay in `check`, dropped, and the new one follows them.
+   */
+  sampleMissReroll(first: AttackSample, mode: MissRerollMode, rng: Rng, context?: RowContext): AttackSample {
+    if (first.outcome !== "miss") throw new Error("sampleMissReroll() rerolls a sampled miss.");
+    const attack = context ? this.inContext(context) : this;
+    const check = attack.check;
+    const root = naturalDieConfig(check);
+    if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit) || root?.sides !== 20) {
+      throw new Error("sampleMissReroll() needs an attack check with a d20 natural roll.");
+    }
+    const { naturals, bonus } = readCheckDice(check, first.check);
+    const drawn = sampleDie(dieNodeFromConfig(root), rng);
+    const faces = naturals.map((n) => n.face);
+    // The others of an advantage roll all missed: only the new die can land, so the best face is the result.
+    const natural =
+      check.rollType === "disadvantage" && mode === "reroll"
+        ? Math.min(Math.max(...faces), drawn.face)
+        : Math.max(...faces, drawn.face);
+
+    const ac = check.attackConfig.ac ?? 0;
+    let outcome: AttackSample["outcome"];
+    if (natural === 1) outcome = "miss";
+    else if (natural === 20) outcome = "crit";
+    else if (natural + check.modifier + bonus < ac) outcome = "miss";
+    else outcome = check instanceof AlwaysCritBuilder || natural >= check.critThreshold ? "crit" : "hit";
+
+    // The d20s as rolled, dropped, then the new one, then the bonus dice; the kept d20 is the first final showing `natural`.
+    const listed = first.check.findIndex((die) => die.sides !== 20);
+    const rolled = listed === -1 ? first.check.length : listed;
+    const dice: SampledDie[] = [
+      ...first.check.slice(0, rolled).map((die) => ({ ...die, kept: false })),
+      ...drawn.dice.map((die) => ({ ...die, kept: false })),
+      ...first.check.slice(rolled),
+    ];
+    const finals = [...naturals.map((n) => n.index), rolled + drawn.dice.length - 1];
+    const kept = finals.find((index) => dice[index].face === natural);
+    if (kept !== undefined) dice[kept] = { ...dice[kept], kept: true };
+    return attack.finishSample(outcome, natural, dice, rng, context);
   }
 
   /**
@@ -855,6 +956,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
           ? attackConfig.advantageDice
           : 2,
       critOnHit: check instanceof AlwaysCritBuilder,
+      missReroll: missRerollOf(check),
     };
   }
 
@@ -876,6 +978,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // it instead of `new ACBuilder(...)` avoids importing the `ACBuilder` value here.
     let ac = new RollBuilder(rewritten).ac(next.ac).critOn(next.critThreshold);
     if (next.advantageDice === 3) ac = ac.threeDiceAdvantage();
+    if (next.missReroll !== undefined) ac = ac.rerollMisses(next.missReroll);
     return next.critOnHit ? ac.alwaysCrits() : ac;
   }
 
@@ -987,7 +1090,8 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     const naturalRoll = rootDieExpression(check);
     let checkPart: string;
     if (check instanceof AlwaysCritBuilder && !check.fromAlwaysHit) {
-      checkPart = `(${checkExpression(check)} AC ${check.attackConfig.ac ?? 0})`;
+      const total = missRerollOf(check) === undefined ? checkExpression(check) : missRerollCheckExpression(check);
+      checkPart = `(${total} AC ${check.attackConfig.ac ?? 0})`;
     } else if (check instanceof AlwaysHitBuilder || check instanceof AlwaysCritBuilder) {
       checkPart = naturalRoll ?? check.toExpression();
     } else {
@@ -1094,6 +1198,15 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       pmiss += pr * below;
     }
 
+    // `rerollMisses`: a miss is rolled again, and the reroll lands as a hit or a crit, or misses for good.
+    const mode = missRerollOf(check);
+    if (mode !== undefined) {
+      const rerolled = missRerollOdds(check, mode, eps);
+      phit += rerolled.hit;
+      pcrit += rerolled.crit;
+      pmiss = rerolled.miss;
+    }
+
     return { pSuccess: phit + pcrit, pHit: phit, pCrit: pcrit, pMiss: pmiss };
   }
 
@@ -1107,11 +1220,29 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
    * roll (2: a vulnerable target, see {@link under}). The miss and every other field are unscaled.
    */
   private resolveScaled(eps: number, landingScale: 1 | 2): AttackResolution {
-    const {
-      pHit,
-      pCrit,
-      pMiss: pmiss,
-    } = this.resolveProbabilities(this.check, eps);
+    const weights = this.resolveProbabilities(this.check, eps);
+    // The kept d20 shows a natural 20 on the as-rolled share of the crits, and on the reroll's own share.
+    const check = this.check;
+    const mode = missRerollOf(check);
+    const rerolled = mode === undefined || check instanceof AlwaysHitBuilder ? 0 : missRerollOdds(check, mode, eps).natural20;
+    const natural20 = resolveRootD20(check).pAt(20) + rerolled;
+    return this.resolveWeighted(eps, landingScale, {
+      pHit: weights.pHit,
+      pCrit: weights.pCrit,
+      pMiss: weights.pMiss,
+      natural20Share: weights.pCrit > 0 ? Math.min(1, natural20 / weights.pCrit) : 0,
+    });
+  }
+
+  /**
+   * The attack's slices at the given weights: `natural20Share` of the crit branch deals `plusNatural20Damage`.
+   * {@link resolveScaled} gives the weights of a roll; {@link missRerolled} those of a rerolled miss.
+   */
+  private resolveWeighted(
+    eps: number,
+    landingScale: 1 | 2,
+    { pHit, pCrit, pMiss: pmiss, natural20Share }: { pHit: number; pCrit: number; pMiss: number; natural20Share: number }
+  ): AttackResolution {
 
     const toEffectPMF = (effect: ActionEffect): PMF =>
       effect instanceof ParsedRollBuilder
@@ -1158,7 +1289,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // so that share is a mix inside the crit channels. A forced crit on a 2..19 is the other share.
     const withNatural20 = (channels: PMF): PMF => {
       if (this.natural20Damage.length === 0 || !(pcrit > 0)) return channels;
-      const share = Math.min(1, resolveRootD20(this.check).pAt(20) / pcrit);
+      const share = natural20Share;
       if (share <= 0) return channels;
       const dealt = PMF.convolveMany([channels, convolveChannels(this.natural20Damage)], eps);
       return share >= 1 ? dealt : channels.scaleMass(1 - share).add(dealt.scaleMass(share));

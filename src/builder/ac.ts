@@ -1,12 +1,13 @@
 import { PMF } from "../pmf/pmf";
 import type { Rng } from "../common/rng";
 import { AttackBuilder } from "./attack";
-import { resolveRootD20 } from "./ast";
+import { naturalDieConfig, resolveRootD20 } from "./ast";
 import { sampleCheckDice, type CheckDice } from "./sample";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
 import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";
-import type { AttackRange, RollConfig, RollType } from "./types";
+import { missRerollCheckExpression } from "./miss-reroll";
+import type { AttackRange, MissRerollMode, RollConfig, RollType } from "./types";
 
 export interface AttackConfig {
   ac: number;
@@ -18,6 +19,8 @@ export interface AttackConfig {
   // `ranged()` / `melee()`: a row fact for a turn's condition rules keyed by range; the PMF does
   // not read it. Unset when neither was called.
   range?: AttackRange;
+  // `rerollMisses()`: a missed attack roll is rolled again, in the PMF and in `sample`. Unset when not called.
+  missReroll?: MissRerollMode;
 }
 
 /**
@@ -139,7 +142,24 @@ export class ACBuilder extends RollBuilder {
     const base = super.cacheKey();
     return base === null
       ? null
-      : `A|${this.attackConfig.ac}|${this.attackConfig.critThreshold}|${this.attackConfig.advantageDice}|${base}`;
+      : `A|${this.attackConfig.ac}|${this.attackConfig.critThreshold}|${this.attackConfig.advantageDice}|${base}${
+          this.attackConfig.missReroll === undefined ? "" : `|m=${this.attackConfig.missReroll}`
+        }`;
+  }
+
+  /**
+   * A missed attack roll is rolled again, once (Heroic Inspiration: `reroll`; 2014 Lucky: `add-d20`, the default).
+   * The new d20 is this check's own single die, rolled flat; the bonus dice keep their faces. Exact in the PMF
+   * (see {@link missRerollOdds}); `toExpression` spells it where the grammar can. The receiver is unchanged.
+   *
+   * @throws if the natural roll is not a d20.
+   */
+  rerollMisses(mode: MissRerollMode = "add-d20"): ACBuilder {
+    const root = naturalDieConfig(this);
+    if (root === undefined || root.sides !== 20) {
+      throw new Error("rerollMisses() needs a check with a d20 natural roll: only a d20 is rolled again.");
+    }
+    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, missReroll: mode });
   }
 
   /** Sets the crit threshold: a natural roll at or above it is a crit. */
@@ -168,6 +188,7 @@ export class ACBuilder extends RollBuilder {
         critThreshold: this.attackConfig.critThreshold,
         ac: this.attackConfig.ac,
         range: this.attackConfig.range,
+        missReroll: this.attackConfig.missReroll,
       },
       false
     );
@@ -179,7 +200,8 @@ export class ACBuilder extends RollBuilder {
    * bonus die.
    */
   override toExpression(): string {
-    return `(${checkExpression(this)} AC ${this.attackConfig.ac})`;
+    const check = this.attackConfig.missReroll === undefined ? checkExpression(this) : missRerollCheckExpression(this);
+    return `(${check} AC ${this.attackConfig.ac})`;
   }
 
   /**
@@ -229,6 +251,7 @@ export class ACBuilder extends RollBuilder {
       critThreshold: this.attackConfig.critThreshold,
       advantageDice: this.attackConfig.advantageDice,
       range: this.attackConfig.range,
+      missReroll: this.attackConfig.missReroll,
     };
     return new ACBuilder(baseCopy, newConfig.ac, newConfig);
   }

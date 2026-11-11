@@ -69,6 +69,39 @@ export function sampleCheckDice(check: RollBuilder, rng: Rng): CheckDice {
   return { check: dice, natural, bonus };
 }
 
+/**
+ * What a sampled check drew, read back from its dice (see {@link sampleCheckDice}): the final face of
+ * each d20 rolled (`index` into `dice`; a die its own `reroll` rolled again counts once, as its new
+ * face) and the bonus total, penalty dice subtracted. Refuses bonus dice that explode or keep, whose dice
+ * cannot be told apart from the list.
+ */
+export function readCheckDice(
+  check: RollBuilder,
+  dice: readonly SampledDie[]
+): { naturals: { index: number; face: number }[]; bonus: number } {
+  // A die rolled again by its own `reroll` is listed twice, and the second one carries the flag.
+  const isFinal = (index: number): boolean => dice[index + 1]?.reroll !== true;
+  const naturals: { index: number; face: number }[] = [];
+  let at = 0;
+  for (; at < dice.length && dice[at].sides === 20; at++) {
+    if (isFinal(at)) naturals.push({ index: at, face: dice[at].face });
+  }
+  let bonus = 0;
+  for (const config of check.getBonusDiceConfigs()) {
+    if (config.explode > 0 || config.explodePoolBudget > 0 || config.keep !== undefined || config.bestOf > 1) {
+      throw new Error("A sampled check's bonus dice cannot be read back: one explodes or keeps.");
+    }
+    const sign = config.isSubtraction === true || config.count < 0 ? -1 : 1;
+    for (let rolled = 0; rolled < Math.floor(Math.abs(config.count)); at++) {
+      if (at >= dice.length) throw new Error("A sampled check has fewer bonus dice than its check rolls.");
+      if (!isFinal(at)) continue;
+      bonus += sign * dice[at].face;
+      rolled++;
+    }
+  }
+  return { naturals, bonus };
+}
+
 /** Gains and scores compare on the same grid as `reroll-pool.ts`, so float noise never flips a choice. */
 const GRID = 1e9;
 
