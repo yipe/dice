@@ -376,10 +376,16 @@ function needsNormalizing(totalMass: number, eps: number): boolean {
   return Math.abs(totalMass - 1) > eps && totalMass > 0;
 }
 
-/** A verb's options with `of` as the list a spec holds: `of: "finesse"` is `of: ["finesse"]`. */
-function listed<T extends { of?: string | readonly string[] }>(options: T): Omit<T, "of"> & { of?: readonly string[] } {
-  const { of, ...rest } = options;
-  return of === undefined ? rest : { ...rest, of: typeof of === "string" ? [of] : of };
+/** A verb's options with `of` (and `targetHas`) as the list a spec holds: `of: "finesse"` is `of: ["finesse"]`. */
+function listed<T extends { of?: string | readonly string[]; targetHas?: string | readonly string[] }>(
+  options: T
+): Omit<T, "of" | "targetHas"> & { of?: readonly string[]; targetHas?: readonly string[] } {
+  const { of, targetHas, ...rest } = options;
+  return {
+    ...rest,
+    ...(of === undefined ? {} : { of: typeof of === "string" ? [of] : of }),
+    ...(targetHas === undefined ? {} : { targetHas: typeof targetHas === "string" ? [targetHas] : targetHas }),
+  };
 }
 
 /**
@@ -911,7 +917,7 @@ export class Turn {
    */
   otherwise(
     damage: RiderDamage,
-    options: Omit<RiderOptions, "of"> = {}
+    options: Omit<RiderOptions, "of" | "targetHas"> = {}
   ): Turn {
     const last = this.state.last;
     if (last === null) {
@@ -964,7 +970,7 @@ export class Turn {
   onDiceMatch(
     of: readonly string[],
     damage: RiderDamage,
-    options: Omit<RiderOptions, "of"> = {}
+    options: Omit<RiderOptions, "of" | "targetHas"> = {}
   ): Turn {
     return this.rider({ ...options, damage, on: "dice-match", of });
   }

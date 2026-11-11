@@ -270,6 +270,8 @@ export interface RiderOptions {
   where?: Readonly<Record<string, readonly string[]>>;
   /** Attack ids whose own damage roll this call's dice join: damage only. See {@link Rider.joins}. */
   joins?: readonly string[];
+  /** One condition name or several (any-of): the rider lands only where the row's creature has one. See {@link ConditionSpec.targetHas}. */
+  targetHas?: string | readonly string[];
 }
 
 /**
@@ -332,6 +334,8 @@ export type Rider = (Trigger | { on: "any-crit"; of?: readonly string[]; max?: n
   joins?: readonly string[];
   /** For a rider named in `of`: the partner's attacks where its landing counts (default: all of them). */
   where?: Readonly<Record<string, readonly string[]>>;
+  /** Lands only where, in the state the landing row rolled in, its creature has at least one of these conditions. See {@link ConditionSpec.targetHas}. */
+  targetHas?: readonly string[];
 };
 
 /** How an attack is declared: `id` names it for `of`; `tag` groups it with others. */
@@ -466,6 +470,10 @@ export interface ConditionRule {
   attack?: { melee?: readonly AttackRuleModifier[]; ranged?: readonly AttackRuleModifier[] };
   /** Modifiers on the creature's saves, keyed by ability (its full name or three-letter form). */
   save?: Readonly<Partial<Record<AbilityName, readonly SaveRuleModifier[]>>>;
+  /** The creature's own attack rolls and ability checks. Neither is a row of a turn, so a turn never reads this; it is data for consumers. */
+  own?: { attack?: readonly ("advantage" | "disadvantage")[]; check?: readonly ("advantage" | "disadvantage")[] };
+  /** A non-negative integer taken off every D20 Test the creature makes (2024 Exhaustion: 2 × level). A turn reads it on the creature's saves. */
+  d20Penalty?: number;
   /** The condition the creature is left with when this one ends early (Unconscious leaves Prone). */
   onEnd?: { condition: string; rule: ConditionRule };
 }
@@ -518,6 +526,13 @@ export interface ConditionSpec {
   where?: Readonly<Record<string, readonly string[]>>;
   /** In `[0, 1]`; defaults to 1. */
   chance?: number;
+  /**
+   * Applies only where, in the state the landing row rolled in (before its own landing applies anything), the row's
+   * creature has at least one of these conditions: a condition effect (`condition(name, rule)`) or an `onEnd` left
+   * behind, from `atStart` or any grant. A name nothing in the turn applies never opens the gate. Not on
+   * `first-hit`, `first-crit` or `first-miss` (`unsupported-trigger`).
+   */
+  targetHas?: readonly string[];
   /** How a save row among `of` lands the condition: on a failed save or on damage dealt (see {@link SaveLanding}). */
   landing?: SaveLanding;
   /** The landing must deal damage of this type. */

@@ -114,6 +114,9 @@ export const shapes: Array<[string, SyntheticTurn]> = [
     `the target starts ${name}`,
     { ...MIXED_ROWS, startingCondition: name, riders: [sneak()] }
   ]),
+  // The SRD conditions the dnd5e RULES gained: attack and save cells the coverage test reads.
+  ['Invisible from the start: melee and ranged attacks and saves', { ...MIXED_ROWS, startingCondition: 'invisible' }],
+  ['Petrified from the start: melee and ranged attacks and saves', { ...MIXED_ROWS, startingCondition: 'petrified' }],
   [
     'a starting condition with grants adding to it, riders and a second creature that has no starting condition',
     {
