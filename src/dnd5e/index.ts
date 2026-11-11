@@ -57,7 +57,11 @@ export const RULES: Readonly<Record<Exclude<ConditionName, "grappled" | "exhaust
   frightened: { own: { attack: ["disadvantage"], check: ["disadvantage"] } },
   /** "You can't take any action, Bonus Action, or Reaction.": no roll modifier. */
   incapacitated: {},
-  /** "Attack rolls against you have Disadvantage, and your attack rolls have Advantage." (at any range) */
+  /**
+   * XPHB: "Attack rolls against you have Disadvantage, and your attack rolls have Advantage. If a creature can somehow
+   * see you, you don't gain this benefit against that creature." This is the rule for an attacker who cannot see the
+   * target. For an attacker with Blindsight, See Invisibility or the like, use {@link invisibleRule}.
+   */
   invisible: {
     attack: { melee: ["disadvantage"], ranged: ["disadvantage"] },
     own: { attack: ["advantage"] },
@@ -98,7 +102,8 @@ export const RULES: Readonly<Record<Exclude<ConditionName, "grappled" | "exhaust
 
 /**
  * Grappled. 2014: "speed becomes 0", which is no roll modifier (`{}`). 2024: "You have Disadvantage on attack rolls
- * against any target other than the grappler." A turn never reads `own`, so it is data for consumers.
+ * against any target other than the grappler." `own.attack` disadvantage does NOT apply to attacks against the
+ * grappler; the rule data cannot say so, and the turn engine never reads `own`, so consumers must apply that exception.
  */
 export function grappledRule(edition: Edition): ConditionRule {
   return edition === "2014" ? {} : { own: { attack: ["disadvantage"] } };
@@ -177,7 +182,15 @@ export function incapacitated(): ConditionEffect {
   return condition("incapacitated", RULES.incapacitated);
 }
 
-/** Invisible, as {@link RULES} has it. */
+/**
+ * The Invisible rule for one attacker. 2024: an attacker who can see the Invisible creature gets neither the
+ * disadvantage against it nor the Advantage it would have, so `{}`; otherwise {@link RULES}`.invisible`.
+ */
+export function invisibleRule(options: { attackerSees: boolean }): ConditionRule {
+  return options.attackerSees ? {} : RULES.invisible;
+}
+
+/** Invisible, as {@link RULES} has it (the attacker cannot see the creature; see {@link invisibleRule}). */
 export function invisible(): ConditionEffect {
   return condition("invisible", RULES.invisible);
 }
