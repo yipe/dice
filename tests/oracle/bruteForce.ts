@@ -1513,9 +1513,10 @@ function rerolledBranches(
   const chance = occurrenceChance(a)
   const { pMiss, pHit, pCrit } = attackLandingProbs(a, kind, critOnHit)
   const damage = keepHigher ? { ...a.damage, bestOfTwo: true } : a.damage
+  const critDamage = keepHigher && a.critDamage ? { ...a.critDamage, bestOfTwo: true } : a.critDamage
   const { hit, crit } = vulnerable
-    ? vulnerableDicePayloads(damage, a.critDamage, a.critDealsMax)
-    : dicePayloads(damage, a.critDamage, a.critDealsMax)
+    ? vulnerableDicePayloads(damage, critDamage, a.critDealsMax)
+    : dicePayloads(damage, critDamage, a.critDealsMax)
   const tagged = (branches: SourceBranch[], extra: Partial<SourceBranch> = {}): SourceBranch[] =>
     branches.map((branch) => ({ ...branch, ...extra, ...(vulnerable && branch.landing !== 'none' && branch.landing !== 'missDamage' ? { vulnerable: true } : {}) }))
   const missLanding: Landing = a.missDamage ? 'missDamage' : 'none'
