@@ -384,6 +384,20 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       rowDice = roll.dice;
       rowResult = roll.result;
 
+      // A first-miss reroll: the first unspent one rolls a miss again (the plan's variant for this state was picked by the same
+      // rule), and what it gives is the row's roll. The draws below are then the reroll's own.
+      const nextReroll = step.rerolls.find((each) => fired[each.slot] === null);
+      let rerolled: number | undefined;
+      if (nextReroll !== undefined && outcome === "miss" && attack !== undefined) {
+        const again = attack.builder.sampleMissReroll(attack.sample, nextReroll.mode, rng, roller.context);
+        attack = { builder: attack.builder, sample: again };
+        outcome = again.outcome;
+        ownTotal = again.total;
+        rowResult = again.outcome;
+        rowDice = [...traced(again.check, "attack", "you", step.id), ...traced(again.damage, "damage", "you", step.id)];
+        rerolled = nextReroll.slot;
+      }
+
       // A conversion: the first watched miss while it is unspent hits instead, a plain hit with
       // the row's hit payload rolled fresh (the d20s stand as rolled).
       if (step.converts && outcome === "miss" && attack !== undefined && fired[step.spendSlot] === null) {
@@ -400,7 +414,7 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
 
       // Which draws the dice could have come from: the outcome; the base dice's match where the
       // step tracks it; a save's class, or an attack's "dealt damage" kind, where the draws carry one.
-      let candidates = variant.filter((each) => each.outcome === outcome);
+      let candidates = variant.filter((each) => each.outcome === outcome && each.rerollSlot === rerolled);
       const matchTracked = candidates.some((each) => each.matched);
       let matched = attack !== undefined && matchTracked && matchedOf(attack.builder, attack.sample);
 
@@ -536,10 +550,11 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       const kind = step.updateKinds[index];
       codes[group] = advance(codes[group], kind === null || byKind === undefined ? outcome : byKind[kind], matched);
     });
-    if (spent || draw.fires.length !== 0) {
+    if (spent || draw.fires.length !== 0 || draw.rerollSlot !== undefined) {
       fired = [...fired];
       const landed: FireMode = outcome === "crit" ? "crit" : "hit";
       if (spent) fired[step.spendSlot] = landed;
+      if (draw.rerollSlot !== undefined) fired[draw.rerollSlot] = landed;
       for (const slot of draw.fires) fired[slot] = landed;
     }
     for (const app of step.grants) {

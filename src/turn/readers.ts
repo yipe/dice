@@ -521,7 +521,7 @@ export class ReaderTally {
     if (draw.outcome === "none") return;
     const step = this.steps[s];
     this.happened[s] += mass;
-    if (step.converts) {
+    if (step.converts || step.rerolls.length !== 0) {
       const own = draw.own ?? draw.slice;
       const weights = this.ownDraws[s];
       weights.set(own, (weights.get(own) ?? 0) + mass);
