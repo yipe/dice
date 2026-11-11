@@ -178,6 +178,20 @@ crit forced on a 2..19 (`alwaysCrits()`, a crit-on-hit grant) does not deal it, 
 d20 never does. The damage is added verbatim, never doubled, on top of the crit payload, outside the
 base payload (rerolls and a turn's substitute never touch it). `noCrit()` refuses it.
 
+### Rerolling a missed attack roll
+
+`rerollMisses(mode)` rolls a missed attack roll again, once. `mode` is `"add-d20"` (the default; 2014 Lucky: one more d20, the best of every d20 rolled is kept) or `"reroll"` (Heroic Inspiration: the kept d20 is replaced and the new roll stands; beside Disadvantage the other die still counts). The new d20 is the row's own single die: a halfling's reroll of 1s and a `minimum` apply, advantage does not. Bonus dice (Bless, Bane) keep their faces, so the odds are exact where a flat `d20.reroll(k)` is only a bound. Natural-20 damage rides the reroll's own natural 20s. `missRerolled(mode, context?)` is the outcome-labelled PMF over the miss branch (its mass is P(miss)).
+
+```ts
+const bless = d20.plus(5).plus(d4).ac(15);
+bless.rerollMisses("add-d20").onHit(1, d8).mean();                                              // 4.30875  (no reroll: 3.2625)
+d20.plus(6).ac(15).rerollMisses().onHit(1, d8).mean();                                          // 4.095
+d20.plus(5).plus(d4).withDisadvantage().ac(15).rerollMisses("reroll").onHit(1, d8).mean();      // 3.3868125
+d20.plus(5).plus(d4).withDisadvantage().ac(15).rerollMisses("add-d20").onHit(1, d8).mean();     // 4.60378125
+```
+
+`toExpression()` spells a flat check with plain bonus dice (`(d20 reroll d8 + 6 AC 15) * (1d8) crit (2d8)`); advantage, disadvantage, elven accuracy, a d20 minimum and over 400 bonus outcomes throw. `sample` reconstructs the bonus total from the first check, so it throws for bonus dice that explode or keep.
+
 ### Refused mix shapes
 
 **`&` shapes that are refused.** An `&` mix weights each side by its count of outcomes, so these
@@ -524,6 +538,16 @@ of its own, with its own conversion. It is a substitute: `fireProbability(id)` r
 a second one over the same attacks throws `duplicate-substitute`, and its `TurnSpec` form is
 `{ on: "first-miss", substitute: "hit", of }` in `substitutes`.
 
+### Once per turn: reroll the first miss
+
+`turn([r7, r7]).onFirstHit(roll(2, d6)).rerollFirstMiss()` (two `+7 vs 16, 1d8+4` swings): mean 21.156 (17.02 without), `fireProbability` 0.64. Its `TurnSpec` form is `{ on: "first-miss", substitute: "reroll", mode?: "reroll" | "add-d20", of? }` in `substitutes`.
+
+- `reroll` (Heroic Inspiration): the kept d20 is replaced and the new roll stands; the other dice still count (under disadvantage, the higher die). `add-d20` (2014 Lucky): one more d20, best kept.
+- Stacking: a miss is offered to the first unspent reroll, in declaration order. A reroll that still misses is final and is never offered to the next. Three `+6 vs 16, 1d10+3` rows, `reroll` then `add-d20`: 21.08143125 (`fireProbability` 0.833625, 0.42525); `reroll` alone 18.97644375.
+- A rerolled hit or crit is a landing for every rider, grant and first-hit transform: `[r7, r7]` with `onFirstHit(keepBestDamage())` is 11.78982421875, and 15.32808984375 with the reroll.
+- A rerolled row's marginal reads its own draws, not the first roll's.
+- Refused: a `hit` conversion beside a reroll, or two first-hit transforms on one source (`duplicate-substitute`); a `below` policy beside any reroll in the turn, and any policy on a reroll (`unsupported-policy`); `mode` on another substitute (`unsupported-trigger`); a row that already has `rerollMisses` (`unsupported-trigger`); a save row (`not-an-attack`); a reroll with an empty `of` (`unknown-id`).
+
 ### Conditions: advantage, disadvantage and crits granted by earlier attacks
 
 The same verbs take a **grant** — a modifier with a lifetime — for the attack rolls after it:
@@ -819,9 +843,10 @@ const fromUI = Turn.from({
 ## Conditions: what the target has, and what it gets
 
 A **condition** is a rule plus a lifetime: what it does to the rows that read it (advantage on attacks, a crit on
-every melee hit, an automatic failure on STR saves) and when it ends. `@yipe/dice/dnd5e` names the six the rules
-use (`blinded`, `paralyzed`, `prone`, `restrained`, `stunned`, `unconscious`) and `condition(name, rule)` takes any
-other. Some rules depend on the row, so rows say what they are: `melee()` / `ranged()` on an attack (Prone gives
+every melee hit, an automatic failure on STR saves) and when it ends. `@yipe/dice/dnd5e` names the SRD conditions
+(`blinded`, `charmed`, `deafened`, `frightened`, `incapacitated`, `invisible`, `paralyzed`, `petrified`, `poisoned`,
+`prone`, `restrained`, `stunned`, `unconscious`, plus `grappled` and `exhaustion`, which depend on the edition) and
+`condition(name, rule)` takes any other. See [SRD conditions](#srd-conditions). Some rules depend on the row, so rows say what they are: `melee()` / `ranged()` on an attack (Prone gives
 melee advantage and ranged disadvantage), an ability on a save (Stunned fails STR and DEX saves): `ability("con")`
 on a DC check, or `saveDC(15, { con: 2 })` from `@yipe/dice/dnd5e` for a trigger's save. Beside
 conditions sit plain effects on the target: `vulnerability()` for the next hit, and `saveDisadvantage()` /
@@ -1049,6 +1074,58 @@ or `strength`, in a save and in a rule's `save` keys alike.
 | `conditionIds`                | the turn's condition ids, declared and attached, in order                                   |
 | `peakStates`                  | the most states the walk held after any step                                                |
 
+### SRD conditions
+
+`RULES` (from `@yipe/dice/dnd5e`); PHB and XPHB agree unless noted. `own` is the creature's own attack rolls and ability checks: no row of a turn is one, so a turn never reads it (it is data for consumers).
+
+| Name | Rule | RAW |
+| --- | --- | --- |
+| blinded | `attack` advantage (melee, ranged); `own.attack`: disadvantage | "Attack rolls against you have Advantage, and your attack rolls have Disadvantage." |
+| charmed | `{}` | "You can't attack the charmer …" |
+| deafened | `{}` | "You can't hear …" |
+| frightened | `own.attack`, `own.check`: disadvantage | "You have Disadvantage on ability checks and attack rolls while the source of fear is within line of sight." |
+| incapacitated | `{}` | "You can't take any action, Bonus Action, or Reaction." |
+| invisible | `attack` disadvantage (melee, ranged); `own.attack`: advantage | "Attack rolls against you have Disadvantage, and your attack rolls have Advantage." |
+| paralyzed, stunned, unconscious | unchanged | |
+| petrified | `attack` advantage; Strength and Dexterity saves `autoFail` | "Attack rolls against you have Advantage … You automatically fail Strength and Dexterity saving throws." Resistance to all damage is not modelled: a rule changes rolls, not the damage scale. |
+| poisoned | `own.attack`, `own.check`: disadvantage | "You have Disadvantage on attack rolls and ability checks." |
+| prone | `attack` melee advantage, ranged disadvantage; `own.attack`: disadvantage | "You have Disadvantage on attack rolls." |
+| restrained | `attack` advantage; Dexterity `saveDisadvantage`; `own.attack`: disadvantage | "your attack rolls have Disadvantage" |
+
+By edition, as functions:
+
+- `grappledRule("2014")` is `{}` (speed only). `grappledRule("2024")` is `own.attack`: disadvantage ("against any target other than the grappler").
+- `exhaustionRule(level, edition)`, level 1 to 6 (`RangeError` otherwise).
+  - 2014 (cumulative): level 1 and up, `own.check` disadvantage; level 3 and up, `own.attack` disadvantage and `saveDisadvantage` on all six saves.
+  - 2024: `d20Penalty = 2 × level`.
+  - Speed, hit point maximum and death (levels 2, 4, 5, 6) are not roll effects and are not modelled.
+- Effects: `charmed()`, `deafened()`, `frightened()`, `incapacitated()`, `invisible()`, `petrified()`, `poisoned()`, `grappled(edition)`, `exhaustion(level, edition)`.
+
+A condition whose rule changes no roll (charmed, deafened, frightened, incapacitated, poisoned: no `attack`, `save` or `d20Penalty`) is not read by any attack, so it never splits the walk's states and its `fireProbability` is 0.
+
+Pins (`ranged` and `sword` are `d20.plus(7).ac(16)` with `1d8 + 4`): `turn([sword]).atStart(invisible())` is 3.07125; `turn([ranged]).atStart(petrified())` is 7.57875; `turn([sword]).atStart(frightened())` is 5.325 (no row changes).
+
+### `d20Penalty`
+
+A non-negative integer on a `ConditionRule`, taken off every D20 Test the creature makes (2024 Exhaustion). A turn reads it on the creature's saves, as penalty dice of one side. A rule with a `d20Penalty` beside `attack` or `save` modifiers is `unsupported-trigger` (the penalty would be read as penalty dice and the modifiers silently dropped; give the modifiers to another rule). A negative or fractional penalty is a `RangeError`.
+
+`d20.plus(3).dc(15).ability("con").onSaveFailure(roll(8, d6)).saveHalf()`: 21.5875; `.atStart(exhaustion(2, "2024"))`: 24.4375; `.atStart(exhaustion(3, "2014"))` (disadvantage): 25.114375.
+
+### `targetHas`
+
+On riders (`RiderOptions.targetHas`, `Rider.targetHas`) and conditions (`ConditionSpec.targetHas`). One name or a list; a list is any-of. The call lands (a rider) or applies (a grant) only where, in the state the landing row rolled in, the row's creature has at least one of these conditions: a condition effect (`condition(name, rule)`) or an `onEnd` left behind, from `atStart` or any grant. The state is read before the row's own landing applies anything: a Prone applied by this very hit does not gate this hit's rider. A name nothing in the turn applies never opens the gate. The gate reads the landing row's own creature only.
+
+- Riders: `every-hit` and `first-hit` (`first-hit` lands on the first landing the gate opens). A closed gate spends nothing, not a `max` either.
+- Grants: `every-hit`, `any-crit`, `any-miss`. On `first-hit`, `first-crit` or `first-miss` it is `unsupported-trigger`.
+- Refused (`unsupported-trigger`): any other rider trigger; a rider whose payload rolls an attack; a rider that watches another rider, is named by another entry or joins a row's roll. `targetHas: []` or a non-string name is `non-string-id`.
+- `fireProbability(rider)` of a gated rider is P(it landed at least once).
+
+Examples (`sword = d20.plus(7).ac(16).melee().onHit(roll(1, d8).plus(4))`):
+
+1. Ominous Strikes. `fear = d20.plus(2).dc(15).ability("wis").onSaveFailure(0)`; `turn([fear, sword, sword]).onEveryHit(frightened().untilEndOfTurn(), { of: "fear", landing: "fail" }).onEveryHit(flat(4), { of: ["attack 2", "attack 3"], targetHas: "frightened" })`: mean 13.53, `fireProbability` 0.504. Started frightened (`atStart(frightened())`): 15.45, the ungated rider.
+2. Topple, then a rider on Prone. `topple = sword.onEveryHit(prone().untilEndOfTurn(), { save: saveDC(15, { con: 3 }) })`; `turn([topple, sword]).onEveryHit(roll(1, d6), { of: "attack 2", targetHas: "prone" })`: mean 12.47655, `fireProbability` 0.2772. With `of` both attacks it is the same turn: attack 1's own Prone is not read.
+3. A gated grant: `turn([topple, sword, sword]).onEveryHit(critOnHit().untilEndOfTurn(), { of: "attack 2", targetHas: "prone" })`: 18.3886695.
+
 ### Errors
 
 | Code                        | Cause                                                              | Fix                                                        |
@@ -1059,6 +1136,9 @@ or `strength`, in a save and in a rule's `save` keys alike.
 | `too-many-states`           | more effects live at once than the walk holds, or past `stateLimit` | drop or scope effects (`.to`, `of`), or raise `stateLimit(n)` |
 | `dealing-joint-unsupported` | the joint `pmf` of a turn with `dealing`                           | read `mean()` or `marginal(id)` instead                    |
 | `no-rebindable-source`      | an effect reaches a row with no check to re-derive (a bare PMF, a list of payloads), or a rider `joins` a row whose source does not pool rider dice | scope the effect with `.to(...)`, or make the row a `ContextualSource` (for `joins`, one whose `under(context)` rolls `context.joined`) |
+| `unsupported-trigger`       | a `targetHas` on a trigger or payload it cannot gate; a `d20Penalty` beside attack or save modifiers; `mode` on a substitute that is not a reroll | see `targetHas` and `d20Penalty` above |
+| `unsupported-policy`        | a `below` policy beside any reroll in the turn, or a policy on a reroll | drop the policy, or the reroll                              |
+| `duplicate-substitute`      | a `hit` conversion beside a reroll, or two first-hit transforms on one source (rerolls stack; one transform may sit beside them) | keep one                          |
 
 A rider's `joins` rolls its dice inside the row's own roll, so the row's source must pool them: a
 `ContextualSource` whose `under(context)` adds the dice of the riders in `context.joined`. The library's attack and
