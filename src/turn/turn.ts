@@ -754,8 +754,17 @@ export class Turn {
    * A per-source rider is one rider like any other: `fireProbability`, `otherwise` and
    * `not-fired` read it as they read a plain first hit.
    */
+  onFirstHit(effect: Transform, options?: Omit<FirstHitOptions, "targetHas">): Turn;
+  onFirstHit(effect: Effect, options?: FirstHitOptions): Turn;
   onFirstHit(effect: Effect | Transform, options: FirstHitOptions = {}): Turn {
     if (!isTransform(effect)) return this.addEffect("first-hit", effect, options);
+    if (options.targetHas !== undefined) {
+      throw new TurnSpecError(
+        "unsupported-trigger",
+        options.id ?? "",
+        'A transform is a once-per-turn substitute for the attack\'s own payload, so it takes no "targetHas".'
+      );
+    }
     if (options.save !== undefined || options.chance !== undefined || options.onSave !== undefined) {
       throw new Error("save, chance and onSave gate grants only; a transform is not gated by them.");
     }
