@@ -802,11 +802,14 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     }
     const { naturals, bonus, rolled } = readCheckDice(check, first.check);
     const drawn = sampleDie(dieNodeFromConfig(root), rng);
-    const faces = naturals.map((n) => n.face);
+    // A flat check has one d20 in play: an earlier reroll's new die, not the one it dropped.
+    const flat = check.rollType === "flat";
+    const current = naturals.filter((n) => first.check[n.index].kept);
+    const faces = (flat && current.length === 1 ? current : naturals).map((n) => n.face);
     // The others of an advantage roll all missed: only the new die can land, so the best face is the result.
-    // A flat check has one d20 and the reroll replaces it: only the new die counts.
+    // A flat check's reroll replaces its d20: only the new die counts.
     const natural =
-      mode === "reroll" && faces.length === 1
+      mode === "reroll" && flat
         ? drawn.face
         : check.rollType === "disadvantage" && mode === "reroll"
           ? Math.min(Math.max(...faces), drawn.face)
@@ -822,11 +825,11 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     // The d20s as rolled, dropped, then the new one, then the bonus dice; the kept d20 is the first final showing `natural`.
     const dice: SampledDie[] = [
       ...first.check.slice(0, rolled).map((die) => ({ ...die, kept: false })),
-      ...drawn.dice.map((die) => ({ ...die, kept: false })),
+      ...drawn.dice.map((die) => ({ ...die, kept: false, missReroll: true as const })),
       ...first.check.slice(rolled),
     ];
     const newIndex = rolled + drawn.dice.length - 1;
-    const finals = mode === "reroll" && faces.length === 1 ? [newIndex] : [...naturals.map((n) => n.index), newIndex];
+    const finals = mode === "reroll" && flat ? [newIndex] : [...naturals.map((n) => n.index), newIndex];
     const kept = finals.find((index) => dice[index].face === natural);
     if (kept !== undefined) dice[kept] = { ...dice[kept], kept: true };
     return attack.finishSample(outcome, natural, dice, rng, context);

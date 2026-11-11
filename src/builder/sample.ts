@@ -28,6 +28,8 @@ export interface SampledDie {
   face: number;
   kept: boolean;
   reroll?: true;
+  /** A d20 a miss reroll added after the natural roll (see `sampleMissReroll`): part of the natural block. */
+  missReroll?: true;
 }
 
 export interface RollSample {
@@ -77,7 +79,7 @@ const rollsPerDie = (rollType: string | undefined): number =>
  * What a sampled check drew, read back from its dice (see {@link sampleCheckDice}): the final face of
  * each d20 rolled (`index` into `dice`; a die its own `reroll` rolled again counts once, as its new
  * face), the bonus total, penalty dice subtracted (a bonus die rolled with advantage counts its
- * `kept` face), and `rolled`, the number of listed dice the natural roll took. Refuses bonus dice
+ * `kept` face), and `rolled`, the number of listed dice the natural roll took, with the d20s earlier miss rerolls added. Refuses bonus dice
  * that explode or keep, whose dice cannot be told apart from the list.
  */
 export function readCheckDice(
@@ -91,6 +93,10 @@ export function readCheckDice(
   // The natural roll lists exactly its own dice; a following d20 is a bonus die.
   const naturalRolls = naturalDieConfig(check) ? rollsPerDie(check.rollType) : 0;
   for (; at < dice.length && naturals.length < naturalRolls; at++) {
+    if (isFinal(at)) naturals.push({ index: at, face: dice[at].face });
+  }
+  // Each earlier miss reroll inserted its d20 right after the natural dice.
+  for (; at < dice.length && dice[at].missReroll === true; at++) {
     if (isFinal(at)) naturals.push({ index: at, face: dice[at].face });
   }
   const rolled = at;
