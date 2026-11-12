@@ -285,9 +285,17 @@ export function resolve(node: ExpressionNode, eps: number = defaultEps): PMF {
       }
 
       case "rerollUpTo": {
+        // The cache key (`getASTSignature`) sorts a pool's terms as it sorts a sum's, but `rerollUpToPartialPMF` walks each side's dice
+        // in the order it is given and its float sums do not associate bit for bit: hand it the dice in the key's own order, as a sum
+        // folds its terms (#54), so every pool that shares a key computes the same bits, cold or cached. `rerollUpToPMF` merges and
+        // sorts its kinds itself, so the order changes nothing there.
+        const termKey = ({ die, count, sign }: { die: DieNode; count: number; sign: 1 | -1 }): string =>
+          `${sign === -1 ? "-" : "+"}${getASTSignature({ type: "sum", count, child: die })}`;
         const kindsOf = (pool: ExpressionNode): { kinds: PoolDieKind[]; flat: number } => {
           const { groups, flat } = rerollablePool(pool);
-          const kinds = groups.map(({ die, count, sign }) => {
+          const keyed = groups.map((group) => ({ group, key: termKey(group) }));
+          keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+          const kinds = keyed.map(({ group: { die, count, sign } }) => {
             const single = resolveSingleDie(die, eps);
             const faces = single.support();
             return {

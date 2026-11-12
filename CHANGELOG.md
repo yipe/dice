@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-11-12
+
+### Fixed
+
+- **A `rerollUpTo` pool with dice rolled once no longer depends on which term order resolved it first.** The builder cache key for a
+  pool (`getASTSignature`) sorts the terms of its dice, as it does a sum's, but a pool rolled twice beside dice rolled once (Savage
+  Attacker with Piercer: `rerollUpTo(k, { rolls: 2, rolledOnce })`) walked each side's dice in the order they were written, and its
+  float sums do not associate bit for bit. Two pools with one key therefore computed different last bits, and the first one resolved
+  decided what every later one got back (seen as 1-ulp differences between two scorings of one turn). The dice are now walked in the
+  key's own order, as a sum's terms are folded since #54, so equal key means equal bits, cold or cached. **Results can change in the
+  last bit for such pools whose dice were not already written in key order**; they are now reproducible. A pool without `rolledOnce`
+  is bit for bit what it was.
+
 ## [0.25.0] - 2026-11-11
 
 ### Added
