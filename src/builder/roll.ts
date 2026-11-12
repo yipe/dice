@@ -29,7 +29,7 @@ import {
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import { sampleCheckDice, sampleNode, type CheckDice, type RollSample } from "./sample";
-import type { AttackRange, RollConfig, RollType } from "./types";
+import type { AttackRange, MissRerollMode, RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
 
@@ -1272,12 +1272,12 @@ export class AlwaysHitBuilder extends RollBuilder {
 }
 
 export class AlwaysCritBuilder extends RollBuilder {
-  readonly attackConfig: CritConfig & { ac?: number; range?: AttackRange };
+  readonly attackConfig: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollMode };
   readonly fromAlwaysHit: boolean;
 
   constructor(
     baseRoll: RollBuilder,
-    attackConfig?: CritConfig & { ac?: number; range?: AttackRange },
+    attackConfig?: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollMode },
     fromAlwaysHit: boolean = false
   ) {
     if (baseRoll.hasHiddenState()) {
@@ -1317,12 +1317,18 @@ export class AlwaysCritBuilder extends RollBuilder {
 
   override cacheKey(): string | null {
     const base = super.cacheKey();
-    return base === null ? null : `C|${this.fromAlwaysHit ? 1 : 0}|${this.attackConfig.critThreshold}|${this.attackConfig.ac ?? ""}|${base}`;
+    const mode = this.attackConfig.missReroll === undefined ? "" : `|m=${this.attackConfig.missReroll}`;
+    return base === null ? null : `C|${this.fromAlwaysHit ? 1 : 0}|${this.attackConfig.critThreshold}|${this.attackConfig.ac ?? ""}|${base}${mode}`;
   }
 
   critOn(critThreshold: number): AlwaysCritBuilder {
     requireFinite(critThreshold, "critOn() threshold");
-    const newConfig = { critThreshold, ac: this.attackConfig.ac, range: this.attackConfig.range };
+    const newConfig = {
+      critThreshold,
+      ac: this.attackConfig.ac,
+      range: this.attackConfig.range,
+      missReroll: this.attackConfig.missReroll,
+    };
     return new AlwaysCritBuilder(this, newConfig, this.fromAlwaysHit);
   }
 
@@ -1367,7 +1373,12 @@ export class AlwaysCritBuilder extends RollBuilder {
   override copy(): AlwaysCritBuilder {
     const baseCopy = new RollBuilder(this.getSubRollConfigs());
     const critThreshold = this.critThreshold;
-    const newConfig = { critThreshold, ac: this.attackConfig.ac, range: this.attackConfig.range };
+    const newConfig = {
+      critThreshold,
+      ac: this.attackConfig.ac,
+      range: this.attackConfig.range,
+      missReroll: this.attackConfig.missReroll,
+    };
     return new AlwaysCritBuilder(baseCopy, newConfig, this.fromAlwaysHit);
   }
 }

@@ -9,25 +9,85 @@ import type { ConditionRule, GrantSaveSpec } from "../turn/types";
 
 export type { AbilityName, ConditionEffect, ConditionRule, GrantSaveSpec };
 
-const proneRule: ConditionRule = { attack: { melee: ["advantage"], ranged: ["disadvantage"] } };
+const proneRule: ConditionRule = {
+  attack: { melee: ["advantage"], ranged: ["disadvantage"] },
+  own: { attack: ["disadvantage"] },
+};
+
+/** The rulebook edition a condition's text is read from. */
+export type Edition = "2014" | "2024";
+
+/** The SRD conditions {@link RULES}, {@link grappledRule} and {@link exhaustionRule} cover. */
+export type ConditionName =
+  | "blinded"
+  | "charmed"
+  | "deafened"
+  | "exhaustion"
+  | "frightened"
+  | "grappled"
+  | "incapacitated"
+  | "invisible"
+  | "paralyzed"
+  | "petrified"
+  | "poisoned"
+  | "prone"
+  | "restrained"
+  | "stunned"
+  | "unconscious";
 
 /**
- * Each condition as data. Unconscious that ends on damage leaves the creature Prone for the rest of the turn (`onEnd`).
+ * Each condition as data (PHB and XPHB agree unless noted). Unconscious that ends on damage leaves the creature Prone
+ * for the rest of the turn (`onEnd`). Grappled and Exhaustion differ by edition: see {@link grappledRule} and
+ * {@link exhaustionRule}.
  *
  * The `melee`/`ranged` keys stand for the rules' distance test: `melee` is an attack from within 5 feet of the
  * target, `ranged` one from farther away. A row declares which with `melee()` or `ranged()`; a reach attack made
  * from 10 feet is `ranged()` here (no advantage against a Prone target, no automatic crit against a Paralyzed one).
+ *
+ * `own` is the creature's own attack rolls and ability checks: no row of a turn is one, so a turn never reads it.
  */
-export const RULES: Readonly<
-  Record<"blinded" | "paralyzed" | "prone" | "restrained" | "stunned" | "unconscious", ConditionRule>
-> = {
-  blinded: { attack: { melee: ["advantage"], ranged: ["advantage"] } },
+export const RULES: Readonly<Record<Exclude<ConditionName, "grappled" | "exhaustion">, ConditionRule>> = {
+  /** "Attack rolls against you have Advantage, and your attack rolls have Disadvantage." */
+  blinded: { attack: { melee: ["advantage"], ranged: ["advantage"] }, own: { attack: ["disadvantage"] } },
+  /** "You can't attack the charmer …": no roll modifier. */
+  charmed: {},
+  /** "You can't hear …": no roll modifier. */
+  deafened: {},
+  /** "You have Disadvantage on ability checks and attack rolls while the source of fear is within line of sight." */
+  frightened: { own: { attack: ["disadvantage"], check: ["disadvantage"] } },
+  /** "You can't take any action, Bonus Action, or Reaction.": no roll modifier. */
+  incapacitated: {},
+  /**
+   * XPHB: "Attack rolls against you have Disadvantage, and your attack rolls have Advantage. If a creature can somehow
+   * see you, you don't gain this benefit against that creature." This is the rule for an attacker who cannot see the
+   * target. For an attacker with Blindsight, See Invisibility or the like, use {@link invisibleRule}.
+   */
+  invisible: {
+    attack: { melee: ["disadvantage"], ranged: ["disadvantage"] },
+    own: { attack: ["advantage"] },
+  },
   paralyzed: {
     attack: { melee: ["advantage", "critOnHit"], ranged: ["advantage"] },
     save: { strength: ["autoFail"], dexterity: ["autoFail"] },
   },
+  /**
+   * "Attack rolls against you have Advantage … You automatically fail Strength and Dexterity saving throws."
+   * Not modelled: "You have Resistance to all damage." A rule changes rolls, not the damage scale.
+   */
+  petrified: {
+    attack: { melee: ["advantage"], ranged: ["advantage"] },
+    save: { strength: ["autoFail"], dexterity: ["autoFail"] },
+  },
+  /** "You have Disadvantage on attack rolls and ability checks." */
+  poisoned: { own: { attack: ["disadvantage"], check: ["disadvantage"] } },
+  /** "You have Disadvantage on attack rolls." */
   prone: proneRule,
-  restrained: { attack: { melee: ["advantage"], ranged: ["advantage"] }, save: { dexterity: ["saveDisadvantage"] } },
+  /** "… your attack rolls have Disadvantage" */
+  restrained: {
+    attack: { melee: ["advantage"], ranged: ["advantage"] },
+    save: { dexterity: ["saveDisadvantage"] },
+    own: { attack: ["disadvantage"] },
+  },
   stunned: {
     attack: { melee: ["advantage"], ranged: ["advantage"] },
     save: { strength: ["autoFail"], dexterity: ["autoFail"] },
@@ -39,6 +99,38 @@ export const RULES: Readonly<
     onEnd: { condition: "prone", rule: proneRule },
   },
 };
+
+/**
+ * Grappled. 2014: "speed becomes 0", which is no roll modifier (`{}`). 2024: "You have Disadvantage on attack rolls
+ * against any target other than the grappler." `own.attack` disadvantage does NOT apply to attacks against the
+ * grappler; the rule data cannot say so, and the turn engine never reads `own`, so consumers must apply that exception.
+ */
+export function grappledRule(edition: Edition): ConditionRule {
+  return edition === "2014" ? {} : { own: { attack: ["disadvantage"] } };
+}
+
+const SAVE_ABILITIES = ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"] as const;
+
+/**
+ * Exhaustion at `level` (1 to 6).
+ *
+ * - 2014 (cumulative table): level 1 and up, "Disadvantage on ability checks"; level 3 and up, "Disadvantage on
+ *   attack rolls and saving throws".
+ * - 2024: "When you make a D20 Test, the roll is reduced by 2 times your Exhaustion level" (`d20Penalty`).
+ *
+ * Speed, hit point maximum and death (levels 2, 4, 5, 6) are not roll effects and are not modelled.
+ */
+export function exhaustionRule(level: number, edition: Edition): ConditionRule {
+  if (!Number.isInteger(level) || level < 1 || level > 6) {
+    throw new RangeError(`exhaustion level must be an integer from 1 to 6, got ${level}`);
+  }
+  if (edition === "2024") return { d20Penalty: 2 * level };
+  if (level < 3) return { own: { check: ["disadvantage"] } };
+  return {
+    own: { attack: ["disadvantage"], check: ["disadvantage"] },
+    save: Object.fromEntries(SAVE_ABILITIES.map((a) => [a, ["saveDisadvantage"] as const])),
+  };
+}
 
 /** Blinded, as {@link RULES} has it: `blinded().untilEndOfTurn()`. */
 export function blinded(): ConditionEffect {
@@ -68,6 +160,59 @@ export function stunned(): ConditionEffect {
 /** Unconscious, as {@link RULES} has it; `untilDamaged()` leaves the creature Prone. */
 export function unconscious(): ConditionEffect {
   return condition("unconscious", RULES.unconscious);
+}
+
+/** Charmed, as {@link RULES} has it. */
+export function charmed(): ConditionEffect {
+  return condition("charmed", RULES.charmed);
+}
+
+/** Deafened, as {@link RULES} has it. */
+export function deafened(): ConditionEffect {
+  return condition("deafened", RULES.deafened);
+}
+
+/** Frightened, as {@link RULES} has it. */
+export function frightened(): ConditionEffect {
+  return condition("frightened", RULES.frightened);
+}
+
+/** Incapacitated, as {@link RULES} has it. */
+export function incapacitated(): ConditionEffect {
+  return condition("incapacitated", RULES.incapacitated);
+}
+
+/**
+ * The Invisible rule for one attacker. 2024: an attacker who can see the Invisible creature gets neither the
+ * disadvantage against it nor the Advantage it would have, so `{}`; otherwise {@link RULES}`.invisible`.
+ */
+export function invisibleRule(options: { attackerSees: boolean }): ConditionRule {
+  return options.attackerSees ? {} : RULES.invisible;
+}
+
+/** Invisible, as {@link RULES} has it (the attacker cannot see the creature; see {@link invisibleRule}). */
+export function invisible(): ConditionEffect {
+  return condition("invisible", RULES.invisible);
+}
+
+/** Petrified, as {@link RULES} has it. */
+export function petrified(): ConditionEffect {
+  return condition("petrified", RULES.petrified);
+}
+
+/** Poisoned, as {@link RULES} has it. */
+export function poisoned(): ConditionEffect {
+  return condition("poisoned", RULES.poisoned);
+}
+
+/** Grappled for `edition`: `condition("grappled", grappledRule(edition))`. */
+export function grappled(edition: Edition): ConditionEffect {
+  return condition("grappled", grappledRule(edition));
+}
+
+/** Exhaustion at `level` for `edition`: `condition("exhaustion", exhaustionRule(level, edition))`. */
+export function exhaustion(level: number, edition: Edition): ConditionEffect {
+  return condition("exhaustion", exhaustionRule(level, edition));
 }
 
 /**

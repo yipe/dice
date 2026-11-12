@@ -16,15 +16,9 @@ function enumerated(attacker: number, defender: number): number {
 }
 
 describe("@yipe/dice/dnd5e", () => {
-  it("has the six conditions", () => {
-    expect(Object.keys(RULES).sort()).toEqual([
-      "blinded",
-      "paralyzed",
-      "prone",
-      "restrained",
-      "stunned",
-      "unconscious",
-    ]);
+  it("has the SRD conditions", () => {
+    expect(Object.keys(RULES)).toHaveLength(13);
+    expect(Object.keys(RULES)).toEqual(expect.arrayContaining(["blinded", "paralyzed", "prone", "restrained", "stunned", "unconscious"]));
     expect(RULES.unconscious.onEnd).toEqual({ condition: "prone", rule: RULES.prone });
   });
 

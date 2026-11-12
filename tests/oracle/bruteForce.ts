@@ -143,6 +143,8 @@ export interface AttackSpec {
    * It does not turn a plain `advantage` base into three dice on its own, and a `rollOverride` replaces it like the rest.
    */
   elvenAccuracy?: boolean
+  /** Dice added to (sign 1) or taken off (sign -1) the d20 total, rolled once per attack and kept by a reroll of the d20 (Bless, Bane). */
+  toHitDice?: readonly { count: number; sides: number; sign: 1 | -1 }[]
 }
 
 /**
@@ -264,6 +266,13 @@ export interface RiderSpec {
    * smite's, a rider of its own, so the flare lands there only where the smite does. The rider lands once (`max` 1).
    */
   alongside?: ReadonlyArray<{ rider: number; sources: readonly number[] }>
+  /**
+   * Any-of: the rider lands only where, in the state the row rolled in (before the row's own landing applies anything), the row's
+   * creature has at least one of these conditions (the starting condition, or a condition effect a grant put on it). RHW Ancient
+   * Might (Ominous Strikes): "When you hit a creature that has the Frightened condition with an attack roll, that attack deals extra
+   * damage". A landing the gate closes is no landing: it does not spend `max`.
+   */
+  targetHas?: readonly ConditionName[]
 }
 
 /**
@@ -311,11 +320,29 @@ export interface SyntheticTurn {
    * advantage) hits instead, as a plain hit; once per turn. A converted hit lands every rider and grant a hit lands.
    */
   convertFirstMiss?: { of: readonly number[] }
+  /**
+   * Turn-level first-miss rerolls, in declaration order. At an attack row that misses, the miss goes to the first entry that is
+   * unspent and lists the row in `of`; it is spent whatever the reroll gives, and the row's outcome is the reroll's. `reroll`
+   * replaces the kept d20 (the other dice still count; under disadvantage the higher die still counts); `add-d20` rolls one more
+   * and keeps the best. A rerolled hit or crit is a landing like any other. A rerolled miss is final.
+   */
+  rerollFirstMiss?: readonly { of: readonly number[]; mode: 'reroll' | 'add-d20' }[]
+  /** Savage Attacker: the first landing among `of` rolls its payload twice and keeps the higher total (the rest roll once). */
+  keepHigherFirstHit?: { of: readonly number[] }
   /** The primary target (creature 0) has this condition from the start of the turn, for certain. Not Unconscious, which a damaging row would end. */
   startingCondition?: StartingConditionName
 }
 
-export type ConditionName = 'blinded' | 'paralyzed' | 'prone' | 'restrained' | 'stunned' | 'unconscious'
+export type ConditionName =
+  | 'blinded'
+  | 'frightened'
+  | 'invisible'
+  | 'paralyzed'
+  | 'petrified'
+  | 'prone'
+  | 'restrained'
+  | 'stunned'
+  | 'unconscious'
 /** A condition the target can start the turn with: all but Unconscious, which the first damaging row ends. */
 export type StartingConditionName = Exclude<ConditionName, 'unconscious'>
 export type SaveAbilityName = 'strength' | 'dexterity' | 'constitution' | 'intelligence' | 'wisdom' | 'charisma'
@@ -413,6 +440,8 @@ export interface GrantSpec {
   save?: GrantSaveSpec
   chance?: number
   cap: 'unlimited' | 'once'
+  /** Any-of: the grant applies only where the row's creature has one of these conditions when the row rolled (see {@link RiderSpec.targetHas}). */
+  targetHas?: readonly ConditionName[]
   /**
    * A "you can" grant (Topple, Hill's Tumble, Trip, a Cunning Strike option): the player attempts it only when it helps the
    * turn, so the enumeration runs with each subset of the optional grants attempted and keeps the subset with the highest
@@ -459,6 +488,8 @@ export interface EnumerationResult {
   sources: Array<Map<number, number>>
   /** P(beam i fires), only when the turn has beams. */
   beamFireProbs?: number[]
+  /** P(`rerollFirstMiss[i]` was spent), only when the turn has first-miss rerolls. */
+  rerollSpent?: number[]
   /** Per-row and per-rider marginals, only when `enumerateSyntheticTurn` was asked for `detail`. */
   detail?: EnumerationDetail
 }
@@ -489,6 +520,7 @@ function enumerateOnce(turn: SyntheticTurn, options: { detail?: boolean } = {}):
   }
   const result: EnumerationResult = { mean: meanOfMap(pmf), pmf, sources: walked.perSource }
   if (walked.detail) result.detail = walked.detail
+  if (walked.rerollSpent.length > 0) result.rerollSpent = walked.rerollSpent
   if (turn.beams && turn.beams.length > 0) {
     const chain = enumerateBeamChain(turn.beams)
     result.beamFireProbs = chain.fireProbs
@@ -1293,9 +1325,75 @@ function saveSuccessProbability(save: SaveSpec, penalty?: Map<number, number>): 
   return d20PassProbability(save.rollOverride ?? save.rollType ?? 'flat', save.saveBonus, save.dc, penalty)
 }
 
+/** The total of the attack's `toHitDice` (mass 1 per total); `{0: 1}` without any. */
+function toHitBonuses(a: AttackSpec): Map<number, number> {
+  let out = new Map<number, number>([[0, 1]])
+  for (const { count, sides, sign } of a.toHitDice ?? []) {
+    const signed = new Map<number, number>()
+    for (const [v, p] of diceSumDistribution(count, sides)) addScaled(signed, sign * v, p)
+    out = convolveMaps(out, signed)
+  }
+  return out
+}
+
 /** An attack's miss / hit / crit odds under its own roll type, or under `kind` and with `critOnHit` when a walk has resolved them. */
 function attackLandingProbs(a: AttackSpec, kind: AdvantageKind = a.rollOverride ?? a.advantage, critOnHit = false) {
-  return d20LandingProbs(kind, a.toHit, a.ac, a.critRange, a.autoCrit === true || critOnHit, a.rerollOnes, a.autoHit)
+  let pMiss = 0
+  let pHit = 0
+  let pCrit = 0
+  for (const [bonus, pb] of toHitBonuses(a)) {
+    const odds = d20LandingProbs(kind, a.toHit + bonus, a.ac, a.critRange, a.autoCrit === true || critOnHit, a.rerollOnes, a.autoHit)
+    pMiss += pb * odds.pMiss
+    pHit += pb * odds.pHit
+    pCrit += pb * odds.pCrit
+  }
+  return { pMiss, pHit, pCrit }
+}
+
+/**
+ * What a rerolled miss becomes, by exact enumeration of every d20 face (and every bonus-dice total): P(the first roll misses and
+ * the reroll gives a hit / a crit / a miss). The new d20 is the row's own single die (`rerollOnes` kept). `reroll` replaces the kept
+ * die; `add-d20` keeps the best of every die. Advantage and elven accuracy keep the highest die, disadvantage the lowest.
+ */
+function rerolledMissProbs(
+  a: AttackSpec,
+  kind: AdvantageKind,
+  critOnHit: boolean,
+  mode: 'reroll' | 'add-d20'
+): { hit: number; crit: number; miss: number } {
+  const die = d20Distribution('flat', a.rerollOnes === true)
+  const dice = kind === 'flat' ? 1 : kind === 'elven' ? 3 : 2
+  const out = { hit: 0, crit: 0, miss: 0 }
+  const auto = a.autoCrit === true || critOnHit
+  const classify = (face: number, bonus: number): 'hit' | 'crit' | 'miss' => {
+    if (face === 1 && !a.autoHit) return 'miss'
+    const lands = a.autoHit === true || face + a.toHit + bonus >= a.ac
+    if (face >= a.critRange && (a.autoHit === true || face === 20 || lands)) return 'crit'
+    if (!lands) return 'miss'
+    return auto ? 'crit' : 'hit'
+  }
+  const pick = (faces: number[]): number => (kind === 'disadvantage' ? Math.min(...faces) : Math.max(...faces))
+  for (const [bonus, pb] of toHitBonuses(a)) {
+    const walk = (faces: number[], p: number): void => {
+      if (faces.length < dice) {
+        for (const [f, pf] of die) walk([...faces, f], p * pf)
+        return
+      }
+      if (classify(pick(faces), bonus) !== 'miss') return
+      for (const [g, pg] of die) {
+        let result: number
+        if (mode === 'add-d20') result = Math.max(...faces, g)
+        else if (kind === 'disadvantage') result = Math.min(Math.max(...faces), g)
+        else {
+          const sorted = [...faces].sort((x, y) => x - y)
+          result = Math.max(...sorted.slice(0, -1), g)
+        }
+        out[classify(result, bonus)] += pb * p * pg
+      }
+    }
+    walk([], 1)
+  }
+  return out
 }
 
 function enumerateFrequencyRow(row: FrequencyRowSpec): Map<number, number> {
@@ -1331,6 +1429,10 @@ interface SourceBranch {
   outcomes: Map<number, number>
   /** A miss `convertFirstMiss` turned into this hit: taking the branch spends the conversion. */
   converts?: boolean
+  /** A miss `rerollFirstMiss` entry `rerolled` rolled again, whatever it became: taking the branch spends that entry. */
+  rerolled?: number
+  /** The riders (indexes) with a `targetHas` whose gate was open in the state this row rolled in. */
+  gatesOpen?: ReadonlySet<number>
 }
 
 const NO_DAMAGE: Map<number, number> = new Map([[0, 1]])
@@ -1393,6 +1495,46 @@ function convertMisses(a: AttackSpec, branches: readonly SourceBranch[], vulnera
     : dicePayloads(a.damage, a.critDamage, a.critDealsMax)
   const converted = withDealt('hit', pMiss, hit).map((branch) => ({ ...branch, converts: true, ...(vulnerable ? { vulnerable: true } : {}) }))
   return [...branches.filter((branch) => !missed(branch)), ...converted]
+}
+
+/**
+ * An attack's branches with a first-miss reroll (entry `reroll.index`, by `reroll.mode`) and/or the first-hit keep-higher
+ * (`keepHigher`: a landing's payload is rolled twice and the higher total kept) applied. The reroll replaces the row's miss: the
+ * miss mass becomes the reroll's hit, crit and miss (a rerolled miss keeps the miss payload), each tagged as spending the entry.
+ */
+function rerolledBranches(
+  a: AttackSpec,
+  kind: AdvantageKind,
+  critOnHit: boolean,
+  vulnerable: boolean,
+  keepHigher: boolean,
+  reroll: { mode: 'reroll' | 'add-d20'; index: number } | undefined
+): SourceBranch[] {
+  const chance = occurrenceChance(a)
+  const { pMiss, pHit, pCrit } = attackLandingProbs(a, kind, critOnHit)
+  const damage = keepHigher ? { ...a.damage, bestOfTwo: true } : a.damage
+  const critDamage = keepHigher && a.critDamage ? { ...a.critDamage, bestOfTwo: true } : a.critDamage
+  const { hit, crit } = vulnerable
+    ? vulnerableDicePayloads(damage, critDamage, a.critDealsMax)
+    : dicePayloads(damage, critDamage, a.critDealsMax)
+  const tagged = (branches: SourceBranch[], extra: Partial<SourceBranch> = {}): SourceBranch[] =>
+    branches.map((branch) => ({ ...branch, ...extra, ...(vulnerable && branch.landing !== 'none' && branch.landing !== 'missDamage' ? { vulnerable: true } : {}) }))
+  const missLanding: Landing = a.missDamage ? 'missDamage' : 'none'
+  const missOutcomes = missPayload(a) ?? NO_DAMAGE
+  const out: SourceBranch[] = [...withDealt('skipped', 1 - chance, NO_DAMAGE)]
+  if (reroll === undefined) {
+    out.push(...withDealt(missLanding, chance * pMiss, missOutcomes))
+  } else {
+    const again = rerolledMissProbs(a, kind, critOnHit, reroll.mode)
+    const spent = { rerolled: reroll.index }
+    out.push(
+      ...tagged(withDealt(missLanding, chance * again.miss, missOutcomes), spent),
+      ...tagged(withDealt('hit', chance * again.hit, hit), spent),
+      ...tagged(withDealt('crit', chance * again.crit, crit), spent)
+    )
+  }
+  out.push(...tagged(withDealt('hit', chance * pHit, hit)), ...tagged(withDealt('crit', chance * pCrit, crit)))
+  return out.filter((branch) => branch.p > 0)
 }
 
 /**
@@ -1513,6 +1655,10 @@ interface RiderPlan {
   rows: number[]
   /** The sources where it lands only alongside a partner, and each partner with the sources it opens ({@link RiderSpec.alongside}). */
   alongside?: { rows: ReadonlySet<number>; partners: Array<{ plan: RiderPlan; rows: ReadonlySet<number> }> }
+  /** Its index among the turn's riders. */
+  index: number
+  /** {@link RiderSpec.targetHas}. */
+  targetHas?: readonly ConditionName[]
   trigger: LandingTrigger
   onCrit: boolean
   max: number
@@ -1600,6 +1746,7 @@ function riderLandsOn(rider: RiderPlan, landing: Landing, dealt: boolean): boole
  */
 function riderLandsAt(rider: RiderPlan, row: number, branch: SourceBranch, landings: readonly SourceBranch[]): boolean {
   if (!riderLandsOn(rider, branch.landing, branch.dealt)) return false
+  if (rider.targetHas !== undefined && branch.gatesOpen?.has(rider.index) !== true) return false
   if (!rider.alongside?.rows.has(row)) return true
   return rider.alongside.partners.some(({ plan, rows }) => rows.has(row) && riderAppliesOn(plan, row, branch, landings))
 }
@@ -1698,7 +1845,7 @@ function landingPlans(
       if (turn.attacks[row]!.critDamage) throw new Error(`bruteForce: rider ${i} is pooled on source ${row}, which has an explicit crit payload`)
     }
     if (pooled.size > 0 && r.trigger === 'cast') throw new Error(`bruteForce: rider ${i} is pooled but its trigger is cast, which lands on a miss`)
-    return { rows, trigger: r.trigger, onCrit: r.onCrit === true, max, chance: occurrenceChance(r), payloads, typed, pooled, specs }
+    return { rows, index: i, ...(r.targetHas !== undefined ? { targetHas: r.targetHas } : {}), trigger: r.trigger, onCrit: r.onCrit === true, max, chance: occurrenceChance(r), payloads, typed, pooled, specs }
   })
   riders.forEach((r, i) => {
     if (!r.alongside) return
@@ -1745,7 +1892,7 @@ function landingPlans(
   const riderCache = new Map<string, Array<[number, number]>>()
   const riderDamage = (landings: readonly SourceBranch[], decided: RiderFates): Array<[number, number]> => {
     const key = [
-      landings.map((l) => `${l.landing}${l.dealt ? '+' : '-'}${l.vulnerable ? 'v' : ''}`).join(),
+      landings.map((l) => `${l.landing}${l.dealt ? '+' : '-'}${l.vulnerable ? 'v' : ''}${l.gatesOpen ? `g${[...l.gatesOpen].join('.')}` : ''}`).join(),
       [...decided.fates]
         .map(([where, fate]) => `${where}=${fate.typed}/${fate.woke}`)
         .sort()
@@ -1849,6 +1996,10 @@ interface PathState extends RiderFates {
   active: readonly EffectInstance[]
   /** `convertFirstMiss` has turned a miss into a hit this turn. */
   converted?: boolean
+  /** Bit i: `rerollFirstMiss[i]` has been spent this turn. */
+  spent?: number
+  /** `keepHigherFirstHit` has been spent on a landing this turn. */
+  keepSpent?: boolean
   /** Per grant: it has been tried this turn (read by `cap: 'once'`). */
   tried: readonly boolean[]
 }
@@ -1876,9 +2027,13 @@ function conditionContributions(condition: ConditionName, ctx: ReadContext): Eff
   if (ctx.side === 'attack') {
     switch (condition) {
       case 'blinded':
+      case 'petrified':
       case 'restrained':
       case 'stunned':
         return ['advantage']
+      // "Attack rolls against you have Disadvantage, and your attack rolls have Advantage." (at any range)
+      case 'invisible':
+        return ['disadvantage']
       case 'paralyzed':
         return melee ? ['advantage', 'critOnHit'] : ['advantage']
       case 'prone':
@@ -1892,8 +2047,9 @@ function conditionContributions(condition: ConditionName, ctx: ReadContext): Eff
   }
   const strengthOrDexterity = ctx.ability === 'strength' || ctx.ability === 'dexterity'
   switch (condition) {
-    // "You automatically fail Strength and Dexterity saving throws."
+    // "You automatically fail Strength and Dexterity saving throws." (Petrified: "Attack rolls against you have Advantage ... You automatically fail Strength and Dexterity saving throws.")
     case 'paralyzed':
+    case 'petrified':
     case 'stunned':
     case 'unconscious':
       return strengthOrDexterity ? ['autoFail'] : []
@@ -2063,6 +2219,19 @@ function rowReads(row: WalkRow, index: number, effect: EffectSpec): boolean {
   }
 }
 
+/** Whether `creature` has at least one of `names` in the state `active` (and, for creature 0, the starting condition) describes. */
+function creatureHas(
+  names: readonly ConditionName[],
+  creature: number,
+  startingCondition: ConditionName | undefined,
+  active: readonly EffectInstance[]
+): boolean {
+  if (creature === 0 && startingCondition !== undefined && names.includes(startingCondition)) return true
+  return active.some(
+    (instance) => instance.creature === creature && instance.spec.kind === 'condition' && names.includes(instance.spec.condition)
+  )
+}
+
 /** Whether the effect is the attacker's (`against: 'any'`): no creature owns it, and the next attack at any creature reads it. */
 function isAttackerSide(effect: EffectSpec): boolean {
   return (effect.kind === 'advantage' || effect.kind === 'disadvantage' || effect.kind === 'critOnHit') && effect.against === 'any'
@@ -2161,7 +2330,7 @@ type WalkRow = { kind: 'attack'; attack: AttackSpec; creature: number } | { kind
 function enumerateSourcesWithRiders(
   turn: SyntheticTurn,
   wantDetail: boolean
-): { pmf: Map<number, number>; perSource: Array<Map<number, number>>; detail: EnumerationDetail | undefined } {
+): { pmf: Map<number, number>; perSource: Array<Map<number, number>>; detail: EnumerationDetail | undefined; rerollSpent: number[] } {
   const grants = turn.grants ?? []
   const rows: WalkRow[] = [
     ...turn.attacks.map((attack): WalkRow => ({ kind: 'attack', attack, creature: attack.target ?? 0 })),
@@ -2198,6 +2367,7 @@ function enumerateSourcesWithRiders(
   const riderDetail: RiderDetail[] = riderPlans.map(() => ({ pmf: new Map(), landing: 0 }))
 
   const result = new Map<number, number>()
+  const rerollSpent: number[] = (turn.rerollFirstMiss ?? []).map(() => 0)
   const landings: SourceBranch[] = new Array<SourceBranch>(rows.length)
 
   /**
@@ -2290,6 +2460,9 @@ function enumerateSourcesWithRiders(
 
   const walk = (k: number, prob: number, state: PathState, damage: Map<number, number>): void => {
     if (k === order.length) {
+      rerollSpent.forEach((_, i) => {
+        if (((state.spent ?? 0) & (1 << i)) !== 0) rerollSpent[i]! += prob
+      })
       for (const [d, pd] of damage) {
         for (const [r, pr] of riderDamage(landings, state)) addScaled(result, d + r, prob * pd * pr)
       }
@@ -2309,6 +2482,7 @@ function enumerateSourcesWithRiders(
 
     let branches: SourceBranch[]
     let rollType: AdvantageKind
+    let keepOpen = false
     if (row.kind === 'attack') {
       const a = row.attack
       const critOnHit = contributes(contributions, 'critOnHit')
@@ -2321,6 +2495,17 @@ function enumerateSourcesWithRiders(
           ? attackBranchesDealing(a, askedType, rollType, critOnHit, vulnerable)
           : attackBranches(a, rollType, critOnHit, vulnerable)
       )
+      const rerolls = turn.rerollFirstMiss ?? []
+      const rerollIndex = rerolls.findIndex((entry, i) => ((state.spent ?? 0) & (1 << i)) === 0 && entry.of.includes(s))
+      keepOpen = turn.keepHigherFirstHit?.of.includes(s) === true && state.keepSpent !== true
+      if (rerollIndex !== -1 || keepOpen) {
+        if (turn.convertFirstMiss !== undefined) throw new Error('bruteForce: rerollFirstMiss and keepHigherFirstHit beside convertFirstMiss are not modelled')
+        if (typedRows.has(s) && askedType !== undefined) throw new Error(`row ${s}: a rerolled miss on a row a dealing grant splits is not modelled`)
+        const mode = rerollIndex === -1 ? undefined : { mode: rerolls[rerollIndex]!.mode, index: rerollIndex }
+        branches = cached(`${s}|${rollType}|${critOnHit}|${vulnerable}|keep${keepOpen}|reroll${mode?.index}`, () =>
+          rerolledBranches(a, rollType, critOnHit, vulnerable, keepOpen, mode)
+        )
+      }
       if (!state.converted && turn.convertFirstMiss?.of.includes(s)) {
         if (typedRows.has(s) && askedType !== undefined) throw new Error(`row ${s}: a converted miss on a row a dealing grant splits is not modelled`)
         const unconverted = branches
@@ -2374,6 +2559,13 @@ function enumerateSourcesWithRiders(
           branch = { ...resolved, outcomes }
         }
       }
+      // The gates read the state this row rolled in: `state`, before the row's own landing applies anything.
+      if (riderPlans.some((plan) => plan.targetHas !== undefined)) {
+        const gatesOpen = new Set(
+          riderPlans.flatMap((plan) => (plan.targetHas !== undefined && creatureHas(plan.targetHas, row.creature, turn.startingCondition, state.active) ? [plan.index] : []))
+        )
+        branch = { ...branch, gatesOpen }
+      }
       for (const [d, pd] of branch.outcomes) addScaled(perSource[s]!, d, prob * branch.p * pd)
       landings[s] = branch
       const rowDamage = convolveMaps(damage, branch.outcomes)
@@ -2393,6 +2585,8 @@ function enumerateSourcesWithRiders(
         const afterRow: PathState = {
           ...variant.state,
           ...(branch.converts ? { converted: true } : {}),
+          ...(branch.rerolled !== undefined ? { spent: (state.spent ?? 0) | (1 << branch.rerolled) } : {}),
+          ...(keepOpen && hit ? { keepSpent: true } : {}),
           active: variant.state.active.filter(
             (instance) =>
               !consumed.includes(instance) &&
@@ -2406,6 +2600,7 @@ function enumerateSourcesWithRiders(
             const grant = grants[g]!
             if (
               !grant.of.includes(s) ||
+              (grant.targetHas !== undefined && !creatureHas(grant.targetHas, row.creature, turn.startingCondition, state.active)) ||
               !grantLands(grant, row.kind === 'save', landed, () => riderAppliesOn(riderPlans[grant.rider!]!, s, branch, landings))
             )
               continue
@@ -2469,7 +2664,7 @@ function enumerateSourcesWithRiders(
         )
   )
   walk(0, 1, { active: starting, tried: grants.map(() => false), fates: new Map(), coins: new Map() }, NO_DAMAGE)
-  return { pmf: result, perSource, detail: wantDetail ? { rows: rowDetail, riders: riderDetail } : undefined }
+  return { pmf: result, perSource, detail: wantDetail ? { rows: rowDetail, riders: riderDetail } : undefined, rerollSpent }
 }
 
 /**

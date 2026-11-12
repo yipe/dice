@@ -79,6 +79,13 @@ export type AbilityName = Ability | "str" | "dex" | "con" | "int" | "wis" | "cha
  * `rollType`/`advantageDice` are the SOURCE's own values (before any grant is combined in —
  * see `combine()` in `ac.ts`); `critOnHit` mirrors the `alwaysCrits()` path.
  */
+/**
+ * How a missed attack roll is rolled again. `reroll`: the kept d20 is replaced by one new d20 and the new roll stands
+ * (Heroic Inspiration). `add-d20`: one more d20 is rolled and the best of every d20 rolled is kept (2014 Lucky).
+ * The new d20 is the row's own single die: its reroll of 1s and its minimum kept, its advantage dropped.
+ */
+export type MissRerollMode = "reroll" | "add-d20";
+
 export interface Check {
   roll: RollBuilder;
   ac: number;
@@ -86,6 +93,7 @@ export interface Check {
   rollType: RollType;
   advantageDice: 2 | 3;
   critOnHit: boolean;
+  missReroll?: MissRerollMode;
 }
 
 export type SaveResolution = Resolution & {

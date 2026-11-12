@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-11
+
+### Added
+
+- **Builder: `rerollMisses(mode)` / `missRerolled()`.** An exact d20-only reroll of a missed attack roll (`"reroll"`: Heroic Inspiration, `"add-d20"`: 2014 Lucky), in the PMF, `sample` and `toExpression` (#57). Bonus dice (Bless, Bane) keep their faces, so the odds are exact.
+- **Turn: `Turn.rerollFirstMiss()`, `substitute: "reroll"` (`mode`: `"reroll"` | `"add-d20"`), `ContextualSource.missRerolledUnder`.** One reroll of the first miss per turn; rerolls stack in declaration order. A rerolled row's marginal reads its own draws. A `below` policy beside any reroll in the turn is `unsupported-policy`; a reroll with an empty `of` is `unknown-id`.
+- **`@yipe/dice/dnd5e`: SRD conditions.** `RULES` and effects for `charmed`, `deafened`, `frightened`, `incapacitated`, `invisible`, `petrified`, `poisoned`, plus `grappledRule`, `exhaustionRule` and the `grappled(edition)` / `exhaustion(level, edition)` effects. `own.*` keys are data only: a turn never reads them. Conditions that change no roll are not read by attacks, so they cost no states.
+- **`d20Penalty` on a `ConditionRule`.** Taken off every D20 Test the creature makes (2024 Exhaustion); a turn reads it on saves. Refused beside `attack` or `save` modifiers (`unsupported-trigger`).
+- **`targetHas` on riders and conditions.** A rider lands, or a grant applies, only where the row's creature has one of the named conditions in the state the row rolled in. Builder attacks take it too (`ConditionGate`) (#58: row gating is deferred).
+
+### Changed
+
+- `CONTRACT_REVISION` is 6. `duplicate-substitute` is narrowed: rerolls stack, and one first-hit transform may sit beside them.
+
 ## [0.24.0] - 2026-11-09
 
 ### Added
