@@ -66,9 +66,18 @@ export type ConditionGate = Pick<
  */
 const attackPMFCache = PMF.createCache(4000);
 
+/**
+ * Rerolled-miss PMF cache ({@link AttackBuilder.missRerolled}), keyed by the attack's {@link AttackBuilder.cacheKey}
+ * plus the reroll mode: that key fixes the check (so the reroll odds), the payloads and the landing scale, which is all
+ * `missRerolled` reads. A Turn builds this PMF for every row of every plan it prices, and a sweep's rows repeat by content,
+ * so equal rows share one PMF (and, with it, the outcome slices a plan memoizes on it). Same immutability argument as above.
+ */
+const missRerolledCache = PMF.createCache(4000);
+
 /** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
 export function clearAttackCache(): void {
   attackPMFCache.clear();
+  missRerolledCache.clear();
   clearMatchCache();
 }
 
@@ -553,6 +562,12 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit)) {
       return PMF.empty(eps);
     }
+    const key = attack.cacheKey(eps);
+    const cacheKey = key === null ? null : `${mode}*${key}`;
+    if (cacheKey !== null) {
+      const cached = missRerolledCache.get(cacheKey);
+      if (cached) return cached;
+    }
     const odds = missRerollOdds(check, mode, eps);
     const rerolled = odds.hit + odds.crit + odds.miss;
     if (!(rerolled > 0)) return PMF.empty(eps);
@@ -562,7 +577,9 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       pMiss: odds.miss,
       natural20Share: odds.crit > 0 ? Math.min(1, odds.natural20 / odds.crit) : 0,
     });
-    return slices.pmf.scaleMass(rerolled);
+    const pmf = slices.pmf.scaleMass(rerolled);
+    if (cacheKey !== null) missRerolledCache.set(cacheKey, pmf);
+    return pmf;
   }
 
   /**
