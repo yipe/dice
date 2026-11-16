@@ -1,17 +1,15 @@
-import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { d6, d8, d20, roll } from "../src/builder";
-import { clearAttackCache } from "../src/builder/attack";
+import { clearAttackCache, setMissRerolledCacheEnabled } from "../src/builder/attack";
 import { bits, dumpTurn, pmfBits, randomCase } from "./helpers/exactDump";
 
 /**
  * The rerolled-miss PMF cache (`AttackBuilder.missRerolled`) must change no bit of any answer. Three checks:
- * a cold cache and a warm one give identical dumps, the dump's hash is the one 0.25.1 (no cache) gave, and rows of
- * equal content share one PMF.
+ * a cold cache and a warm one give identical dumps, the cached path equals the uncached one on the same runtime, and rows
+ * of equal content share one PMF. The uncached comparison runs in-process rather than against a pinned hash: V8's Math
+ * differs in the last bits between Node majors (0.25.1 itself hashes differently on Node 20/22 and 24).
  */
 const CASES = 60;
-/** sha256 of `dumpTurn` over seeds 1..60, captured on 0.25.1 (382fdeb), before the cache existed. */
-const PINNED_0_25_1 = "a8980874d3eb85d0f2da6803adb41bf7225b66b7378a59c2fd769dc4dd0e6f51";
 
 describe("missRerolled cache is exact", () => {
   beforeEach(() => clearAttackCache());
@@ -26,10 +24,20 @@ describe("missRerolled cache is exact", () => {
     }
   });
 
-  it("matches the hash 0.25.1 produced without the cache", () => {
-    const hash = createHash("sha256");
-    for (let seed = 1; seed <= CASES; seed++) for (const line of dumpTurn(randomCase(seed).build())) hash.update(`${line}\n`);
-    expect(hash.digest("hex")).toBe(PINNED_0_25_1);
+  it("equals the uncached path bit for bit (what 0.25.1 computed)", () => {
+    for (let seed = 1; seed <= CASES; seed++) {
+      const c = randomCase(seed);
+      setMissRerolledCacheEnabled(false);
+      let uncached: string[];
+      try {
+        uncached = dumpTurn(c.build());
+      } finally {
+        setMissRerolledCacheEnabled(true);
+      }
+      clearAttackCache();
+      dumpTurn(c.build());
+      expect(dumpTurn(c.build()), c.name).toEqual(uncached);
+    }
   });
 
   it("equal rows share one rerolled PMF; a different mode, AC or eps does not", () => {

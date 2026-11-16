@@ -73,6 +73,12 @@ const attackPMFCache = PMF.createCache(4000);
  * so equal rows share one PMF (and, with it, the outcome slices a plan memoizes on it). Same immutability argument as above.
  */
 const missRerolledCache = PMF.createCache(4000);
+let missRerolledCacheEnabled = true;
+
+/** Test seam: with `false`, {@link AttackBuilder.missRerolled} bypasses its cache (exactness checks compare both paths). */
+export function setMissRerolledCacheEnabled(enabled: boolean): void {
+  missRerolledCacheEnabled = enabled;
+}
 
 /** Clears the resolved-attack PMF cache (test/bench seam; mirrors {@link clearParserCache}). */
 export function clearAttackCache(): void {
@@ -563,7 +569,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
       return PMF.empty(eps);
     }
     const key = attack.cacheKey(eps);
-    const cacheKey = key === null ? null : `${mode}*${key}`;
+    const cacheKey = key === null || !missRerolledCacheEnabled ? null : `${mode}*${key}`;
     if (cacheKey !== null) {
       const cached = missRerolledCache.get(cacheKey);
       if (cached) return cached;
