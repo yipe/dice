@@ -40,6 +40,12 @@ describe("missRerolled cache is exact", () => {
     }
   });
 
+  it("the generator exercises a real substitute beside the first-miss rerolls", () => {
+    let seen = 0;
+    for (let seed = 1; seed <= CASES; seed++) if (randomCase(seed).build().substituteIds.includes("x")) seen++;
+    expect(seen).toBeGreaterThan(0);
+  });
+
   it("equal rows share one rerolled PMF; a different mode, AC or eps does not", () => {
     const row = (ac = 15) => d20.plus(7).withAdvantage().ac(ac).critOn(19).onHit(roll(1, d8).plus(4)).plusSeparateDamage(roll(1, d6));
     const first = row().missRerolled("reroll");

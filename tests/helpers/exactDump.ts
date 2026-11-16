@@ -5,6 +5,7 @@
 import { d4, d6, d8, d10, d12, d20, roll, Turn, turn } from "../../src/builder";
 import type { AttackBuilder, ContextualSource, RowContext } from "../../src/builder";
 import type { PMF } from "../../src/pmf/pmf";
+import { keepBestDamage } from "../../src/turn/effects";
 import { lcgRng } from "./lcg";
 
 const f64 = new Float64Array(1);
@@ -95,7 +96,7 @@ export function randomCase(seed: number): Case {
       }
       let t = turn(order.map((index) => attack(shapes[index], false)));
       if (withRider) t = t.onFirstHit(roll(2, riderDie));
-      if (substitute) t = t.onFirstHit(roll(1, d6).plus(1), { id: "x" });
+      if (substitute) t = t.onFirstHit(keepBestDamage(), { id: "x" });
       modes.forEach((mode, k) => {
         t = t.rerollFirstMiss({ id: `rr${k}`, mode });
       });
