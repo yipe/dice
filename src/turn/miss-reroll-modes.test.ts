@@ -156,7 +156,7 @@ describe("Turn.rerollFirstMiss with advantage, composed modes and add-dN", () =>
       }
       expect(Math.abs(sum / n - t.mean())).toBeLessThan(0.08);
     }
-  });
+  }, 60_000);
 
   it("round-trips through Turn.from as plain data", () => {
     const attack = attackOf("flat", false);

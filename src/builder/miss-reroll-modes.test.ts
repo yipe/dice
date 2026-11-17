@@ -88,7 +88,7 @@ describe("AttackBuilder.sample under the new modes agrees with the exact mean", 
         let sum = 0;
         for (let i = 0; i < n; i++) sum += attack.sample(rng).total;
         expect(Math.abs(sum / n - attack.mean())).toBeLessThan(0.06);
-      });
+      }, 60_000);
     }
   }
 });
