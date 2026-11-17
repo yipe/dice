@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { d20, d4, d8 } from "./";
+import { clearAttackCache } from "./attack";
 import { missRerollOdds } from "./miss-reroll";
 import type { MissRerollMode, MissRerollSpec } from "./types";
 import { lcgRng } from "../../tests/helpers/lcg";
@@ -114,11 +115,15 @@ describe("review regressions", () => {
   });
 
   it("stores its own copy of a mode list", () => {
+    const row = d20.plus(5).ac(15);
+    const expected = row.rerollMisses(["advantage", "add-d20"]).onHit(1, d8).mean();
+    const mutated = row.rerollMisses(["reroll", "add-d20"]).onHit(1, d8).mean();
+    expect(mutated).not.toBeCloseTo(expected, 6);
     const modes: MissRerollMode[] = ["advantage", "add-d20"];
-    const attack = d20.plus(5).ac(15).rerollMisses(modes).onHit(1, d8);
-    const before = attack.mean();
+    const attack = row.rerollMisses(modes).onHit(1, d8);
     modes[0] = "reroll";
-    expect(attack.mean()).toBe(before);
-    expect(missRerollOdds(d20.plus(5).ac(15), ["advantage", "add-d20"]).hit).toBeGreaterThan(0);
+    // Nothing has read the attack yet, and no cached PMF can answer for it: a kept reference would price the mutated list.
+    clearAttackCache();
+    expect(attack.mean()).toBe(expected);
   });
 });

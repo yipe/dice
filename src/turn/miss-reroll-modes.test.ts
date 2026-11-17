@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { d20, d4, d6, d8, roll, turn, Turn } from "../builder";
+import { clearAttackCache } from "../builder/attack";
 import type { Rng } from "../common/rng";
 import type { MissRerollSpec } from "../builder/types";
 import { lcgRng } from "../../tests/helpers/lcg";
@@ -176,14 +177,17 @@ describe("Turn.rerollFirstMiss with advantage, composed modes and add-dN", () =>
 describe("mode lists are copied", () => {
   it("rerollFirstMiss and Turn.from keep their own copy", () => {
     const attack = attackOf("flat", false);
+    const reference = (mode: MissRerollSpec): number => turn([attack, attack]).rerollFirstMiss({ id: "r", mode }).mean();
+    const expected = reference(["advantage", "add-d20"]);
+    expect(reference(["reroll", "add-d20"])).not.toBeCloseTo(expected, 6);
+
     const modes: MissRerollSpec = ["advantage", "add-d20"];
     const built = turn([attack, attack]).rerollFirstMiss({ id: "r", mode: modes });
     const spec = Turn.from({ attacks: [attack, attack], substitutes: [{ id: "r", on: "first-miss", substitute: "reroll", mode: modes }] });
-    const before = [built.mean(), spec.mean()];
     (modes as string[])[0] = "reroll";
-    expect([built.mean(), spec.mean()]).toEqual(before);
-    const rng = lcgRng(3);
-    expect(() => built.sample(rng)).not.toThrow();
-    expect(built.mean()).toBeCloseTo(before[0], 12);
+    clearAttackCache();
+    // Neither turn has been priced yet: a kept reference would price the mutated list.
+    expect(built.mean()).toBe(expected);
+    expect(spec.mean()).toBe(expected);
   });
 });
