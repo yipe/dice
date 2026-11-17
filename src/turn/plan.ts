@@ -3796,6 +3796,16 @@ export function buildPlan(
     return mass;
   };
 
+  /** The crit a converted miss deals where the row has `plusNatural20Damage`; `undefined` where its ordinary crit already is it. */
+  const convertedCritOf = (sourceId: string, rowContext: RowContext | undefined): AttackResolution | undefined => {
+    type Converting = { convertedCrit?: (context?: RowContext, eps?: number) => AttackResolution | undefined };
+    const source = damageOf(sourceId) as unknown as Converting & ContextualSource;
+    if (typeof source.convertedCrit === "function") return source.convertedCrit(rowContext, eps);
+    const built =
+      rowContext !== undefined && typeof source.rollUnder === "function" ? (source.rollUnder(rowContext) as Converting | undefined) : undefined;
+    return typeof built?.convertedCrit === "function" ? built.convertedCrit(undefined, eps) : undefined;
+  };
+
   /**
    * The unit-mass hit damage a converted miss deals where the row itself cannot hit (only a natural
    * 20 lands, as a crit): the base payload when the draws split it, else the row's hit outcome
@@ -3872,7 +3882,9 @@ export function buildPlan(
           ? Mixture.mix([[outcome, payload.base[outcome], 1]], eps).scaleMass(mass)
           : slice;
       const info = match?.[outcome] ?? null;
-      const own = (part: PMF): PMF => (separate ? part.convolve(separate, eps, true) : part);
+      // The separate channels a draw adds: the row's own, or a converted crit's (every one deals `plusNatural20Damage`).
+      let separateNow = separate;
+      const own = (part: PMF): PMF => (separateNow ? part.convolve(separateNow, eps, true) : part);
       /** `part` as draws: one, or, for a row a `damage` condition reads, split by whether its own damage was above 0. */
       const draw = (part: PMF, matched: boolean, spends: boolean): Draw[] =>
         dealingSources.has(sourceId) ? typedSplit(sourceId, outcome, plainDraw(part, matched, spends), rowContext) : plainDraw(part, matched, spends);
@@ -3914,8 +3926,21 @@ export function buildPlan(
       // A converted miss: the miss mass drawn as this row's hit damage, and it spends.
       const missMass = convert && outcome === convert ? slices.miss.mass() : 0;
       if (missMass > 0) {
-        const hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext, outcome);
+        // A natural 20 deals `plusNatural20Damage` every time, where a rolled crit deals it on its natural-20 share only.
+        const natural20 = convert === "crit" ? convertedCritOf(sourceId, rowContext) : undefined;
+        let hit: PMF;
+        if (natural20 !== undefined) {
+          if (payload?.base) {
+            hit = Mixture.mix([["crit", natural20.critBase, 1]], eps);
+            if (separate) separateNow = natural20.critSeparate;
+          } else {
+            hit = Mixture.mix([["crit", natural20.crit, 1]], eps);
+          }
+        } else {
+          hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext, outcome);
+        }
         fixed.push(...drawsOf(hit.scaleMass(missMass), true));
+        separateNow = separate;
       }
       if (!policy || mass <= 0) {
         fixed.push(...drawsOf(base, false));

@@ -592,6 +592,17 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
   }
 
   /**
+   * The crit this attack deals when a miss is turned into a natural 20 (`Turn.convertFirstMissToCrit`): unit mass, and every
+   * such crit deals `plusNatural20Damage`, where a rolled crit deals it only on its natural-20 share. `undefined` for an attack
+   * with no `plusNatural20Damage`, whose ordinary crit is already the converted one.
+   */
+  convertedCrit(context?: RowContext, eps: number = 0): AttackResolution | undefined {
+    const attack = context ? this.rollUnder(context) : this;
+    if (attack.natural20Damage.length === 0) return undefined;
+    return attack.resolveWeighted(eps, attack.landingScale, { pHit: 0, pCrit: 1, pMiss: 0, natural20Share: 1 });
+  }
+
+  /**
    * The mass of this attack's misses in `context` that an `add-dN` mode (Precision) never spends its die on: a natural 1, or
    * a total short of the AC by more than the die's faces. Those misses stay misses and keep the die; every other miss
    * is {@link missRerolled}. 0 for any other mode and for an always-hit check.

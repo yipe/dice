@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { d6, d8, d20, roll, turn, Turn } from "../builder";
+import { d6, d8, d20, flat, roll, turn, Turn } from "../builder";
 import type { Rng } from "../common/rng";
 
 type Mode = "miss" | "hit" | "crit";
@@ -68,6 +68,35 @@ describe("Turn.convertFirstMissToCrit", () => {
     expect(turn([attack, attack]).convertFirstMiss().mean()).toBeCloseTo(19.8, 9);
     expect(turn([attack, attack]).convertFirstMissToCrit().mean()).toBeCloseTo(23.37, 9);
   });
+
+  it("a converted miss deals plusNatural20Damage every time, as sampling does", () => {
+    const attack = d20.ac(15).critOn(19).onHit(1).plusNatural20Damage(flat(10));
+    // Misses 14/20 and each deals 1 + 10; 15-18 deal 1, 19 deals 1, 20 deals 11.
+    expect(turn([attack]).convertFirstMissToCrit().mean()).toBeCloseTo(0.7 * 11 + 0.2 + 0.05 + 0.55, 12);
+    // Without the extra damage the ordinary crit is already the converted one.
+    const plain = d20.ac(15).critOn(19).onHit(1);
+    expect(turn([plain]).convertFirstMissToCrit().mean()).toBeCloseTo(0.7 + 0.3, 12);
+  });
+
+  it("the planned mean agrees with sampling where plusNatural20Damage meets a dice-match rider", () => {
+    const attack = d20.plus(3).ac(15).critOn(19).onHit(roll(2, d6)).plusNatural20Damage(roll(1, d6));
+    const t = turn([attack, attack]).onDiceMatch(["attack 1", "attack 2"], roll(1, d8)).convertFirstMissToCrit();
+    let state = 99;
+    const rng: Rng = {
+      die: (sides) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return 1 + Math.floor((state / 2 ** 32) * sides);
+      },
+      chance: (p) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return state / 2 ** 32 < p;
+      },
+    };
+    const n = 40000;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += t.sample(rng).total;
+    expect(Math.abs(sum / n - t.mean())).toBeLessThan(0.12);
+  }, 60_000);
 
   it("round-trips through Turn.from as plain data", () => {
     const sword = d20.plus(5).ac(15).onHit(roll(1, d8).plus(3));
