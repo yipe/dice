@@ -1,9 +1,10 @@
 import { combine } from "../builder/ac";
+import { assertMissRerollSpec, isAddDie } from "../builder/miss-reroll";
 import type { AttachedCondition } from "../builder/attack";
 import { DCBuilder } from "../builder/dc";
 import { d20 } from "../builder/factory";
 import { ParsedRollBuilder } from "../builder/roll";
-import type { AttackResolution, Check, MissRerollMode } from "../builder/types";
+import type { AttackResolution, Check, MissRerollSpec } from "../builder/types";
 import { EPS } from "../common/types";
 import type { RollType } from "../common/types";
 import type { DiceMatchInfo, HasDiceMatchInfo } from "../common/types";
@@ -617,10 +618,12 @@ export interface Step {
   contextIndexOf: (codes: readonly number[], fired: readonly FireMode[], flags: number, counts: readonly number[]) => number;
   /** Whether a substitute rewrites the row's own damage, so it is not its context's PMF. */
   transformed: boolean;
-  /** Whether the watching substitute converts the row's first miss into a hit (`on: "first-miss"`). */
+  /** Whether the watching substitute converts the row's first miss into a hit or a crit (`on: "first-miss"`). */
   converts: boolean;
+  /** What a converted miss becomes; "hit" where nothing converts. */
+  convertsTo: "hit" | "crit";
   /** The first-miss rerolls watching the row, in declaration order: their fire slots and modes. */
-  rerolls: readonly { slot: number; mode: MissRerollMode }[];
+  rerolls: readonly { slot: number; mode: MissRerollSpec }[];
   /** That substitute's policy: how `Turn.sample` decides a spend. Null where none watches the row, or it converts. */
   policy: SubstitutePolicy | null;
   /** The probability the row happens at all (`AttackOptions.chance`); 1 for a rider. */
@@ -1815,21 +1818,26 @@ export function buildPlan(
   substitutes.forEach((substitute, index) => {
     const id = substituteIds[index];
     const reroll = substitute.on === "first-hit" && substitute.substitute === "reroll-keep-higher";
-    const convert = substitute.on === "first-miss" && substitute.substitute === "hit";
+    const convert = substitute.on === "first-miss" && (substitute.substitute === "hit" || substitute.substitute === "crit");
     const missReroll = substitute.on === "first-miss" && substitute.substitute === "reroll";
     if (!reroll && !convert && !missReroll) {
       fail(
         "unsupported-trigger",
         id,
-        `Substitute "${id}" must be { on: "first-hit", substitute: "reroll-keep-higher" }, { on: "first-miss", substitute: "hit" } or { on: "first-miss", substitute: "reroll" }.`
+        `Substitute "${id}" must be { on: "first-hit", substitute: "reroll-keep-higher" }, { on: "first-miss", substitute: "hit" }, { on: "first-miss", substitute: "crit" } or { on: "first-miss", substitute: "reroll" }.`
       );
     }
-    if (substitute.mode !== undefined && (!missReroll || (substitute.mode as string) !== "reroll" && (substitute.mode as string) !== "add-d20")) {
-      fail(
-        "unsupported-trigger",
-        id,
-        `Substitute "${id}" has mode "${String(substitute.mode)}": only a first-miss reroll takes a mode, "reroll" or "add-d20".`
-      );
+    if (substitute.mode !== undefined) {
+      let problem: string | undefined;
+      if (!missReroll) problem = `has mode "${String(substitute.mode)}": only a first-miss reroll takes a mode`;
+      else {
+        try {
+          assertMissRerollSpec(substitute.mode);
+        } catch (error) {
+          problem = `has an unusable mode: ${(error as Error).message}`;
+        }
+      }
+      if (problem !== undefined) fail("unsupported-trigger", id, `Substitute "${id}" ${problem}.`);
     }
     if ((convert || missReroll) && substitute.policy !== undefined) {
       fail("unsupported-policy", id, `Substitute "${id}" ${convert ? "converts" : "rerolls"} the first miss, which takes no policy.`);
@@ -2393,7 +2401,7 @@ export function buildPlan(
       const other = substituteBySource.get(sourceId);
       if (rerolls) {
         // Beside a reroll a source may hold one first-hit transform, never a hit conversion.
-        if (other !== undefined && substitutes[other].substitute === "hit") {
+        if (other !== undefined && substitutes[other].substitute !== "reroll-keep-higher") {
           fail(
             "duplicate-substitute",
             substituteIds[index],
@@ -2409,7 +2417,7 @@ export function buildPlan(
           `Substitutes "${substituteIds[other]}" and "${substituteIds[index]}" both watch "${sourceId}". One transform per source: two would apply to the same payload.`
         );
       }
-      if (substitute.substitute === "hit" && missRerollsBySource.has(sourceId)) {
+      if ((substitute.substitute === "hit" || substitute.substitute === "crit") && missRerollsBySource.has(sourceId)) {
         const rerollIndex = (missRerollsBySource.get(sourceId) as number[])[0];
         fail(
           "duplicate-substitute",
@@ -3718,7 +3726,7 @@ export function buildPlan(
    * the source's own `missRerolledUnder`, else its builder's `missRerolled`, else that of the builder `rollUnder`
    * returns. A source with none of them cannot say what a rerolled miss rolls.
    */
-  const missRerolledOf = (sourceId: string, rowContext: RowContext | undefined, mode: MissRerollMode): PMF => {
+  const missRerolledOf = (sourceId: string, rowContext: RowContext | undefined, mode: MissRerollSpec): PMF => {
     const source = damageOf(sourceId);
     const declared = rowCheckOf(source);
     const context = rowContext ?? (declared === undefined ? undefined : contextOf(declared, 0));
@@ -3730,7 +3738,7 @@ export function buildPlan(
     const key = `${contextKey(context)}|${mode}`;
     let pmf = byContext.get(key);
     if (pmf !== undefined) return pmf;
-    type Rerollable = { missRerolled?: (mode: MissRerollMode, context?: RowContext, eps?: number) => PMF };
+    type Rerollable = { missRerolled?: (mode: MissRerollSpec, context?: RowContext, eps?: number) => PMF };
     const contextual = source as unknown as ContextualSource;
     try {
       if (typeof contextual.missRerolledUnder === "function") {
@@ -3759,24 +3767,60 @@ export function buildPlan(
   };
 
   /**
+   * For an `add-dN` mode, the mass of the row's misses in `rowContext` the die is never spent on: the
+   * source's own `missRerollUnspentUnder`, else its builder's `missRerollUnspent`, else that of the builder `rollUnder` returns.
+   */
+  const missRerollUnspentOf = (sourceId: string, rowContext: RowContext | undefined, mode: MissRerollSpec): number => {
+    const source = damageOf(sourceId);
+    const declared = rowCheckOf(source);
+    const context = rowContext ?? (declared === undefined ? undefined : contextOf(declared, 0));
+    type Spender = { missRerollUnspent?: (mode: MissRerollSpec, context?: RowContext, eps?: number) => number };
+    const contextual = source as unknown as ContextualSource;
+    let mass: number | undefined;
+    if (context !== undefined && typeof contextual.missRerollUnspentUnder === "function") {
+      mass = contextual.missRerollUnspentUnder(context, mode);
+    } else if (typeof (source as Spender).missRerollUnspent === "function") {
+      mass = (source as unknown as Required<Spender>).missRerollUnspent(mode, context, eps);
+    } else {
+      const built =
+        context !== undefined && typeof contextual.rollUnder === "function" ? (contextual.rollUnder(context) as Spender | undefined) : undefined;
+      if (built === undefined || typeof built.missRerollUnspent !== "function") {
+        return fail(
+          "no-rebindable-source",
+          sourceId,
+          `"${sourceId}" has no rollUnder() that returns an attack and no missRerollUnspentUnder(), so an add-die reroll cannot be priced.`
+        );
+      }
+      mass = built.missRerollUnspent(mode, undefined, eps);
+    }
+    return mass;
+  };
+
+  /**
    * The unit-mass hit damage a converted miss deals where the row itself cannot hit (only a natural
    * 20 lands, as a crit): the base payload when the draws split it, else the row's hit outcome
    * re-rolled as an auto-hit in its own context.
    */
-  const convertedHit = (sourceId: string, payload: BasePayload | null, rowContext: RowContext | undefined): PMF => {
-    if (payload?.base) return Mixture.mix([["hit", payload.base.hit, 1]], eps);
+  const convertedHit = (
+    sourceId: string,
+    payload: BasePayload | null,
+    rowContext: RowContext | undefined,
+    landing: "hit" | "crit" = "hit"
+  ): PMF => {
+    if (payload?.base) return Mixture.mix([[landing, payload.base[landing], 1]], eps);
     const source = damageOf(sourceId);
     if (rowContext !== undefined && isContextual(source)) {
-      // Never a crit: an attack that crits on every hit (its own `alwaysCrits()`, or a crit-on-hit grant) rolls with no crit.
+      // A converted hit is never a crit: an attack that crits on every hit (its own `alwaysCrits()`, or a crit-on-hit
+      // grant) rolls with no crit. A converted crit is a natural 20, so it rolls as a crit on hit.
       const plain = source as ContextualSource & { noCrit?: () => ContextualSource };
-      const rolled = typeof plain.noCrit === "function" ? plain.noCrit() : source;
-      const hit = pmfUnder(rolled, { ...rowContext, autoHit: true, critOnHit: false }, eps, sourceId).filterOutcome("hit");
+      const rolled = landing === "hit" && typeof plain.noCrit === "function" ? plain.noCrit() : source;
+      const hit = pmfUnder(rolled, { ...rowContext, autoHit: true, critOnHit: landing === "crit" }, eps, sourceId).filterOutcome(landing);
       if (hit.mass() > 0) return hit.scaleMass(1 / hit.mass());
     }
     return fail(
       "not-an-attack",
       sourceId,
-      `"${sourceId}" never hits without a crit and has no hit payload to re-roll, so a converted miss has no hit damage.`
+      `"${sourceId}" never hits without a crit and has no ${landing} payload to re-roll, so a converted miss has no ${landing} damage.`
     );
   };
 
@@ -3801,8 +3845,8 @@ export function buildPlan(
     vulnerable = false,
     joined: readonly string[] = [],
     rowContext?: RowContext,
-    convert = false,
-    reroll?: { slices: SourceSlices; slot: number }
+    convert: "hit" | "crit" | false = false,
+    reroll?: { slices: SourceSlices; slot: number; unspent?: number }
   ): { fixed: Draw[]; choices: HoldChoice[] } => {
     const match = matchNeeded.has(sourceId) ? matchInfoOf(sourceId) : null;
     // With neither split, the slices already carry the channels — draw them as they are.
@@ -3868,9 +3912,9 @@ export function buildPlan(
       };
 
       // A converted miss: the miss mass drawn as this row's hit damage, and it spends.
-      const missMass = convert && outcome === "hit" ? slices.miss.mass() : 0;
+      const missMass = convert && outcome === convert ? slices.miss.mass() : 0;
       if (missMass > 0) {
-        const hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext);
+        const hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext, outcome);
         fixed.push(...drawsOf(hit.scaleMass(missMass), true));
       }
       if (!policy || mass <= 0) {
@@ -3938,18 +3982,27 @@ export function buildPlan(
     if (convert) return { fixed, choices };
     const missSlice = reroll === undefined ? slices.miss : reroll.slices.miss;
     const marked = (draw: Draw): Draw => (reroll === undefined ? draw : { ...draw, rerollSlot: reroll.slot });
-    if ((perHitBySource.get(sourceId) ?? []).some((payload) => payload.landing === "any" && !payload.critOnly)) {
-      fixed.push(
-        marked({
-          outcome: "miss",
-          matched: false,
-          spends: false,
-          ...landingOf(sourceId, mask, "miss"),
-          ...fold(sourceId, "miss", missSlice, mask, false, undefined, joined),
-        })
-      );
+    const missDraw = (slice: PMF, spent: boolean): Draw => {
+      const draw: Draw = (perHitBySource.get(sourceId) ?? []).some((payload) => payload.landing === "any" && !payload.critOnly)
+        ? {
+            outcome: "miss",
+            matched: false,
+            spends: false,
+            ...landingOf(sourceId, mask, "miss"),
+            ...fold(sourceId, "miss", slice, mask, false, undefined, joined),
+          }
+        : { outcome: "miss", matched: false, spends: false, applies: [], bumps: [], fires: [], slice };
+      return spent ? marked(draw) : draw;
+    };
+    if (reroll?.unspent === undefined) {
+      fixed.push(missDraw(missSlice, true));
     } else {
-      fixed.push(marked({ outcome: "miss", matched: false, spends: false, applies: [], bumps: [], fires: [], slice: missSlice }));
+      // An `add-dN` die is spent only on a miss it can cover: that miss is marked with the reroll's slot, the rest is
+      // the row's plain miss and leaves the die unspent.
+      const total = missSlice.mass();
+      const rest = Math.min(1, reroll.unspent / total);
+      if (total > 0 && rest < 1) fixed.push(missDraw(missSlice.scaleMass(1 - rest), true));
+      if (total > 0 && rest > 0) fixed.push(missDraw(missSlice.scaleMass(rest), false));
     }
     return { fixed, choices };
   };
@@ -4184,6 +4237,7 @@ export function buildPlan(
     const spendSlot =
       substitute === undefined ? -1 : (fireSlots.get(substituteIds[substitute]) as number);
     const converts = substitute !== undefined && substitutes[substitute].on === "first-miss";
+    const convertsTo = substitute !== undefined && substitutes[substitute].substitute === "crit" ? "crit" : "hit";
     /** The first-miss rerolls watching this row, in declaration order. */
     const rerolls = (slices ? (missRerollsBySource.get(entry.id) ?? []) : []).map((index) => ({
       slot: fireSlots.get(substituteIds[index]) as number,
@@ -4219,6 +4273,7 @@ export function buildPlan(
             : {
                 slot: reroll.slot,
                 slices: rerollSlicesOf(missRerolledOf(entry.id, rowContext, reroll.mode)),
+                ...(isAddDie(reroll.mode) ? { unspent: missRerollUnspentOf(entry.id, rowContext, reroll.mode) } : {}),
               }
         );
         const variants = rerolled.flatMap((reroll): StepVariant[] => {
@@ -4240,7 +4295,7 @@ export function buildPlan(
       if (substitute === undefined) return { variants: [plain], select: plainSelect };
       if (converts) {
         // Variant 1 converts the miss; it is drawn while the conversion is unspent.
-        const converted = drawsFor(entry.id, contextSlices, null, cap, vulnerable, joined, rowContext, true).fixed;
+        const converted = drawsFor(entry.id, contextSlices, null, cap, vulnerable, joined, rowContext, convertsTo).fixed;
         return { variants: [plain, converted], select: (_codes, fired) => (fired[spendSlot] === null ? 1 : 0) };
       }
       const { fixed, choices } = drawsFor(
@@ -4624,6 +4679,7 @@ export function buildPlan(
       contextIndexOf,
       transformed: substitute !== undefined && !converts,
       converts,
+      convertsTo,
       rerolls,
       policy: substitute === undefined || converts ? null : (substitutes[substitute].policy ?? { kind: "always" }),
       chance,

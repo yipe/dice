@@ -1,6 +1,6 @@
 import type { DiceMatchInfo, HasDiceMatchInfo, RollType } from "../common/types";
 import type { PMF } from "../pmf/pmf";
-import type { AbilityName, MissRerollMode } from "../builder/types";
+import type { AbilityName, MissRerollSpec } from "../builder/types";
 import type { AttackBuilder } from "../builder/attack";
 import type { RollBuilder } from "../builder/roll";
 import type { SaveBuilder } from "../builder/save";
@@ -11,7 +11,7 @@ export type { DiceMatchInfo, HasDiceMatchInfo };
  * The version of the plain-data `TurnSpec` v2 contract this module declares. A consumer holding
  * its own copy of the contract can assert it matches.
  */
-export const CONTRACT_REVISION = 6;
+export const CONTRACT_REVISION = 7;
 
 /**
  * Triggers that read the outcomes of source attacks, as opposed to `not-fired`,
@@ -202,7 +202,12 @@ export interface ContextualSource {
    * `context` (see `AttackBuilder.missRerolled`). Absent: the turn uses `rollUnder(context)` when it
    * returns an AttackBuilder, else refuses (`no-rebindable-source`).
    */
-  missRerolledUnder?(context: RowContext, mode: MissRerollMode): PMF;
+  missRerolledUnder?(context: RowContext, mode: MissRerollSpec): PMF;
+  /**
+   * For an `add-dN` mode (Precision): the mass of the row's misses in `context` the die is never spent on (a natural 1, or a
+   * shortfall the die cannot cover); see `AttackBuilder.missRerollUnspent`. Absent: the turn uses `rollUnder(context)`.
+   */
+  missRerollUnspentUnder?(context: RowContext, mode: MissRerollSpec): number;
 }
 
 /**
@@ -420,6 +425,9 @@ export type SubstitutePolicy =
  *   a landing for every rider and condition a hit lands. Every watched source must roll to hit
  *   and not be watched by an attack-shaped miss rider (the reroll resolves first, so convert the
  *   reroll instead). No policy. `Turn.convertFirstMiss()`; `fireProbability(id)` is P(converted).
+ * - `{ on: "first-miss", substitute: "crit" }`: the same, but the converted row is a natural 20: a
+ *   crit, dealing the row's crit damage and landing every rider and condition a crit lands
+ *   (Stroke of Luck: "turn the roll into a 20"). `Turn.convertFirstMissToCrit()`.
  */
 export interface SubstituteSpec {
   id?: string;
@@ -430,9 +438,9 @@ export interface SubstituteSpec {
    */
   of?: readonly string[];
   /** Named transform, so a {@link TurnSpec} stays JSON-safe and persistable. */
-  substitute: "reroll-keep-higher" | "hit" | "reroll";
+  substitute: "reroll-keep-higher" | "hit" | "crit" | "reroll";
   /** `reroll` only; default `"reroll"`. */
-  mode?: MissRerollMode;
+  mode?: MissRerollSpec;
   /** Defaults to `{ kind: "always" }`. `first-hit` only. */
   policy?: SubstitutePolicy;
 }

@@ -1,4 +1,4 @@
-import type { Check, MissRerollMode } from "../builder/types";
+import type { Check, MissRerollSpec } from "../builder/types";
 import type { Bin, RollType } from "../common/types";
 import type { Rng } from "../common/rng";
 import { DenseTotal } from "../pmf/dense-total";
@@ -834,9 +834,36 @@ export class Turn {
   }
 
   /**
+   * The first watched attack that misses crits instead, once per turn, in turn order: Stroke of Luck
+   * ("turn the roll into a 20"). The converted row is a natural 20, so it deals the row's crit damage
+   * and lands every rider and condition a crit lands. Otherwise as {@link Turn.convertFirstMiss}:
+   * every watched source must roll to hit, a second conversion over any of the same attacks is
+   * `duplicate-substitute`, and `fireProbability(id)` is P(converted).
+   *
+   * ```ts
+   * turn([sword, sword]).convertFirstMissToCrit().mean();
+   * ```
+   */
+  convertFirstMissToCrit(options: { id?: string; of?: string | readonly string[] } = {}): Turn {
+    const substitute: SubstituteSpec = {
+      ...(options.id === undefined ? {} : { id: options.id }),
+      on: "first-miss",
+      of: listed(options).of ?? this.defaultOf(),
+      substitute: "crit",
+    };
+    return this.with({
+      substitutes: [...this.state.substitutes, substitute],
+      defaulted: this.state.defaulted || options.of === undefined,
+      last: { kind: "substitute", index: this.state.substitutes.length },
+    });
+  }
+
+  /**
    * The first watched miss is rolled again, once per turn: Heroic Inspiration (`mode: "reroll"`, the
    * default: the kept d20 is replaced and the new roll stands) or 2014 Lucky (`"add-d20"`: one more
-   * d20, the best kept). Call it again to stack: a miss goes to the first unspent reroll, in call
+   * d20, the best kept), Master Duelist (`"advantage"`), a list of modes rolled in turn at the one miss
+   * (`["advantage", "add-d20"]`), or Precision (`"add-d4"` .. `"add-d12"`: a die added to the total,
+   * spent only on a miss it can cover). Call it again to stack: a miss goes to the first unspent reroll, in call
    * order, and a reroll that still misses is final. A rerolled hit or crit is a landing for every
    * rider and condition. `fireProbability(id)` is P(spent).
    *
@@ -844,7 +871,7 @@ export class Turn {
    * turn([sword, sword]).rerollFirstMiss().rerollFirstMiss({ mode: "add-d20" }).mean();
    * ```
    */
-  rerollFirstMiss(options: { id?: string; of?: string | readonly string[]; mode?: MissRerollMode } = {}): Turn {
+  rerollFirstMiss(options: { id?: string; of?: string | readonly string[]; mode?: MissRerollSpec } = {}): Turn {
     const substitute: SubstituteSpec = {
       ...(options.id === undefined ? {} : { id: options.id }),
       on: "first-miss",

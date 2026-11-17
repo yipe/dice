@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-17
+
+### Added
+
+- **`Turn.convertFirstMissToCrit()`** (`{ on: "first-miss", substitute: "crit" }`). The first watched miss crits instead: a natural 20, so the row's crit damage and every rider and condition a crit lands (2024 Stroke of Luck, Assassinate on a surprised target). Same rules as `convertFirstMiss()`; `fireProbability(id)` is P(converted); `Turn.sample` rolls the crit payload fresh with the natural-20 damage.
+- **`rerollMisses("advantage")` / `rerollFirstMiss({ mode: "advantage" })`** (Master Duelist): the missed roll is made again with advantage, two new d20s with the best kept (three under elven accuracy); a Disadvantage roll cancels to one new d20.
+- **Composed miss rerolls**: `rerollMisses(modes)`, `missRerolled(modes)` and `rerollFirstMiss({ mode: modes })` take a list of modes rolled in turn at one miss while it still misses (`["advantage", "add-d20"]`). Exact for flat, advantage and elven-accuracy rolls; a Disadvantage roll composes only after `advantage` cancels it. Stacked `rerollFirstMiss()` calls are unchanged (a reroll that still misses is final).
+- **`add-d4` .. `add-d12` miss rerolls** (Precision: a superiority die added to the missed total). Spent only on a miss the die can cover (not a natural 1, shortfall at most `N`); that miss lands with probability `(N - shortfall + 1) / N`, as a crit in the crit range, else a hit. A miss it cannot cover stays a miss and keeps the die, so in a turn it is spent on a later attack: `AttackBuilder.missRerollUnspent(mode, context?)` and `ContextualSource.missRerollUnspentUnder` give that mass; `AttackBuilder.sampleRescue`, `SampledDie.rescue`. Not composable. A die shared with `onEveryHit({ max })` damage dice is not modelled: the die is its own reroll.
+- Types `MissRerollSpec`, `AddDieMode`; `MissRerollMode` gains `"advantage"` and `add-dN`.
+
+### Changed
+
+- `CONTRACT_REVISION` is 7: `SubstituteSpec.substitute` takes `"crit"`, and `mode` takes a mode list and `advantage` / `add-dN`.
+- `ContextualSource.missRerolledUnder(context, mode)` receives a `MissRerollSpec` (a mode or a list of modes): a source that implements it must accept both. A string `mode` still arrives as a string.
+
 ## [0.25.1] - 2026-11-12
 
 ### Fixed

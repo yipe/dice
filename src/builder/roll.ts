@@ -29,7 +29,7 @@ import {
 import { AttackBuilder } from "./attack";
 import type { ExpressionNode, KeepNode, SumNode } from "./nodes";
 import { sampleCheckDice, sampleNode, type CheckDice, type RollSample } from "./sample";
-import type { AttackRange, MissRerollMode, RollConfig, RollType } from "./types";
+import type { AttackRange, MissRerollSpec, RollConfig, RollType } from "./types";
 
 export { AmbiguousKeepError } from "./ast";
 
@@ -1272,12 +1272,12 @@ export class AlwaysHitBuilder extends RollBuilder {
 }
 
 export class AlwaysCritBuilder extends RollBuilder {
-  readonly attackConfig: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollMode };
+  readonly attackConfig: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollSpec };
   readonly fromAlwaysHit: boolean;
 
   constructor(
     baseRoll: RollBuilder,
-    attackConfig?: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollMode },
+    attackConfig?: CritConfig & { ac?: number; range?: AttackRange; missReroll?: MissRerollSpec },
     fromAlwaysHit: boolean = false
   ) {
     if (baseRoll.hasHiddenState()) {

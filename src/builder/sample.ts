@@ -30,6 +30,8 @@ export interface SampledDie {
   reroll?: true;
   /** A d20 a miss reroll added after the natural roll (see `sampleMissReroll`): part of the natural block. */
   missReroll?: true;
+  /** An `add-dN` die (Precision) added to a missed total (see `sampleRescue`), listed after the check's own dice. */
+  rescue?: true;
 }
 
 export interface RollSample {
