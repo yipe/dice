@@ -172,3 +172,18 @@ describe("Turn.rerollFirstMiss with advantage, composed modes and add-dN", () =>
     expect(() => turn([attack, attack]).convertFirstMiss({ id: "c" }).rerollFirstMiss().mean()).toThrow();
   });
 });
+
+describe("mode lists are copied", () => {
+  it("rerollFirstMiss and Turn.from keep their own copy", () => {
+    const attack = attackOf("flat", false);
+    const modes: MissRerollSpec = ["advantage", "add-d20"];
+    const built = turn([attack, attack]).rerollFirstMiss({ id: "r", mode: modes });
+    const spec = Turn.from({ attacks: [attack, attack], substitutes: [{ id: "r", on: "first-miss", substitute: "reroll", mode: modes }] });
+    const before = [built.mean(), spec.mean()];
+    (modes as string[])[0] = "reroll";
+    expect([built.mean(), spec.mean()]).toEqual(before);
+    const rng = lcgRng(3);
+    expect(() => built.sample(rng)).not.toThrow();
+    expect(built.mean()).toBeCloseTo(before[0], 12);
+  });
+});

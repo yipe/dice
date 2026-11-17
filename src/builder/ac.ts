@@ -162,7 +162,7 @@ export class ACBuilder extends RollBuilder {
     if (root === undefined || root.sides !== 20) {
       throw new Error("rerollMisses() needs a check with a d20 natural roll: only a d20 is rolled again.");
     }
-    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, missReroll: mode });
+    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, missReroll: Array.isArray(mode) ? [...mode] : mode });
   }
 
   /** Sets the crit threshold: a natural roll at or above it is a crit. */

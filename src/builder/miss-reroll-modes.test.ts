@@ -92,3 +92,33 @@ describe("AttackBuilder.sample under the new modes agrees with the exact mean", 
     }
   }
 });
+
+describe("review regressions", () => {
+  it("a reroll replaces the kept die: the sample reports the surviving best die", () => {
+    // Advantage roll misses (3, 2); the advantage reroll shows 8, 7 (still a miss); the reroll replaces the 8 and shows 1.
+    const faces = [3, 2, 8, 7, 1];
+    const rng = { die: () => faces.shift() as number, chance: () => false };
+    const attack = d20.withAdvantage().ac(20).rerollMisses(["advantage", "reroll"]).onHit(1, d8);
+    const s = attack.sample(rng);
+    expect(s.outcome).toBe("miss");
+    const keptFaces = s.check.filter((die) => die.kept).map((die) => die.face);
+    expect(keptFaces).toEqual([7]);
+  });
+
+  it("a fractional AC rounds the shortfall up, as sampling's integer comparison does", () => {
+    const whole = missRerollOdds(d20.plus(5).ac(16), "add-d4");
+    const half = missRerollOdds(d20.plus(5).ac(15.5), "add-d4");
+    expect(half.hit).toBeCloseTo(whole.hit, 12);
+    expect(half.miss).toBeCloseTo(whole.miss, 12);
+    expect(half.unspent).toBeCloseTo(whole.unspent, 12);
+  });
+
+  it("stores its own copy of a mode list", () => {
+    const modes: MissRerollMode[] = ["advantage", "add-d20"];
+    const attack = d20.plus(5).ac(15).rerollMisses(modes).onHit(1, d8);
+    const before = attack.mean();
+    modes[0] = "reroll";
+    expect(attack.mean()).toBe(before);
+    expect(missRerollOdds(d20.plus(5).ac(15), ["advantage", "add-d20"]).hit).toBeGreaterThan(0);
+  });
+});

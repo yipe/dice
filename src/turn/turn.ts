@@ -438,7 +438,9 @@ export class Turn {
       ...state,
       attacks: [...state.attacks],
       riders: [...state.riders],
-      substitutes: [...state.substitutes],
+      substitutes: state.substitutes.map((entry) =>
+        entry.mode === undefined || typeof entry.mode === "string" ? entry : { ...entry, mode: [...entry.mode] }
+      ),
       conditions: [...state.conditions],
       observe: [...state.observe],
     };
@@ -877,7 +879,7 @@ export class Turn {
       on: "first-miss",
       of: listed(options).of ?? this.defaultOf(),
       substitute: "reroll",
-      mode: options.mode ?? "reroll",
+      mode: Array.isArray(options.mode) ? [...options.mode] : (options.mode ?? "reroll"),
     };
     return this.with({
       substitutes: [...this.state.substitutes, substitute],

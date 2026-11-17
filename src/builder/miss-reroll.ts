@@ -224,7 +224,8 @@ function rescueOdds(check: RerollCheck, sides: number, eps: number): MissRerollO
         out.unspent += p;
         continue;
       }
-      const covered = (sides - short + 1) / sides;
+      // A fractional AC leaves a fractional shortfall: the die must reach the next whole number.
+      const covered = (sides - Math.ceil(short) + 1) / sides;
       if (critOnHit || k >= check.critThreshold) out.crit += p * covered;
       else out.hit += p * covered;
       out.miss += p * (1 - covered);

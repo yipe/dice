@@ -536,7 +536,7 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
     assertMissRerollSpec(mode);
     const check = this.check;
     if (check instanceof AlwaysHitBuilder || (check instanceof AlwaysCritBuilder && check.fromAlwaysHit)) return this;
-    return this.withCheck((c) => ({ ...c, missReroll: mode }));
+    return this.withCheck((c) => ({ ...c, missReroll: Array.isArray(mode) ? [...mode] : mode }));
   }
 
   /**
@@ -927,9 +927,10 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
         lowest = false;
       } else if (mode === "reroll") {
         const fresh = draw();
-        if (flat && !lowest) live = [fresh];
-        else if (lowest) live = [{ ...live.reduce((best, l) => (l.face > best.face ? l : best)) }, fresh];
-        else live = [...live, fresh];
+        const best = live.reduce((top, l) => (l.face > top.face ? l : top));
+        // The new die replaces the kept one; under disadvantage the other die stays (the replaced die is the lower).
+        if (lowest) live = [best, fresh];
+        else live = [...live.filter((l) => l !== best), fresh];
       } else {
         live = [...live, draw()];
         lowest = false;

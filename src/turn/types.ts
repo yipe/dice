@@ -205,7 +205,8 @@ export interface ContextualSource {
   missRerolledUnder?(context: RowContext, mode: MissRerollSpec): PMF;
   /**
    * For an `add-dN` mode (Precision): the mass of the row's misses in `context` the die is never spent on (a natural 1, or a
-   * shortfall the die cannot cover); see `AttackBuilder.missRerollUnspent`. Absent: the turn uses `rollUnder(context)`.
+   * shortfall the die cannot cover); see `AttackBuilder.missRerollUnspent`. The row's miss payload is assumed independent of the
+   * d20 roll, as it is for an attack builder, so the unspent share of the miss mass carries the same damage distribution. Absent: the turn uses `rollUnder(context)`.
    */
   missRerollUnspentUnder?(context: RowContext, mode: MissRerollSpec): number;
 }
