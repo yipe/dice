@@ -603,6 +603,21 @@ export class AttackBuilder implements CheckBuilder, ContextualSource {
   }
 
   /**
+   * The odds that a crit from {@link convertedCrit} deals damage of `type`, as {@link ContextualSource.dealt} reads an ordinary crit's.
+   * `undefined` where there is no `plusNatural20Damage` (the ordinary odds apply).
+   */
+  convertedCritDealt(type: string, context?: RowContext, eps: number = 0): number | undefined {
+    const attack = context ? this.rollUnder(context) : this;
+    const converted = attack.convertedCrit(undefined, eps);
+    if (converted === undefined) return undefined;
+    if (type !== attack.damageType) return 0;
+    const pmf = converted.pmf;
+    const landed = pmf.outcomeProbability("crit");
+    const none = pmf.support().filter((value) => value <= 0).reduce((sum, value) => sum + pmf.outcomeAt(value, "crit"), 0);
+    return landed > 0 ? (landed - none) / landed : 0;
+  }
+
+  /**
    * The mass of this attack's misses in `context` that an `add-dN` mode (Precision) never spends its die on: a natural 1, or
    * a total short of the AC by more than the die's faces. Those misses stay misses and keep the die; every other miss
    * is {@link missRerolled}. 0 for any other mode and for an always-hit check.

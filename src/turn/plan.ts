@@ -3622,7 +3622,9 @@ export function buildPlan(
     sourceId: string,
     outcome: "hit" | "crit",
     draws: Draw[],
-    rowContext: RowContext | undefined
+    rowContext: RowContext | undefined,
+    /** The odds a converted crit (`convertFirstMissToCrit`, a natural 20) deals the type, where they are not an ordinary crit's. */
+    convertedOdds?: number
   ): Draw[] => {
     const type = dealingType as string;
     const source = damageOf(sourceId);
@@ -3634,7 +3636,8 @@ export function buildPlan(
         `"${sourceId}" is read by a condition that needs ${type} damage dealt, but its source cannot say the odds it deals it (ContextualSource.dealt).`
       );
     }
-    const rowOdds = (dealt as NonNullable<ContextualSource["dealt"]>).call(source, type, rowContext as RowContext)[outcome];
+    const rowOdds =
+      convertedOdds ?? (dealt as NonNullable<ContextualSource["dealt"]>).call(source, type, rowContext as RowContext)[outcome];
     const whole = draws.reduce((sum, draw) => sum + (draw.own ?? draw.slice).mass(), 0);
     const dealtMass = draws.reduce((sum, draw) => sum + (draw.byKind === NOT_DEALT[outcome] ? 0 : (draw.own ?? draw.slice).mass()), 0);
     return draws.flatMap((draw) => {
@@ -3806,6 +3809,17 @@ export function buildPlan(
     return typeof built?.convertedCrit === "function" ? built.convertedCrit(undefined, eps) : undefined;
   };
 
+  /** The odds a converted crit deals the type a `dealing` condition reads; `undefined` where an ordinary crit's apply. */
+  const convertedCritDealtOf = (sourceId: string, rowContext: RowContext | undefined): number | undefined => {
+    type Converting = { convertedCritDealt?: (type: string, context?: RowContext, eps?: number) => number | undefined };
+    const source = damageOf(sourceId) as unknown as Converting & ContextualSource;
+    const type = dealingType as string;
+    if (typeof source.convertedCritDealt === "function") return source.convertedCritDealt(type, rowContext, eps);
+    const built =
+      rowContext !== undefined && typeof source.rollUnder === "function" ? (source.rollUnder(rowContext) as Converting | undefined) : undefined;
+    return typeof built?.convertedCritDealt === "function" ? built.convertedCritDealt(type, undefined, eps) : undefined;
+  };
+
   /**
    * The unit-mass hit damage a converted miss deals where the row itself cannot hit (only a natural
    * 20 lands, as a crit): the base payload when the draws split it, else the row's hit outcome
@@ -3884,10 +3898,13 @@ export function buildPlan(
       const info = match?.[outcome] ?? null;
       // The separate channels a draw adds: the row's own, or a converted crit's (every one deals `plusNatural20Damage`).
       let separateNow = separate;
+      let convertedOdds: number | undefined;
       const own = (part: PMF): PMF => (separateNow ? part.convolve(separateNow, eps, true) : part);
       /** `part` as draws: one, or, for a row a `damage` condition reads, split by whether its own damage was above 0. */
       const draw = (part: PMF, matched: boolean, spends: boolean): Draw[] =>
-        dealingSources.has(sourceId) ? typedSplit(sourceId, outcome, plainDraw(part, matched, spends), rowContext) : plainDraw(part, matched, spends);
+        dealingSources.has(sourceId)
+          ? typedSplit(sourceId, outcome, plainDraw(part, matched, spends), rowContext, convertedOdds)
+          : plainDraw(part, matched, spends);
       const plainDraw = (part: PMF, matched: boolean, spends: boolean): Draw[] => {
         if (!dealtSources.has(sourceId)) {
           return [
@@ -3930,17 +3947,19 @@ export function buildPlan(
         const natural20 = convert === "crit" ? convertedCritOf(sourceId, rowContext) : undefined;
         let hit: PMF;
         if (natural20 !== undefined) {
+          if (dealingSources.has(sourceId)) convertedOdds = convertedCritDealtOf(sourceId, rowContext);
           if (payload?.base) {
             hit = Mixture.mix([["crit", natural20.critBase, 1]], eps);
             if (separate) separateNow = natural20.critSeparate;
           } else {
-            hit = Mixture.mix([["crit", natural20.crit, 1]], eps);
+            hit = natural20.pmf.filterOutcome("crit");
           }
         } else {
           hit = mass > 0 ? base.scaleMass(1 / mass) : convertedHit(sourceId, payload, rowContext, outcome);
         }
         fixed.push(...drawsOf(hit.scaleMass(missMass), true));
         separateNow = separate;
+        convertedOdds = undefined;
       }
       if (!policy || mass <= 0) {
         fixed.push(...drawsOf(base, false));

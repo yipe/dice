@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { d6, d8, d20, flat, roll, turn, Turn } from "../builder";
+import { d, d4, d6, d8, d20, flat, roll, savePenalty, turn, Turn, vulnerability } from "../builder";
 import type { Rng } from "../common/rng";
 
 type Mode = "miss" | "hit" | "crit";
@@ -96,6 +96,42 @@ describe("Turn.convertFirstMissToCrit", () => {
     let sum = 0;
     for (let i = 0; i < n; i++) sum += t.sample(rng).total;
     expect(Math.abs(sum / n - t.mean())).toBeLessThan(0.12);
+  }, 60_000);
+
+  const seeded = (seed: number): Rng => {
+    let state = seed;
+    const next = (): number => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 2 ** 32;
+    };
+    return { die: (sides) => 1 + Math.floor(next() * sides), chance: (p) => next() < p };
+  };
+
+  it("a converted crit is typed by its own damage: a dealing condition reads it", () => {
+    // Ordinary crits deal cold only on a natural 20 (the 1 deals none); a converted miss always deals the 10.
+    const ray = d20.ac(15).critOn(19).onHit(0).plusNatural20Damage(flat(10)).typed("cold");
+    const save = d20.plus(3).dc(14).onSaveFailure(d("3d6")).saveHalf();
+    const t = turn([ray, save])
+      .convertFirstMissToCrit({ of: ["attack 1"] })
+      .onFirstHit(savePenalty(d4).untilNextSave(), { dealing: "cold", of: ["attack 1"] });
+    // The 10 is dealt by 0.7 (converted misses) + 0.05 (a natural 20); the other landings deal nothing.
+    const mean = (penalised: boolean): number => {
+      let roll = d20.plus(3);
+      if (penalised) roll = roll.minus(1, d4);
+      return roll.dc(14).onSaveFailure(d("3d6")).saveHalf().mean();
+    };
+    expect(t.mean()).toBeCloseTo(0.75 * 10 + 0.75 * mean(true) + 0.25 * mean(false), 9);
+  }, 60_000);
+
+  it("a converted crit on a vulnerable row doubles the natural-20 damage, as sampling does", () => {
+    const grant = d20.ac(15).critOn(19).onHit(1).onEveryHit(vulnerability().untilNextHit());
+    const attack = d20.ac(15).critOn(19).onHit(1).plusNatural20Damage(flat(10));
+    const t = turn([grant, attack]).convertFirstMissToCrit();
+    const rng = seeded(5);
+    const n = 150000;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += t.sample(rng).total;
+    expect(Math.abs(sum / n - t.mean())).toBeLessThan(0.05);
   }, 60_000);
 
   it("round-trips through Turn.from as plain data", () => {
