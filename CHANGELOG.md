@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `CONTRACT_REVISION` is 7: `SubstituteSpec.substitute` takes `"crit"`, and `mode` takes a mode list and `advantage` / `add-dN`.
 - `ContextualSource.missRerolledUnder(context, mode)` receives a `MissRerollSpec` (a mode or a list of modes): a source that implements it must accept both. A string `mode` still arrives as a string.
+- **`AttackBuilder.missRerolled` is cached by content.** A Turn with a first-miss reroll (`rerollFirstMiss`, Heroic Inspiration, Lucky) builds the
+  rerolled-miss PMF of every attack row for every plan it prices, and a sweep's rows repeat by content (new builder objects, equal check and
+  payloads). The PMF is now kept in an LRU keyed by the attack's builder cache key plus the reroll mode, so equal rows share one PMF and,
+  through it, the outcome slices a plan memoizes on a PMF. Exact: a hit is the PMF the same call computes, so every probability and mean
+  is bit for bit what 0.25.1 gives (`tests/miss-reroll-cache-exactness.test.ts` pins a hash of 60 randomized turns captured on 0.25.1;
+  `bench/exact-dump.mts` diffs 300 between builds; `bench/reroll-tables.mts` measures). A 10-row two-reroll Turn builds and reads in ~0.9 ms
+  against ~2.5 ms. `clearAttackCache()` clears it too.
 
 ## [0.25.1] - 2026-11-12
 
