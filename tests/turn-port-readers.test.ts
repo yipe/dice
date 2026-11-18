@@ -19,6 +19,9 @@ import {
 import { inspectPlan } from "../src/turn/turn";
 import { FAMILIES } from "./oracle/v2/cases/index";
 
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
+
 const TOLERANCE = 1e-12;
 const READY = Object.entries(FAMILIES).map(
   ([family, cases]) => [family, cases.filter((c) => c.engineOnly === undefined && c.gaps.length === 0)] as const

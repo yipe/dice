@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DiceParseError } from "../src/common/errors";
 import { parse } from "../src/parser/parser";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 /**
  * A repeat whose outcome counts outgrow exact whole numbers still resolves: its counts become

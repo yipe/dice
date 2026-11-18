@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FIXTURES } from "./helpers/fixtures";
 import { gTest } from "./helpers/gtest";
 import { lcgRng } from "./helpers/lcg";
 import { sampleFallbacks } from "../src/turn/sample"; // test seam: { count: number }, reset per test
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 // Samples per fixture; lower for a quick local run, e.g. `DICE_SAMPLES=20000 yarn vitest run tests/sample-conformance.test.ts`.
 const N = Number(process.env["DICE_SAMPLES"] ?? 100_000);

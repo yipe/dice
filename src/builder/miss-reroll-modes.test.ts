@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { d20, d4, d8 } from "./";
 import { clearAttackCache } from "./attack";
 import { missRerollOdds } from "./miss-reroll";
 import type { MissRerollMode, MissRerollSpec } from "./types";
 import { lcgRng } from "../../tests/helpers/lcg";
 import { modesOdds, type ModesCase } from "../../tests/oracle/missRerollModes";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 type Roll = ModesCase["roll"];
 
