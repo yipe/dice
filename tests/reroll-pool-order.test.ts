@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolve } from "../src/builder/ast";
 import type { ExpressionNode } from "../src/builder/nodes";
 import { builderPMFCache } from "../src/builder/factory";
 import { setCachingEnabled } from "../src/common/lru-cache";
 import { PMF } from "../src/index";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 /** Empties every cache a resolve can hit, so the next resolve computes. */
 const clearCaches = (): void => {

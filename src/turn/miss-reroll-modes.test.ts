@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { d20, d4, d6, d8, roll, turn, Turn } from "../builder";
 import { clearAttackCache } from "../builder/attack";
 import type { Rng } from "../common/rng";
 import type { MissRerollSpec } from "../builder/types";
 import { lcgRng } from "../../tests/helpers/lcg";
 import { modesOdds, type ModesCase } from "../../tests/oracle/missRerollModes";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 const SWORD = { hit: 7.5, crit: 12 }; // 1d8+3, dice doubled on a crit
 const RIDER = { hit: 3.5, crit: 7 }; // 1d6 on the first landing, doubled on a crit

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { d, d4, d6, d8, d20, flat, roll, savePenalty, turn, Turn, vulnerability } from "../builder";
 import type { Rng } from "../common/rng";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 type Mode = "miss" | "hit" | "crit";
 

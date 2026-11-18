@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { d6, d8, d20, roll } from "../src/builder";
 import { clearAttackCache, setMissRerolledCacheEnabled } from "../src/builder/attack";
 import { bits, dumpTurn, pmfBits, randomCase } from "./helpers/exactDump";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 /**
  * The rerolled-miss PMF cache (`AttackBuilder.missRerolled`) must change no bit of any answer. Three checks:

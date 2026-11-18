@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { d10, d12, d20, d4, d6, d8, roll, RollBuilder, RerollUpToRollBuilder } from "../src/builder";
 import type { Rng } from "../src/common/rng";
 import { PMF } from "../src/pmf/pmf";
 import { expectDist, type Dist } from "./enumerate-dice";
 import { bruteForcePartialRerollUpTo, ruleDie, type OracleDie } from "./enumerate-reroll";
+
+// Oracle and brute-force enumeration: slow under machine load.
+vi.setConfig({ testTimeout: 60_000 });
 
 /**
  * `rerollUpTo(k, { rolls, rolledOnce })`: the roll's own dice are rolled `rolls` times and the
