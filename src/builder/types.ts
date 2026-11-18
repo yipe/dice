@@ -82,9 +82,22 @@ export type AbilityName = Ability | "str" | "dex" | "con" | "int" | "wis" | "cha
 /**
  * How a missed attack roll is rolled again. `reroll`: the kept d20 is replaced by one new d20 and the new roll stands
  * (Heroic Inspiration). `add-d20`: one more d20 is rolled and the best of every d20 rolled is kept (2014 Lucky).
+ * `advantage`: the roll is made again with advantage (Master Duelist): two new d20s, the best kept (three under
+ * elven accuracy), and the first roll is discarded; a disadvantage roll cancels to one new d20.
  * The new d20 is the row's own single die: its reroll of 1s and its minimum kept, its advantage dropped.
  */
-export type MissRerollMode = "reroll" | "add-d20";
+export type MissRerollMode = "reroll" | "add-d20" | "advantage" | AddDieMode;
+
+/**
+ * A superiority-style die added to the missed roll's total (Precision): `add-dN`. It is spent only where the
+ * missed total is within `N` of the AC (a shortfall the die can cover) and is not a natural 1, and then the roll
+ * lands iff the die covers the shortfall, as a hit, or a crit where the natural roll is in the crit range.
+ * A miss it cannot cover does not spend it. Not composable with other modes.
+ */
+export type AddDieMode = "add-d4" | "add-d6" | "add-d8" | "add-d10" | "add-d12";
+
+/** One mode, or several rolled in turn at one miss (Master Duelist, then Lucky): see {@link MissRerollMode}. */
+export type MissRerollSpec = MissRerollMode | readonly MissRerollMode[];
 
 export interface Check {
   roll: RollBuilder;
@@ -93,7 +106,7 @@ export interface Check {
   rollType: RollType;
   advantageDice: 2 | 3;
   critOnHit: boolean;
-  missReroll?: MissRerollMode;
+  missReroll?: MissRerollSpec;
 }
 
 export type SaveResolution = Resolution & {

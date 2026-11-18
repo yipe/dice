@@ -6,8 +6,8 @@ import { sampleCheckDice, type CheckDice } from "./sample";
 import { checkExpression } from "./expression";
 import { requireFinite } from "./arguments";
 import { AlwaysCritBuilder, AlwaysHitBuilder, naturalRollIndex, RollBuilder } from "./roll";
-import { missRerollCheckExpression } from "./miss-reroll";
-import type { AttackRange, MissRerollMode, RollConfig, RollType } from "./types";
+import { assertMissRerollSpec, missRerollCheckExpression } from "./miss-reroll";
+import type { AttackRange, MissRerollSpec, RollConfig, RollType } from "./types";
 
 export interface AttackConfig {
   ac: number;
@@ -20,7 +20,7 @@ export interface AttackConfig {
   // not read it. Unset when neither was called.
   range?: AttackRange;
   // `rerollMisses()`: a missed attack roll is rolled again, in the PMF and in `sample`. Unset when not called.
-  missReroll?: MissRerollMode;
+  missReroll?: MissRerollSpec;
 }
 
 /**
@@ -148,18 +148,21 @@ export class ACBuilder extends RollBuilder {
   }
 
   /**
-   * A missed attack roll is rolled again, once (Heroic Inspiration: `reroll`; 2014 Lucky: `add-d20`, the default).
+   * A missed attack roll is rolled again, once (Heroic Inspiration: `reroll`; 2014 Lucky: `add-d20`, the default;
+   * Master Duelist: `advantage`). A list of modes rolls each in turn while the roll still misses; `add-dN` adds a
+   * die to the missed total instead (`add-d4` .. `add-d12`) and takes no companions.
    * The new d20 is this check's own single die, rolled flat; the bonus dice keep their faces. Exact in the PMF
    * (see {@link missRerollOdds}); `toExpression` spells it where the grammar can. The receiver is unchanged.
    *
    * @throws if the natural roll is not a d20.
    */
-  rerollMisses(mode: MissRerollMode = "add-d20"): ACBuilder {
+  rerollMisses(mode: MissRerollSpec = "add-d20"): ACBuilder {
+    assertMissRerollSpec(mode);
     const root = naturalDieConfig(this);
     if (root === undefined || root.sides !== 20) {
       throw new Error("rerollMisses() needs a check with a d20 natural roll: only a d20 is rolled again.");
     }
-    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, missReroll: mode });
+    return new ACBuilder(this, this.attackConfig.ac, { ...this.attackConfig, missReroll: Array.isArray(mode) ? [...mode] : mode });
   }
 
   /** Sets the crit threshold: a natural roll at or above it is a crit. */

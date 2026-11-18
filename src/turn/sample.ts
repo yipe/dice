@@ -7,6 +7,7 @@
  * walk took; a row with no dice structure picks a draw by its mass and draws its total from the
  * draw's PMF (a "chip", no dice).
  */
+import { addDieSides, isAddDie, modesOf } from "../builder/miss-reroll";
 import { AttackBuilder } from "../builder/attack";
 import type { AttackSample } from "../builder/attack";
 import { ParsedRollBuilder, RollBuilder } from "../builder/roll";
@@ -389,25 +390,31 @@ export function sampleTurn(plan: TurnPlan, eps: number, rng: Rng): Trace {
       const nextReroll = step.rerolls.find((each) => fired[each.slot] === null);
       let rerolled: number | undefined;
       if (nextReroll !== undefined && outcome === "miss" && attack !== undefined) {
-        const again = attack.builder.sampleMissReroll(attack.sample, nextReroll.mode, rng, roller.context);
-        attack = { builder: attack.builder, sample: again };
-        outcome = again.outcome;
-        ownTotal = again.total;
-        rowResult = again.outcome;
-        rowDice = [...traced(again.check, "attack", "you", step.id), ...traced(again.damage, "damage", "you", step.id)];
-        rerolled = nextReroll.slot;
+        // An add-die reroll is spent only on a miss its die can cover; otherwise the miss stands and the die stays.
+        const again = isAddDie(nextReroll.mode)
+          ? attack.builder.sampleRescue(attack.sample, addDieSides(modesOf(nextReroll.mode)[0]) as number, rng, roller.context)
+          : attack.builder.sampleMissReroll(attack.sample, nextReroll.mode, rng, roller.context);
+        if (again !== undefined) {
+          attack = { builder: attack.builder, sample: again };
+          outcome = again.outcome;
+          ownTotal = again.total;
+          rowResult = again.outcome;
+          rowDice = [...traced(again.check, "attack", "you", step.id), ...traced(again.damage, "damage", "you", step.id)];
+          rerolled = nextReroll.slot;
+        }
       }
 
-      // A conversion: the first watched miss while it is unspent hits instead, a plain hit with
-      // the row's hit payload rolled fresh (the d20s stand as rolled).
+      // A conversion: the first watched miss while it is unspent hits (or crits) instead, with
+      // the row's hit (crit) payload rolled fresh (the d20s stand as rolled).
       if (step.converts && outcome === "miss" && attack !== undefined && fired[step.spendSlot] === null) {
-        const payload = attack.builder.samplePayload("hit", rng, roller.context);
+        const landing = step.convertsTo;
+        const payload = attack.builder.samplePayload(landing, rng, roller.context, landing === "crit");
         const total = scaleValue(payload.base.total + payload.separate.reduce((sum, s) => sum + s.total, 0), payload.scale, "floor");
         const damage = [...payload.base.dice, ...payload.separate.flatMap((s) => s.dice)];
-        attack = { builder: attack.builder, sample: { ...attack.sample, outcome: "hit", damage, total, payload } };
-        outcome = "hit";
+        attack = { builder: attack.builder, sample: { ...attack.sample, outcome: landing, damage, total, payload } };
+        outcome = landing;
         ownTotal = total;
-        rowResult = "hit";
+        rowResult = landing;
         rowDice = [...traced(attack.sample.check, "attack", "you", step.id), ...traced(damage, "damage", "you", step.id)];
         spent = true;
       }

@@ -190,6 +190,19 @@ d20.plus(5).plus(d4).withDisadvantage().ac(15).rerollMisses("reroll").onHit(1, d
 d20.plus(5).plus(d4).withDisadvantage().ac(15).rerollMisses("add-d20").onHit(1, d8).mean();     // 4.60378125
 ```
 
+`mode` also takes `"advantage"` (Master Duelist: the roll is made again with advantage, two new d20s and the best kept, three under elven accuracy; the first roll is discarded and a Disadvantage roll cancels to one new d20), a **list** of modes rolled in turn while the roll still misses, and `"add-d4"` .. `"add-d12"` (Precision: a die added to the missed total).
+
+```ts
+const b = d20.plus(5).ac(15);
+b.rerollMisses("advantage").onHit(1, d8).mean();                      // 4.512375
+b.rerollMisses(["advantage", "add-d20"]).onHit(1, d8).mean();         // 4.7584125  (Master Duelist, then Lucky, on one miss)
+b.rerollMisses("add-d8").onHit(1, d8).mean();                         // 3.7125     (Precision; no reroll: 2.7)
+```
+
+- A list composes exactly for flat, advantage and elven-accuracy rolls; a Disadvantage roll composes only when the list starts with `"advantage"`, which cancels it (`reroll` / `add-d20` first throw). A list cannot hold an `add-dN`.
+- `add-dN` is spent only where the die can help: the natural roll is not a 1 and the total is short of the AC by at most `N`. A larger shortfall is a miss that keeps the die (`missRerollUnspent(mode)` is that mass). A spent die lands the roll iff it covers the shortfall: as a crit where the natural roll is in the crit range, else a hit; otherwise the miss stands and the die is gone. `sample` lists the die last, `rescue: true`.
+- `toExpression()` spells only a single `reroll` / `add-d20`; the other modes throw.
+
 `toExpression()` spells a flat check with plain bonus dice (`(d20 reroll d8 + 6 AC 15) * (1d8) crit (2d8)`); advantage, disadvantage, elven accuracy, a d20 minimum and over 400 bonus outcomes throw. `sample` reconstructs the bonus total from the first check, so it throws for bonus dice that explode or keep.
 
 ### Refused mix shapes
@@ -538,10 +551,22 @@ of its own, with its own conversion. It is a substitute: `fireProbability(id)` r
 a second one over the same attacks throws `duplicate-substitute`, and its `TurnSpec` form is
 `{ on: "first-miss", substitute: "hit", of }` in `substitutes`.
 
+### Once per turn: the first miss crits instead
+
+`convertFirstMissToCrit()` is the same conversion into a natural 20 (2024 Stroke of Luck: "turn the roll into a 20"; a surprised Assassinate target): the converted attack is a crit, dealing its crit damage and landing every rider and condition a crit lands. Same `of`, `duplicate-substitute` and `fireProbability(id)` rules; its `TurnSpec` form is `{ on: "first-miss", substitute: "crit", of }`.
+
+```ts
+const attack = d20.plus(5).ac(12).onHit(roll(2, d6).plus(3));
+
+turn([attack, attack]).convertFirstMiss().mean();       // 19.8000
+turn([attack, attack]).convertFirstMissToCrit().mean(); // 23.3700
+```
+
 ### Once per turn: reroll the first miss
 
-`turn([r7, r7]).onFirstHit(roll(2, d6)).rerollFirstMiss()` (two `+7 vs 16, 1d8+4` swings): mean 21.156 (17.02 without), `fireProbability` 0.64. Its `TurnSpec` form is `{ on: "first-miss", substitute: "reroll", mode?: "reroll" | "add-d20", of? }` in `substitutes`.
+`turn([r7, r7]).onFirstHit(roll(2, d6)).rerollFirstMiss()` (two `+7 vs 16, 1d8+4` swings): mean 21.156 (17.02 without), `fireProbability` 0.64. Its `TurnSpec` form is `{ on: "first-miss", substitute: "reroll", mode?: MissRerollSpec, of? }` in `substitutes`.
 
+- `mode` is any `rerollMisses` mode or list: `advantage` (Master Duelist), `["advantage", "add-d20"]` (several features on one miss; `fireProbability` is P(the miss was rerolled)), and `add-d4` .. `add-d12` (Precision). An `add-dN` reroll is spent only on a miss its die can cover, so an uncoverable miss leaves it for a later attack: `turn([r7, r7]).onFirstHit(roll(2, d6)).rerollFirstMiss({ mode: "add-d8" })` is 20.70046875 (`fireProbability` 0.5775); `{ mode: "advantage" }` is 22.9666. A custom `ContextualSource` answers `add-dN` through `missRerollUnspentUnder(context, mode)`.
 - `reroll` (Heroic Inspiration): the kept d20 is replaced and the new roll stands; the other dice still count (under disadvantage, the higher die). `add-d20` (2014 Lucky): one more d20, best kept.
 - Stacking: a miss is offered to the first unspent reroll, in declaration order. A reroll that still misses is final and is never offered to the next. Three `+6 vs 16, 1d10+3` rows, `reroll` then `add-d20`: 21.08143125 (`fireProbability` 0.833625, 0.42525); `reroll` alone 18.97644375.
 - A rerolled hit or crit is a landing for every rider, grant and first-hit transform: `[r7, r7]` with `onFirstHit(keepBestDamage())` is 11.78982421875, and 15.32808984375 with the reroll.
