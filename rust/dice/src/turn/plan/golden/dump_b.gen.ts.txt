@@ -1,0 +1,737 @@
+// Generator of plans_b.json (catalog b), the TypeScript side of the plan golden test (golden/mod.rs).
+//
+// Run: copy this file to /Users/michael/orca/workspaces/dice/rust-dice/tmp-golden-b.ts, then
+//   cd /Users/michael/orca/workspaces/dice/rust-dice && npx tsx tmp-golden-b.ts && rm tmp-golden-b.ts
+// (it writes rust/dice/src/turn/plan/golden/plans_b.json). The catalog below is mirrored entry for
+// entry by `catalog()` in golden/catalog.rs; the dump format is mirrored by golden/dump.rs.
+//
+// DUMP FORMAT (every key always present; Option/undefined -> null, slot sentinels -1 stay -1,
+// non-finite numbers -> the strings "Infinity" / "-Infinity" / "NaN"):
+//   pmf   = { mass, bins: [[value, p], ...] } sorted by value
+//   draw  = { outcome, matched, spends, rerollSlot (-1 = none), applies, bumps, fires, slice: pmf,
+//             byKind: {fail, damage} | null, own: pmf | null, riders: [[id, pmf], ...] | null,
+//             wounded: bool | null, typed: bool | null }
+//   plan  = plan-level fields (see dumpPlan) + steps; step = every Step field but its closures and
+//           sources (trigger -> its `on` string | null). `variants` and `contextPmfs` are dumped
+//           AFTER the probes ran, as arrays with holes = null.
+//
+// PROBE GRID (per step; the Rust side implements exactly this). G = plan.groupCount, S =
+// plan.slotCount, C = plan.counterMax.length.
+//   codesList : [all 0]; then for g in 0..G, for v in [hit, crit, miss, hit+miss, hit matched,
+//               crit matched]: all 0 with codes[g] = v, where hit = advance(0,"hit"),
+//               crit = advance(0,"crit"), miss = advance(0,"miss"),
+//               hit+miss = advance(advance(0,"hit"),"miss"), hit matched = advance(0,"hit",true),
+//               crit matched = advance(0,"crit",true).
+//   firedList : [all null]; then for s in 0..S: all null with fired[s] = "hit".
+//   flagsList : B = OR of plan.flagLiveAfter[*], step.consumes, step.hitConsumes,
+//               step.readAdvantage, step.readDisadvantage, step.readCritOnHit, (1 << bit) of each
+//               flagReads entry with bit >= 0, each coin's bit, plan.startFlags. List = [0], then
+//               each single bit k = 0..31 set in B (ascending, as an unsigned 32-bit value), then B.
+//   countsList: [all 0]; then for c in 0..C: all 0 with counts[c] = cap(c); then all cap(c),
+//               where cap(c) = counterMax[c] if finite else 1000000.
+//   candidates: first the codes at (fired[0], flags[0], counts[0]); then the fired at (codes[0],
+//               flags[0], counts[0]); then the flags; then the counts; then the full cross product
+//               codes x fired x flags x counts (codes outermost, counts innermost). A candidate
+//               whose [codes, fired, flags, counts] repeats an earlier one is skipped; the first
+//               400 remaining are the probes, run in that order. Each probe calls
+//               step.select(...) then step.contextIndexOf(...); a throw is the string
+//               "error: <message>".
+//   per-grant `chanceOf`: null, or { at: [[flags, value | "error: <message>"], ...] } for flags in
+//               [0, each single bit of the OR of plan.flagLiveAfter (ascending), that OR] deduped.
+
+import { advantage, d4, d6, d8, d20, flat, roll } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder";
+import { buildPlan } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/plan";
+import { EPS } from "/Users/michael/orca/workspaces/dice/rust-dice/src/common/types";
+import { advance } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/state";
+import { MAX_TRIGGER_GROUPS } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/types";
+import type { TurnSpec } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/types";
+import { RULES } from "/Users/michael/orca/workspaces/dice/rust-dice/src/dnd5e";
+import { writeFileSync } from "node:fs";
+
+// --- catalog ----------------------------------------------------------------------------------
+
+const sword = () => d20.plus(7).ac(15).onHit(d8.plus(4));
+const axe = () => d20.plus(5).ac(14).onHit(d6.plus(3));
+const orb = () => d20.plus(5).ac(17).onHit(roll(3, d8));
+const fireball = () => d20.plus(5).dc(14).onSaveFailure(roll(2, 6)).saveHalf();
+const named = (id: string, source: any, extra: object = {}) => ({ id, source, ...extra });
+const two = () => [named("a", sword()), named("b", axe())];
+const three = () => [named("a", sword()), named("b", axe()), named("c", sword())];
+
+const fear = () => d20.plus(2).dc(15).ability("wis").onSaveFailure(0);
+const frightenedGrant = { condition: "frightened", rule: RULES.frightened, until: "end-of-turn" as const };
+const fearCond = () => ({ id: "fc", on: "every-hit" as const, of: ["fear"], landing: "fail" as const, grants: [frightenedGrant] });
+const fearAttacks = () => [named("fear", fear()), named("a", sword()), named("b", axe())];
+const adv = (until: "next-attack" | "end-of-turn") => ({ advantage: true as const, until });
+const meleeSword = () => d20.plus(8).ac(16).melee().onHit(d8.plus(4));
+const meleeTwo = () => [named("a", meleeSword()), named("b", axe().melee())];
+const pooling = (): any => ({
+  rowCheck: meleeSword().rowCheck,
+  under: (context: any, eps = 0) =>
+    (context.joined.length === 0 ? meleeSword() : d20.plus(8).ac(16).melee().onHit(d8.plus(4).add(roll(context.joined.length, 6)))).under(context, eps),
+  toPMF: (eps = 0) => meleeSword().toPMF(eps),
+});
+const rerolling = (): any => ({
+  rowCheck: meleeSword().rowCheck,
+  under: (context: any, eps = 0) => meleeSword().under(context, eps),
+  rerolledUnder: (context: any, eps = 0) => meleeSword().under(context, eps),
+  toPMF: (eps = 0) => meleeSword().toPMF(eps),
+});
+const ctxPayload = (withDealt: boolean): any => ({
+  at: (_id: string) => ({
+    onHit: roll(1, 6).toPMF(EPS),
+    onCrit: roll(2, 6).toPMF(EPS),
+    vulnerable: { onHit: roll(2, 6).toPMF(EPS), onCrit: roll(4, 6).toPMF(EPS) },
+  }),
+  ...(withDealt ? { dealt: () => ({ hit: 0.5, crit: 0.75 }) } : {}),
+});
+const smiteTable = () => ({ a: { damage: d8 }, b: { damage: d8 } });
+
+const catalog: Record<string, () => any> = {
+  // --- rider lowering and placement ---
+  eh_max1_lowered: () => ({ attacks: three(), riders: [{ on: "every-hit", id: "eh", max: 1, damage: d6 }] }),
+  th_first_hit_gated: () => ({
+    attacks: fearAttacks(),
+    riders: [{ id: "rider", on: "first-hit", of: ["a", "b"], damage: flat(4), targetHas: ["frightened"] }],
+    conditions: [fearCond()],
+  }),
+  th_first_hit_gated_masses: () => ({
+    folds: "masses",
+    spec: {
+      attacks: fearAttacks(),
+      riders: [{ id: "rider", on: "first-hit", of: ["a", "b"], damage: flat(4), targetHas: ["frightened"] }],
+      conditions: [fearCond()],
+    },
+  }),
+  th_every_hit_any_of: () => ({
+    attacks: fearAttacks(),
+    riders: [{ id: "rider", on: "every-hit", of: ["a", "b"], damage: flat(4), targetHas: ["frightened", "prone"] }],
+    conditions: [fearCond()],
+  }),
+  th_condition_gate: () => ({
+    attacks: fearAttacks(),
+    conditions: [fearCond(), { id: "g", on: "every-hit", of: ["a"], targetHas: ["frightened"], grants: [adv("end-of-turn")] }],
+  }),
+  err_th_any_crit: () => ({
+    attacks: fearAttacks(),
+    riders: [{ id: "rider", on: "any-crit", of: ["a", "b"], damage: flat(4), targetHas: ["frightened"] }],
+    conditions: [fearCond()],
+  }),
+  err_th_empty: () => ({
+    attacks: fearAttacks(),
+    riders: [{ id: "rider", on: "every-hit", of: ["a", "b"], damage: flat(4), targetHas: [] }],
+    conditions: [fearCond()],
+  }),
+  err_th_watches_rider: () => ({
+    attacks: fearAttacks(),
+    riders: [
+      { id: "r0", on: "first-hit", of: ["a"], damage: d6 },
+      { id: "rider", on: "every-hit", of: ["r0"], damage: flat(4), targetHas: ["frightened"] },
+    ],
+    conditions: [fearCond()],
+  }),
+  err_th_named: () => ({
+    attacks: fearAttacks(),
+    riders: [{ id: "rider", on: "every-hit", of: ["a", "b"], damage: flat(4), targetHas: ["frightened"] }],
+    conditions: [fearCond(), { id: "c2", on: "every-hit", of: ["rider"], grants: [adv("next-attack")] }],
+  }),
+  err_th_condition_first_hit: () => ({
+    attacks: fearAttacks(),
+    conditions: [fearCond(), { id: "g", on: "first-hit", of: ["a"], targetHas: ["frightened"], grants: [adv("end-of-turn")] }],
+  }),
+  // --- contextual payloads ---
+  ctx_any_crit: () => ({ attacks: two(), riders: [{ id: "cx", on: "any-crit", damage: ctxPayload(false) }] }),
+  ctx_first_hit: () => ({ attacks: two(), riders: [{ id: "cx", on: "first-hit", damage: ctxPayload(false) }] }),
+  ctx_every_hit: () => ({ attacks: two(), riders: [{ id: "cx", on: "every-hit", damage: ctxPayload(false) }] }),
+  err_ctx_any_miss: () => ({ attacks: two(), riders: [{ id: "cx", on: "any-miss", damage: ctxPayload(false) }] }),
+  ctx_dealt_condition: () => ({
+    attacks: [named("a", sword().typed("fire")), named("b", axe().typed("fire"))],
+    riders: [{ id: "cx", on: "every-hit", damage: ctxPayload(true) }],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a", "b"], dealing: "fire", grants: [adv("next-attack")] }],
+  }),
+  // --- wakes, folds, conditions naming riders ---
+  wakes_folds_first_hit: () => ({
+    attacks: meleeTwo(),
+    riders: [{ id: "sneak", on: "first-hit", damage: d6 }],
+    conditions: [{ id: "w", on: "every-hit", of: ["a"], grants: [{ condition: "unconscious", rule: RULES.unconscious, until: "until-damaged" }] }],
+  }),
+  first_hit_landing_any: () => ({ attacks: two(), riders: [{ id: "sneak", on: "first-hit", landing: "any", damage: d6 }] }),
+  condition_names_rider: () => ({
+    attacks: two(),
+    riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: d6 }],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["sneak"], grants: [adv("next-attack")] }],
+  }),
+  condition_names_rider_where: () => ({
+    attacks: two(),
+    riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: d6 }],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["sneak"], where: { sneak: ["a"] }, grants: [adv("next-attack")] }],
+  }),
+  err_condition_rider_beside_others: () => ({
+    attacks: two(),
+    riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: d6 }],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["sneak", "a"], grants: [adv("next-attack")] }],
+  }),
+  err_condition_where_unknown: () => ({
+    attacks: two(),
+    riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: d6 }],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["sneak"], where: { sneak: ["nowhere"] }, grants: [adv("next-attack")] }],
+  }),
+  err_condition_where_not_rider: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], where: { b: [] }, grants: [adv("next-attack")] }],
+  }),
+  // --- partners ---
+  partner_spellfire: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a", "b"], perSource: smiteTable(), damage: d6 },
+      { id: "adept", on: "first-hit", of: ["smite"], where: { smite: ["a"] }, damage: d4 },
+    ],
+  }),
+  partner_default_rows: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a", "b"], perSource: smiteTable(), damage: d6 },
+      { id: "adept", on: "first-hit", of: ["smite"], damage: d4 },
+    ],
+  }),
+  partner_plus_own_row: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a"], perSource: { a: { damage: d8 } }, damage: d6 },
+      { id: "adept", on: "first-hit", of: ["smite", "b"], damage: d4 },
+    ],
+  }),
+  err_partner_where_key: () => ({
+    attacks: two(),
+    riders: [{ id: "adept", on: "first-hit", of: ["a"], where: { smite: ["a"] }, damage: d4 }],
+  }),
+  err_partner_every_hit: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a", "b"], perSource: smiteTable(), damage: d6 },
+      { id: "adept", on: "every-hit", of: ["smite"], damage: d4 },
+    ],
+  }),
+  err_partner_chain: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a", "b"], perSource: smiteTable(), damage: d6 },
+      { id: "adept", on: "first-hit", of: ["smite"], damage: d4 },
+      { id: "third", on: "first-hit", of: ["adept"], damage: d4 },
+    ],
+  }),
+  err_partner_rolls_attack: () => ({
+    attacks: two(),
+    riders: [
+      { id: "smite", on: "first-hit", of: ["a", "b"], perSource: smiteTable(), damage: d6 },
+      { id: "adept", on: "first-hit", of: ["smite"], damage: axe() },
+    ],
+  }),
+  // --- joins ---
+  joins_pooling: () => ({
+    attacks: [pooling(), pooling()],
+    riders: [{ id: "a", on: "first-hit", of: ["attack 1"], damage: d6, joins: ["attack 1"] }],
+  }),
+  err_joins_not_pooling: () => ({
+    attacks: [meleeSword(), meleeSword()],
+    riders: [{ id: "a", on: "first-hit", of: ["attack 1", "attack 2"], damage: d6, joins: ["attack 1"] }],
+  }),
+  err_joins_unwatched: () => ({
+    attacks: [pooling(), pooling()],
+    riders: [{ id: "a", on: "first-hit", of: ["attack 1"], damage: d6, joins: ["attack 2"] }],
+  }),
+  err_joins_landing_any: () => ({
+    attacks: [pooling(), pooling()],
+    riders: [{ id: "a", on: "first-hit", of: ["attack 1"], landing: "any", damage: d6, joins: ["attack 1"] }],
+  }),
+  // --- landings and save rows ---
+  save_two_landings: () => ({
+    attacks: [named("fb", fireball()), named("a", sword())],
+    riders: [
+      { id: "r1", on: "first-hit", of: ["fb"], landing: "fail", damage: d6 },
+      { id: "r2", on: "any-crit", of: ["fb", "a"], landing: "damage", damage: d4 },
+    ],
+  }),
+  err_save_no_landing: () => ({
+    attacks: [named("fb", fireball()), named("a", sword())],
+    riders: [{ id: "r1", on: "first-hit", of: ["fb"], damage: d6 }],
+  }),
+  err_landing_not_fired: () => ({
+    attacks: [named("a", sword())],
+    riders: [
+      { id: "sneak", on: "first-hit", damage: d6 },
+      { id: "nf", on: "not-fired", of: "sneak", landing: "fail", damage: d4 },
+    ],
+  }),
+  after_save_row_damage: () => ({
+    attacks: [named("fb", fireball()), named("a", sword(), { after: { of: "fb", landing: "damage" } })],
+  }),
+  after_rider_any: () => ({
+    attacks: [named("a", sword()), named("w", d6, { after: { of: "sneak", landing: "any" } })],
+    riders: [{ id: "sneak", on: "first-hit", of: ["a"], damage: d6 }],
+  }),
+  err_after_rolls_attack: () => ({
+    attacks: [named("a", sword()), named("w", d6, { after: { of: "sneak", landing: "hit" } })],
+    riders: [{ id: "sneak", on: "first-hit", of: ["a"], damage: axe() }],
+  }),
+  err_after_happens: () => ({
+    attacks: [named("a", sword()), named("w", d6, { after: { of: "sneak", landing: "hit" } })],
+    riders: [{ id: "sneak", on: "first-hit", of: ["a"], damage: d6, happens: 0.5 }],
+  }),
+  err_after_not_fired: () => ({
+    attacks: [named("a", sword()), named("w", d6, { after: { of: "nf", landing: "hit" } })],
+    riders: [
+      { id: "sneak", on: "first-hit", of: ["a"], damage: d6 },
+      { id: "nf", on: "not-fired", of: "sneak", damage: d4 },
+    ],
+  }),
+  err_after_later_row: () => ({
+    attacks: [named("a", sword()), named("w", d6, { after: { of: "sneak", landing: "hit" } }), named("b", axe())],
+    riders: [{ id: "sneak", on: "first-hit", of: ["a", "b"], damage: d6 }],
+  }),
+  // --- dealing ---
+  dealing_typed: () => ({
+    attacks: [named("a", sword().typed("fire")), named("b", axe().typed("fire"))],
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a", "b"], dealing: "fire", grants: [adv("next-attack")] }],
+  }),
+  err_dealing_untyped: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a", "b"], dealing: "fire", grants: [adv("next-attack")] }],
+  }),
+  err_dealing_two_types: () => ({
+    attacks: [named("a", sword().typed("fire")), named("b", axe().typed("cold"))],
+    conditions: [
+      { id: "c1", on: "every-hit", of: ["a"], dealing: "fire", grants: [adv("next-attack")] },
+      { id: "c2", on: "every-hit", of: ["b"], dealing: "cold", grants: [adv("next-attack")] },
+    ],
+  }),
+  err_dealing_any_miss: () => ({
+    attacks: [named("a", sword().typed("fire"))],
+    conditions: [{ id: "cnd", on: "any-miss", of: ["a"], dealing: "fire", grants: [adv("next-attack")] }],
+  }),
+  rider_landing_damage_attack_row: () => ({
+    attacks: two(),
+    riders: [{ id: "r", on: "first-hit", of: ["a"], landing: "damage", damage: d6 }],
+  }),
+  // --- conditions: sources, declined, start ---
+  declined_optional: () => ({
+    declined: ["opt"],
+    spec: { attacks: three(), conditions: [{ id: "opt", on: "every-hit", of: ["a"], optional: true, grants: [adv("next-attack")] }] },
+  }),
+  condition_of_empty: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: [], grants: [adv("next-attack")] }],
+  }),
+  start_prone_effect_sources: () => ({
+    attacks: meleeTwo(),
+    conditions: [
+      { on: "start", grants: [{ condition: "prone", rule: RULES.prone, until: "end-of-turn" }] },
+      { id: "cnd", on: "every-hit", of: ["a"], grants: [adv("next-attack")] },
+    ],
+  }),
+  start_target_other: () => ({
+    attacks: [named("a", sword()), named("b", axe(), { target: "second" })],
+    conditions: [{ id: "st", on: "start", target: "second", grants: [adv("end-of-turn")] }],
+  }),
+  err_start_unknown_target: () => ({
+    attacks: two(),
+    conditions: [{ id: "st", on: "start", target: "nobody", grants: [adv("end-of-turn")] }],
+  }),
+  err_start_with_chance: () => ({
+    attacks: two(),
+    conditions: [{ id: "st", on: "start", chance: 0.5, grants: [adv("end-of-turn")] }],
+  }),
+  err_condition_chance_range: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], chance: 1.5, grants: [adv("next-attack")] }],
+  }),
+  err_condition_target_on_trigger: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "first-hit", of: ["a"], target: "target", grants: [adv("end-of-turn")] }],
+  }),
+  err_condition_onsave_alone: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], onSave: [adv("end-of-turn")], grants: [adv("next-attack")] }],
+  }),
+  // --- probes ---
+  probe_skips_uncrittable: () => ({
+    attacks: [named("fb", fireball()), named("a", sword()), named("f", flat(5))],
+    observe: [{ id: "p", on: "any-crit" }],
+  }),
+  probe_default_rerolls: () => ({
+    attacks: [named("a", sword())],
+    riders: [{ id: "rr", on: "first-miss", damage: axe() }],
+    observe: [{ id: "p", on: "any-crit" }],
+  }),
+  err_probe_no_crit_source: () => ({
+    attacks: [named("a", sword()), named("f", flat(5))],
+    observe: [{ id: "p", on: "any-crit", of: ["f"] }],
+  }),
+  // --- substitutes ---
+  sub_beside_miss_reroll: () => ({
+    attacks: two(),
+    substitutes: [
+      { id: "kh", on: "first-hit", substitute: "reroll-keep-higher" },
+      { id: "rr", on: "first-miss", substitute: "reroll" },
+    ],
+  }),
+  err_sub_duplicate_transform: () => ({
+    attacks: two(),
+    substitutes: [
+      { id: "kh1", on: "first-hit", substitute: "reroll-keep-higher" },
+      { id: "kh2", on: "first-hit", substitute: "reroll-keep-higher", of: ["a"] },
+    ],
+  }),
+  err_sub_reroll_after_convert: () => ({
+    attacks: two(),
+    substitutes: [
+      { id: "conv", on: "first-miss", substitute: "hit" },
+      { id: "rr", on: "first-miss", substitute: "reroll" },
+    ],
+  }),
+  err_sub_convert_after_reroll: () => ({
+    attacks: two(),
+    substitutes: [
+      { id: "rr", on: "first-miss", substitute: "reroll" },
+      { id: "conv", on: "first-miss", substitute: "hit" },
+    ],
+  }),
+  err_sub_below_with_miss_reroll: () => ({
+    attacks: two(),
+    substitutes: [
+      { id: "kh", on: "first-hit", substitute: "reroll-keep-higher", policy: { kind: "below", hit: 6, crit: 8 } },
+      { id: "rr", on: "first-miss", substitute: "reroll" },
+    ],
+  }),
+  err_sub_miss_policy: () => ({
+    attacks: two(),
+    substitutes: [{ id: "conv", on: "first-miss", substitute: "hit", policy: { kind: "always" } }],
+  }),
+  err_sub_optimal: () => ({
+    attacks: two(),
+    substitutes: [{ id: "kh", on: "first-hit", substitute: "reroll-keep-higher", policy: { kind: "optimal" } }],
+  }),
+  err_sub_miss_of_flat: () => ({
+    attacks: [named("a", sword()), named("f", flat(5))],
+    substitutes: [{ id: "conv", on: "first-miss", substitute: "hit", of: ["f"] }],
+  }),
+  err_sub_any_miss_reroll_converted: () => ({
+    attacks: [named("a", sword())],
+    riders: [{ id: "rr", on: "any-miss", of: ["a"], damage: axe() }],
+    substitutes: [{ id: "conv", on: "first-miss", substitute: "hit", of: ["rr"] }],
+  }),
+  err_sub_converts_rider_reroll: () => ({
+    attacks: [named("a", sword())],
+    riders: [{ id: "rr", on: "first-miss", of: ["a"], damage: axe() }],
+    substitutes: [{ id: "conv", on: "first-miss", substitute: "hit", of: ["a"] }],
+  }),
+  err_sub_watches_condition: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], grants: [adv("next-attack")] }],
+    substitutes: [{ id: "kh", on: "first-hit", substitute: "reroll-keep-higher", of: ["cnd"] }],
+  }),
+  sub_rerolled_under: () => ({
+    attacks: [named("a", rerolling()), named("b", axe())],
+    substitutes: [{ id: "kh", on: "first-hit", substitute: "reroll-keep-higher" }],
+  }),
+  err_sub_rerolled_under_below: () => ({
+    attacks: [named("a", rerolling()), named("b", axe())],
+    substitutes: [{ id: "kh", on: "first-hit", substitute: "reroll-keep-higher", policy: { kind: "below", hit: 6, crit: 8 } }],
+  }),
+  // --- attack lists, rerolls, tags ---
+  attack_list_flurry: () => ({
+    attacks: [named("a", sword())],
+    riders: [{ id: "fl", on: "first-hit", of: ["a"], damage: [sword(), sword()] }],
+  }),
+  err_watch_list_rider: () => ({
+    attacks: [named("a", sword())],
+    riders: [
+      { id: "fl", on: "first-hit", of: ["a"], damage: [sword(), sword()] },
+      { id: "after", on: "first-hit", of: ["fl"], damage: d6 },
+    ],
+  }),
+  reroll_tags_default_of: () => ({
+    attacks: [named("a", sword().tagged("blade"))],
+    riders: [
+      { id: "s0", on: "first-hit", damage: d6 },
+      { id: "rr", on: "first-miss", damage: axe().tagged("blade") },
+      { id: "s2", on: "first-hit", damage: d6 },
+      { id: "s3", on: "first-hit", of: ["blade"], damage: d4 },
+    ],
+  }),
+  // --- attached conditions ---
+  attached_every_hit: () => ({ attacks: [named("a", sword().onEveryHit(advantage().untilNextAttack())), named("b", axe())] }),
+  attached_any_crit_chance: () => ({
+    attacks: [named("a", sword().onAnyCrit(advantage().untilEndOfTurn(), { chance: 0.5 })), named("b", axe())],
+  }),
+  attached_first_crit_optional: () => ({
+    attacks: [named("a", sword().onFirstCrit(advantage().untilEndOfTurn(), { optional: true })), named("b", axe())],
+  }),
+  attached_dealing: () => ({
+    attacks: [named("a", sword().typed("fire").onEveryHit(advantage().untilNextAttack(), { dealing: "fire" })), named("b", axe())],
+  }),
+  attached_two_attacks: () => ({
+    attacks: [
+      named("a", sword().onEveryHit(advantage().untilNextAttack())),
+      named("b", axe().onAnyCrit(advantage().untilEndOfTurn())),
+      named("c", sword()),
+    ],
+    conditions: [{ id: "decl", on: "every-hit", of: ["c"], grants: [adv("end-of-turn")] }],
+  }),
+};
+
+// --- dump -------------------------------------------------------------------------------------
+
+type Json = unknown;
+
+const pmfDump = (pmf: any): Json => ({ mass: pmf.mass(), bins: pmf.support().map((v: number) => [v, pmf.pAt(v)]) });
+
+const drawDump = (d: any): Json => ({
+  outcome: d.outcome,
+  matched: d.matched,
+  spends: d.spends,
+  rerollSlot: d.rerollSlot ?? -1,
+  applies: [...d.applies],
+  bumps: [...d.bumps],
+  fires: [...d.fires],
+  slice: pmfDump(d.slice),
+  byKind: d.byKind === undefined ? null : { fail: d.byKind.fail, damage: d.byKind.damage },
+  own: d.own === undefined ? null : pmfDump(d.own),
+  riders: d.riders === undefined ? null : d.riders.map(([id, p]: [string, any]) => [id, pmfDump(p)]),
+  wounded: d.wounded ?? null,
+  typed: d.typed ?? null,
+});
+
+const rowContextDump = (c: any): Json =>
+  c === undefined
+    ? null
+    : {
+        rollType: c.rollType,
+        autoHit: c.autoHit,
+        critOnHit: c.critOnHit,
+        autoFail: c.autoFail,
+        vulnerable: c.vulnerable,
+        penaltyDice: c.penaltyDice.map((d: any) => ({ count: d.count, sides: d.sides })),
+        joined: [...c.joined],
+      };
+
+const singleBits = (mask: number): number[] => {
+  const bits: number[] = [];
+  for (let k = 0; k < 32; k++) if ((mask >>> k) & 1) bits.push((1 << k) >>> 0);
+  return bits;
+};
+
+const unique = <T>(xs: T[]): T[] => [...new Set(xs)];
+
+const errorText = (e: unknown): string => `error: ${(e as Error).message}`;
+
+const grantDump = (g: any, liveBits: number): Json => {
+  let chanceOf: Json = null;
+  if (g.chanceOf !== undefined) {
+    const at: Json[] = [];
+    for (const flags of unique([0, ...singleBits(liveBits), liveBits >>> 0])) {
+      let value: Json;
+      try {
+        value = g.chanceOf(flags);
+      } catch (e) {
+        value = errorText(e);
+      }
+      at.push([flags, value]);
+    }
+    chanceOf = { at };
+  }
+  return {
+    condition: g.condition,
+    on: g.on,
+    reads: g.reads,
+    landing: g.landing ?? null,
+    chance: g.chance,
+    chanceOf,
+    grants: g.grants,
+    onSave: g.onSave,
+    inForce: g.inForce,
+    effective: g.effective,
+    tried: g.tried,
+    rider: g.rider ?? null,
+    dealing: g.dealing,
+    counted: g.counted,
+    countedInForce: g.countedInForce,
+    countOnly: g.countOnly,
+    gateMask: g.gateMask ?? null,
+  };
+};
+
+const pairs = <V>(m: ReadonlyMap<string, V>, f: (v: V) => Json = (v) => v as Json): Json =>
+  [...m].map(([k, v]) => [k, f(v)]);
+
+/** The probes of `step`: see PROBE GRID at the top. */
+function probesOf(plan: any, step: any): { codes: number[]; fired: (string | null)[]; flags: number; counts: number[] }[] {
+  const G: number = plan.groupCount;
+  const S: number = plan.slotCount;
+  const C: number = plan.counterMax.length;
+  const hit = advance(0, "hit");
+  const crit = advance(0, "crit");
+  const miss = advance(0, "miss");
+  const states = [hit, crit, miss, advance(hit, "miss"), advance(0, "hit", true), advance(0, "crit", true)];
+  const codesList: number[][] = [new Array(G).fill(0)];
+  for (let g = 0; g < G; g++) {
+    for (const v of states) {
+      const codes = new Array(G).fill(0);
+      codes[g] = v;
+      codesList.push(codes);
+    }
+  }
+  const firedList: (string | null)[][] = [new Array(S).fill(null)];
+  for (let s = 0; s < S; s++) {
+    const fired: (string | null)[] = new Array(S).fill(null);
+    fired[s] = "hit";
+    firedList.push(fired);
+  }
+  let mask = 0;
+  for (const f of plan.flagLiveAfter) mask |= f;
+  mask |= step.consumes | step.hitConsumes | step.readAdvantage | step.readDisadvantage | step.readCritOnHit;
+  for (const read of step.flagReads) if (read.bit >= 0) mask |= 1 << read.bit;
+  for (const coin of plan.coins) mask |= coin.bit;
+  mask |= plan.startFlags;
+  mask >>>= 0;
+  const flagsList = unique([0, ...singleBits(mask), mask]);
+  const cap = (c: number): number => (Number.isFinite(plan.counterMax[c]) ? plan.counterMax[c] : 1000000);
+  const countsList: number[][] = [new Array(C).fill(0)];
+  for (let c = 0; c < C; c++) {
+    const counts = new Array(C).fill(0);
+    counts[c] = cap(c);
+    countsList.push(counts);
+  }
+  countsList.push(Array.from({ length: C }, (_, c) => cap(c)));
+
+  const seen = new Set<string>();
+  const probes: { codes: number[]; fired: (string | null)[]; flags: number; counts: number[] }[] = [];
+  const push = (codes: number[], fired: (string | null)[], flags: number, counts: number[]): boolean => {
+    if (probes.length >= 400) return false;
+    const key = JSON.stringify([codes, fired, flags, counts]);
+    if (seen.has(key)) return true;
+    seen.add(key);
+    probes.push({ codes, fired, flags, counts });
+    return true;
+  };
+  for (const codes of codesList) push(codes, firedList[0], flagsList[0], countsList[0]);
+  for (const fired of firedList) push(codesList[0], fired, flagsList[0], countsList[0]);
+  for (const flags of flagsList) push(codesList[0], firedList[0], flags, countsList[0]);
+  for (const counts of countsList) push(codesList[0], firedList[0], flagsList[0], counts);
+  for (const codes of codesList)
+    for (const fired of firedList)
+      for (const flags of flagsList)
+        for (const counts of countsList) if (!push(codes, fired, flags, counts)) return probes;
+  return probes;
+}
+
+function dumpStep(plan: any, step: any, liveBits: number): Json {
+  const probes = probesOf(plan, step).map((p) => {
+    let select: Json;
+    let contextIndex: Json;
+    try {
+      select = step.select([...p.codes], [...p.fired], p.flags, [...p.counts]);
+    } catch (e) {
+      select = errorText(e);
+    }
+    try {
+      contextIndex = step.contextIndexOf([...p.codes], [...p.fired], p.flags, [...p.counts]);
+    } catch (e) {
+      contextIndex = errorText(e);
+    }
+    return { ...p, select, contextIndex };
+  });
+  return {
+    id: step.id,
+    trigger: step.trigger === null ? null : step.trigger.on,
+    probes,
+    variants: Array.from({ length: step.variants.length }, (_, i) =>
+      step.variants[i] === undefined ? null : step.variants[i].map(drawDump)
+    ),
+    damage: step.damage === null ? null : { hit: pmfDump(step.damage.hit), crit: pmfDump(step.damage.crit) },
+    updates: [...step.updates],
+    updateKinds: [...step.updateKinds],
+    settled: [...step.settled],
+    releases: [...step.releases],
+    reads: step.reads,
+    slot: step.slot,
+    negates: step.negates,
+    spendSlot: step.spendSlot,
+    consumes: step.consumes,
+    hitConsumes: step.hitConsumes,
+    wounds: step.wounds,
+    gate: step.gate === undefined ? null : { ...step.gate },
+    grants: step.grants.map((g: any) => grantDump(g, liveBits)),
+    readAdvantage: step.readAdvantage,
+    readDisadvantage: step.readDisadvantage,
+    readCritOnHit: step.readCritOnHit,
+    flagReads: step.flagReads.map((r: any) => ({ bit: r.bit, modifiers: r.modifiers, penalty: r.penalty, source: r.source })),
+    contextPmfs: Array.from({ length: step.contextPmfs.length }, (_, i) =>
+      step.contextPmfs[i] === undefined ? null : pmfDump(step.contextPmfs[i])
+    ),
+    contextRollTypes: [...step.contextRollTypes],
+    contextVulnerable: [...step.contextVulnerable],
+    contextRowContexts: step.contextRowContexts.map(rowContextDump),
+    rerolls: step.rerolls.map((r: any) => ({ slot: r.slot, mode: r.mode })),
+    policy: step.policy === null ? null : { ...step.policy },
+    transformed: step.transformed,
+    converts: step.converts,
+    chance: step.chance,
+  };
+}
+
+function dumpPlan(plan: any): Json {
+  let liveBits = 0;
+  for (const f of plan.flagLiveAfter) liveBits |= f;
+  return {
+    effectSources: plan.effectSources.map((s: any) => ({ ...s })),
+    optionalIds: [...plan.optionalIds],
+    groupCount: plan.groupCount,
+    attackPMFs: plan.attackPMFs.map(pmfDump),
+    attackSingles: plan.attackSingles.map(pmfDump),
+    attackIds: [...plan.attackIds],
+    riderIds: [...plan.riderIds],
+    substituteIds: [...plan.substituteIds],
+    probeIds: [...plan.probeIds],
+    rerollIds: [...plan.rerollIds],
+    fireSlots: pairs(plan.fireSlots),
+    slotCount: plan.slotCount,
+    perHitGroups: pairs(plan.perHitGroups),
+    perHitCritOnly: [...plan.perHitCritOnly],
+    perHitAny: [...plan.perHitAny],
+    riderRows: pairs(plan.riderRows, (v: string[]) => [...v]),
+    probes: pairs(plan.probes),
+    everyHitIds: [...plan.everyHitIds],
+    counterMax: [...plan.counterMax],
+    groupLastReadStep: [...plan.groupLastReadStep],
+    conditionIds: [...plan.conditionIds],
+    flagLiveAfter: [...plan.flagLiveAfter],
+    coins: plan.coins.map((c: any) => ({ id: c.id, bit: c.bit, happens: c.happens })),
+    startFlags: plan.startFlags,
+    startConditions: [...plan.startConditions],
+    stateLimit: plan.stateLimit,
+    dealing: plan.dealing,
+    meleeLeaning: [...plan.meleeLeaning],
+    sourceOf: [...plan.sourceOf.keys()],
+    riderOf: [...plan.riderOf.keys()],
+    payloadAt: [...plan.payloadAt.keys()],
+    steps: plan.steps.map((s: any) => dumpStep(plan, s, liveBits)),
+  };
+}
+
+const out: Record<string, unknown> = {};
+for (const [name, make] of Object.entries(catalog)) {
+  try {
+    const made: any = make();
+    const wrapped = made.attacks === undefined && made.spec !== undefined;
+    const spec: TurnSpec = wrapped ? made.spec : made;
+    out[name] = { plan: dumpPlan(buildPlan(spec, EPS, new Set(wrapped ? (made.declined ?? []) : []), wrapped ? (made.folds ?? "joint") : "joint")) };
+  } catch (e: any) {
+    out[name] = { error: { class: e.constructor.name, code: e.code ?? null, id: e.id ?? null, message: e.message } };
+  }
+}
+writeFileSync(
+  "/Users/michael/orca/workspaces/dice/rust-dice/rust/dice/src/turn/plan/golden/plans_b.json",
+  JSON.stringify(out, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? String(value) : value))
+);

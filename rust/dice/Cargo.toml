@@ -1,0 +1,35 @@
+[package]
+name = "yipe-dice"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Rust port of @yipe/dice (hand-written; verified against fixtures/cases.jsonl from the TypeScript original)"
+
+[dependencies]
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+regex = "1"
+thiserror = "2"
+rayon = { version = "1", optional = true }
+
+[features]
+# Batch entry point (`turn::batch`) runs its turns on rayon. Off for wasm (no threads).
+default = ["parallel"]
+parallel = ["dep:rayon"]
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+redundant_closure_for_method_calls = "warn"
+redundant_closure = "warn"
+cast_lossless = "warn"
+needless_pass_by_value = "warn"
+items_after_statements = "warn"
+doc_markdown = "warn"
+format_push_string = "warn"
+assigning_clones = "warn"
+manual_let_else = "warn"
+single_match_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+explicit_iter_loop = "warn"

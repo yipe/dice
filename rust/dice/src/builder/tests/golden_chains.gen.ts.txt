@@ -1,0 +1,64 @@
+import { d4, d6, d8, d10, d12, d20, hd20, roll, flat, d, sumRolls } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder";
+import { RollBuilder } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder/roll";
+
+const chains: Record<string, () => RollBuilder> = {
+  explode_d6_3: () => roll(2).d(6).explode(3),
+  explode_d4_1_min2: () => roll(1).d(4).minimum(2).explode(1),
+  explode_reroll: () => roll(3).d(6).reroll(2).explode(2),
+  explodePool_3d6_2: () => roll(3).d(6).explodePool(2),
+  explodePool_2d4_3_plus: () => roll(2).d(4).explodePool(3).plus(2),
+  explodePool_d1: () => roll(2).d(1).explodePool(2),
+  kh_4d6_3: () => roll(4, d6).keepHighest(4, 3),
+  kl_5d8_2: () => roll(5, d8).keepLowest(5, 2),
+  kh_trials: () => roll(2, d6).keepHighest(3, 1),
+  kl_trials: () => roll(2, d6).keepLowest(3, 1),
+  bestOf_5d10_3_plus: () => roll(5).d(10).bestOf(3).plus(4),
+  bestOf_6d6_4: () => roll(6).d(6).bestOf(4),
+  khAll_times: () => roll(2, d6).plus(1).keepHighestAll(3, 2).times(2),
+  klAll: () => roll(3, d8).keepLowestAll(4, 2).plus(d4),
+  adv_d6: () => roll(2).d(6).withAdvantage(),
+  elven_d8_x2: () => roll(2).d(8).withElvenAccuracy().plus(1),
+  dis_d20_min: () => roll(1).d(20).minimum(5).withDisadvantage(),
+  adv_hd20_plus: () => hd20.withAdvantage().plus(5),
+  elven_hd20: () => hd20.withElvenAccuracy(),
+  d20_expl: () => d20.reroll(2).minimum(3).withAdvantage(),
+  half_2d6: () => roll(2, d6).half().plus(1),
+  scale_floor: () => roll(3, d6).scaleResult(1, 2),
+  scale_ceil: () => roll(3, d4).scaleResult(3, 2, "ceil"),
+  scale_round: () => roll(2, d8).scaleResult(2, 3, "round"),
+  vuln: () => roll(2, d6).plus(3).scaleResult(2),
+  maxOf_3: () => roll(2, d6).plus(3).maxOf(3),
+  maxOf_other: () => roll(3, d8).maxOf(roll(2, d10)),
+  sum_half_scale: () => sumRolls([roll(2, d6).half(), roll(1, d8).scaleResult(2), d4]),
+  sub_groups: () => roll(2, d6).minus(d4).plus(roll(1, d8)).plus(-2),
+  rerollUpTo_2d6: () => roll(2, d6).rerollUpTo(1),
+  rerollUpTo_mixed: () => roll(2, d6).plus(roll(1, d8)).plus(3).rerollUpTo(2),
+  rerollUpTo_rolls: () => roll(2, d6).rerollUpTo(1, { rolls: 2 }),
+  rerollUpTo_once: () => roll(1, d8).plus(3).rerollUpTo(1, { rolls: 2, rolledOnce: roll(1, d10) }),
+  rerollUpTo_sub: () => roll(2, d6).minus(d4).rerollUpTo(1),
+  rerollUpTo_gwf: () => roll(3, d6).reroll(2).minimum(2).rerollUpTo(2),
+  gwf_reroll2_2d6: () => roll(2, d6).reroll(2),
+  pooled_scale: () => roll(2, d6).plus(3).keepHighestAll(2, 1).scaleDice(2),
+  doubled_kh: () => roll(1, d12).keepHighest(2, 1).doubleDice(),
+  flat_only: () => flat(5),
+  neg_flat: () => roll(0).plus(-3),
+  zero_dice: () => roll(0, 6, 3),
+  repeated_kh: () => roll(2, d6.keepHighest(2, 1)),
+  repeated_neg: () => roll(-2, d6.plus(1)),
+  d_string: () => d("2d6+3").plus(0),
+};
+
+const out: Record<string, unknown> = {};
+for (const [name, build] of Object.entries(chains)) {
+  const entry: Record<string, unknown> = {};
+  try {
+    const r = build();
+    try { entry.expr = r.toExpression(); } catch (e) { entry.exprErr = (e as Error).message; }
+    try {
+      const p = r.toPMF();
+      entry.bins = p.support().map((v) => [v, p.pAt(v)]);
+    } catch (e) { entry.pmfErr = (e as Error).message; }
+  } catch (e) { entry.buildErr = (e as Error).message; }
+  out[name] = entry;
+}
+console.log(JSON.stringify(out));

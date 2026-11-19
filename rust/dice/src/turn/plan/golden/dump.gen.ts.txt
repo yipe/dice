@@ -1,0 +1,486 @@
+// Generator of plans.json, the TypeScript side of the plan golden test (golden/mod.rs).
+//
+// Run: copy this file to /Users/michael/orca/workspaces/dice/rust-dice/tmp-golden.ts, then
+//   cd /Users/michael/orca/workspaces/dice/rust-dice && npx tsx tmp-golden.ts && rm tmp-golden.ts
+// (it writes rust/dice/src/turn/plan/golden/plans.json). The catalog below is mirrored entry for
+// entry by `catalog()` in golden/catalog.rs; the dump format is mirrored by golden/dump.rs.
+//
+// DUMP FORMAT (every key always present; Option/undefined -> null, slot sentinels -1 stay -1,
+// non-finite numbers -> the strings "Infinity" / "-Infinity" / "NaN"):
+//   pmf   = { mass, bins: [[value, p], ...] } sorted by value
+//   draw  = { outcome, matched, spends, rerollSlot (-1 = none), applies, bumps, fires, slice: pmf,
+//             byKind: {fail, damage} | null, own: pmf | null, riders: [[id, pmf], ...] | null,
+//             wounded: bool | null, typed: bool | null }
+//   plan  = plan-level fields (see dumpPlan) + steps; step = every Step field but its closures and
+//           sources (trigger -> its `on` string | null). `variants` and `contextPmfs` are dumped
+//           AFTER the probes ran, as arrays with holes = null.
+//
+// PROBE GRID (per step; the Rust side implements exactly this). G = plan.groupCount, S =
+// plan.slotCount, C = plan.counterMax.length.
+//   codesList : [all 0]; then for g in 0..G, for v in [hit, crit, miss, hit+miss, hit matched,
+//               crit matched]: all 0 with codes[g] = v, where hit = advance(0,"hit"),
+//               crit = advance(0,"crit"), miss = advance(0,"miss"),
+//               hit+miss = advance(advance(0,"hit"),"miss"), hit matched = advance(0,"hit",true),
+//               crit matched = advance(0,"crit",true).
+//   firedList : [all null]; then for s in 0..S: all null with fired[s] = "hit".
+//   flagsList : B = OR of plan.flagLiveAfter[*], step.consumes, step.hitConsumes,
+//               step.readAdvantage, step.readDisadvantage, step.readCritOnHit, (1 << bit) of each
+//               flagReads entry with bit >= 0, each coin's bit, plan.startFlags. List = [0], then
+//               each single bit k = 0..31 set in B (ascending, as an unsigned 32-bit value), then B.
+//   countsList: [all 0]; then for c in 0..C: all 0 with counts[c] = cap(c); then all cap(c),
+//               where cap(c) = counterMax[c] if finite else 1000000.
+//   candidates: first the codes at (fired[0], flags[0], counts[0]); then the fired at (codes[0],
+//               flags[0], counts[0]); then the flags; then the counts; then the full cross product
+//               codes x fired x flags x counts (codes outermost, counts innermost). A candidate
+//               whose [codes, fired, flags, counts] repeats an earlier one is skipped; the first
+//               400 remaining are the probes, run in that order. Each probe calls
+//               step.select(...) then step.contextIndexOf(...); a throw is the string
+//               "error: <message>".
+//   per-grant `chanceOf`: null, or { at: [[flags, value | "error: <message>"], ...] } for flags in
+//               [0, each single bit of the OR of plan.flagLiveAfter (ascending), that OR] deduped.
+
+import { d4, d6, d8, d20, roll } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder";
+import { buildPlan } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/plan";
+import { EPS } from "/Users/michael/orca/workspaces/dice/rust-dice/src/common/types";
+import { advance } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/state";
+import { MAX_TRIGGER_GROUPS } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/types";
+import type { TurnSpec } from "/Users/michael/orca/workspaces/dice/rust-dice/src/turn/types";
+import { writeFileSync } from "node:fs";
+
+// --- catalog ----------------------------------------------------------------------------------
+
+const sword = () => d20.plus(7).ac(15).onHit(d8.plus(4));
+const axe = () => d20.plus(5).ac(14).onHit(d6.plus(3));
+const orb = () => d20.plus(5).ac(17).onHit(roll(3, d8));
+const fireball = () => d20.plus(5).dc(14).onSaveFailure(roll(2, 6)).saveHalf();
+const named = (id: string, source: any, extra: object = {}) => ({ id, source, ...extra });
+const two = () => [named("a", sword()), named("b", axe())];
+const three = () => [named("a", sword()), named("b", axe()), named("c", sword())];
+
+const catalog: Record<string, () => TurnSpec> = {
+  plain_one: () => ({ attacks: [sword()] }),
+  plain_two: () => ({ attacks: [named("x", sword()), named("y", axe())] }),
+  chance_attack: () => ({ attacks: [named("x", sword(), { chance: 0.5 })] }),
+  first_hit_default: () => ({ attacks: two(), riders: [{ on: "first-hit", id: "sneak", damage: roll(2, 6) }] }),
+  any_crit_crit_damage: () => ({
+    attacks: [named("a", sword())],
+    riders: [{ on: "any-crit", id: "smite", damage: roll(1, 6), critDamage: roll(3, 6) }],
+  }),
+  any_crit_max2: () => ({ attacks: three(), riders: [{ on: "any-crit", id: "cr", max: 2, damage: d6 }] }),
+  any_crit_max1: () => ({ attacks: three(), riders: [{ on: "any-crit", id: "cr", max: 1, damage: d6 }] }),
+  any_crit_max_inf: () => ({ attacks: three(), riders: [{ on: "any-crit", id: "cr", max: Infinity, damage: d6 }] }),
+  every_hit_uncapped: () => ({ attacks: two(), riders: [{ on: "every-hit", id: "eh", damage: d6 }] }),
+  every_hit_max2: () => ({ attacks: three(), riders: [{ on: "every-hit", id: "eh", max: 2, damage: d6 }] }),
+  every_hit_happens_half: () => ({
+    attacks: two(),
+    riders: [{ on: "every-hit", id: "eh", happens: 0.5, damage: d6 }],
+  }),
+  first_hit_per_source: () => ({
+    attacks: two(),
+    riders: [{ on: "first-hit", id: "ps", damage: d6, perSource: { b: { damage: d8 } } }],
+  }),
+  not_fired: () => ({
+    attacks: [named("a", sword())],
+    riders: [
+      { on: "first-hit", id: "sneak", damage: d6 },
+      { on: "not-fired", of: "sneak", id: "nf", damage: d4 },
+    ],
+  }),
+  any_miss_reroll: () => ({ attacks: two(), riders: [{ on: "any-miss", id: "rr", damage: axe() }] }),
+  first_miss_rider: () => ({ attacks: [named("a", sword())], riders: [{ on: "first-miss", id: "fm", damage: axe() }] }),
+  dice_match: () => ({
+    attacks: [named("a", orb())],
+    riders: [{ on: "dice-match", of: ["a"], id: "dm", damage: roll(2, 6) }],
+  }),
+  sub_keep_higher_always: () => ({
+    attacks: two(),
+    substitutes: [{ on: "first-hit", substitute: "reroll-keep-higher", id: "kh" }],
+  }),
+  sub_keep_higher_below: () => ({
+    attacks: two(),
+    substitutes: [
+      { on: "first-hit", substitute: "reroll-keep-higher", id: "kh", policy: { kind: "below", hit: 6, crit: 8 } },
+    ],
+  }),
+  sub_convert: () => ({ attacks: two(), substitutes: [{ on: "first-miss", substitute: "hit", id: "conv" }] }),
+  sub_reroll_add_d20: () => ({
+    attacks: two(),
+    substitutes: [{ on: "first-miss", substitute: "reroll", mode: "add-d20", id: "rr" }],
+  }),
+  save_alone: () => ({ attacks: [named("fb", fireball())] }),
+  save_watched_fail: () => ({
+    attacks: [named("fb", fireball()), named("a", sword())],
+    riders: [{ on: "first-hit", of: ["fb"], id: "r", landing: "fail", damage: d6 }],
+  }),
+  save_watched_damage: () => ({
+    attacks: [named("fb", fireball()), named("a", sword())],
+    riders: [{ on: "first-hit", of: ["fb"], id: "r", landing: "damage", damage: d6 }],
+  }),
+  after_hit: () => ({
+    attacks: [named("a", sword()), named("b", axe(), { after: { of: "a", landing: "hit" } })],
+  }),
+  after_damage: () => ({
+    attacks: [named("a", sword()), named("b", axe(), { after: { of: "a", landing: "damage" } })],
+  }),
+  after_any: () => ({
+    attacks: [named("a", sword()), named("b", axe(), { after: { of: "a", landing: "any" } })],
+  }),
+  rider_after: () => ({
+    attacks: [named("a", sword()), named("b", axe(), { after: { of: "sneak", landing: "hit" } })],
+    riders: [{ on: "first-hit", of: ["a"], id: "sneak", damage: d6 }],
+  }),
+  probe_any_crit: () => ({ attacks: two(), observe: [{ id: "p", on: "any-crit" }] }),
+  cond_next_attack_advantage: () => ({
+    attacks: three(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], grants: [{ advantage: true, until: "next-attack" }] }],
+  }),
+  cond_first_crit_end_of_turn: () => ({
+    attacks: three(),
+    conditions: [
+      { id: "cnd", on: "first-crit", of: ["a", "b"], grants: [{ critOnHit: true, until: "end-of-turn" }], chance: 0.5 },
+    ],
+  }),
+  cond_grant_save: () => ({
+    attacks: two(),
+    conditions: [
+      {
+        id: "cnd",
+        on: "every-hit",
+        of: ["a"],
+        save: { ability: "dex", dc: 13, bonus: 2 },
+        grants: [{ advantage: true, until: "next-attack" }],
+      },
+    ],
+  }),
+  cond_vulnerability: () => ({
+    attacks: three(),
+    conditions: [{ id: "cnd", on: "every-hit", of: ["a"], grants: [{ vulnerability: true, until: "next-hit" }] }],
+  }),
+  cond_save_penalty: () => ({
+    attacks: [named("a", sword()), named("fb", fireball().ability("dex"))],
+    conditions: [
+      { id: "cnd", on: "every-hit", of: ["a"], grants: [{ savePenalty: { count: 1, sides: 4 }, until: "next-save" }] },
+    ],
+  }),
+  cond_start_advantage: () => ({
+    attacks: two(),
+    conditions: [{ id: "cnd", on: "start", grants: [{ advantage: true, until: "end-of-turn" }] }],
+  }),
+  cond_rule_melee_advantage: () => ({
+    attacks: two(),
+    conditions: [
+      {
+        id: "cnd",
+        on: "every-hit",
+        of: ["a"],
+        grants: [
+          { condition: "prone", rule: { attack: { melee: ["advantage"], ranged: ["disadvantage"] } }, until: "end-of-turn" },
+        ],
+      },
+    ],
+  }),
+  cond_optional: () => ({
+    attacks: three(),
+    conditions: [
+      { id: "cnd", on: "every-hit", of: ["a"], optional: true, grants: [{ advantage: true, until: "next-attack" }] },
+    ],
+  }),
+  rider_joins: () => ({
+    attacks: [named("a", orb())],
+    riders: [{ on: "first-hit", of: ["a"], id: "j", joins: ["a"], damage: roll(2, 6) }],
+  }),
+  two_substitutes: () => ({
+    attacks: three(),
+    substitutes: [
+      { on: "first-miss", substitute: "reroll", id: "rr1" },
+      { on: "first-miss", substitute: "reroll", mode: "add-d20", id: "rr2" },
+    ],
+  }),
+  cond_with_capped_rider: () => ({
+    attacks: three(),
+    riders: [{ on: "every-hit", id: "eh", max: 1, damage: d6 }, { on: "any-crit", id: "cr", max: 2, damage: d4 }],
+    conditions: [{ id: "cnd", on: "first-hit", of: ["a", "b"], grants: [{ advantage: true, until: "end-of-turn" }] }],
+  }),
+  err_unknown_id: () => ({
+    attacks: [named("d1", sword())],
+    riders: [{ id: "sneak", damage: d6, on: "first-hit", of: ["gone"] }],
+  }),
+  err_duplicate_id: () => ({ attacks: [named("d1", sword()), named("d1", sword())] }),
+  err_cycle: () => ({
+    attacks: [named("d1", sword())],
+    riders: [
+      { id: "a", damage: d6, on: "not-fired", of: "b" },
+      { id: "b", damage: d6, on: "not-fired", of: "a" },
+    ],
+  }),
+  err_not_an_attack: () => ({
+    attacks: [named("d1", sword())],
+    riders: [
+      { id: "sneak", damage: roll(3, 6), on: "first-hit" },
+      { id: "extra", damage: d6, on: "first-hit", of: ["sneak"] },
+    ],
+  }),
+  err_too_many_groups: () => {
+    const attacks = Array.from({ length: MAX_TRIGGER_GROUPS + 1 }, (_, i) => named(`a${i}`, sword()));
+    return {
+      attacks,
+      riders: attacks.map((attack, i) => ({ id: `r${i}`, damage: d6, on: "first-hit" as const, of: [attack.id] })),
+    };
+  },
+  err_unused_crit_damage: () => ({
+    attacks: [named("a", sword()), named("b", sword())],
+    riders: [{ on: "any-crit", id: "x", damage: sword(), critDamage: roll(20, 6) }],
+  }),
+};
+
+// --- dump -------------------------------------------------------------------------------------
+
+type Json = unknown;
+
+const pmfDump = (pmf: any): Json => ({ mass: pmf.mass(), bins: pmf.support().map((v: number) => [v, pmf.pAt(v)]) });
+
+const drawDump = (d: any): Json => ({
+  outcome: d.outcome,
+  matched: d.matched,
+  spends: d.spends,
+  rerollSlot: d.rerollSlot ?? -1,
+  applies: [...d.applies],
+  bumps: [...d.bumps],
+  fires: [...d.fires],
+  slice: pmfDump(d.slice),
+  byKind: d.byKind === undefined ? null : { fail: d.byKind.fail, damage: d.byKind.damage },
+  own: d.own === undefined ? null : pmfDump(d.own),
+  riders: d.riders === undefined ? null : d.riders.map(([id, p]: [string, any]) => [id, pmfDump(p)]),
+  wounded: d.wounded ?? null,
+  typed: d.typed ?? null,
+});
+
+const rowContextDump = (c: any): Json =>
+  c === undefined
+    ? null
+    : {
+        rollType: c.rollType,
+        autoHit: c.autoHit,
+        critOnHit: c.critOnHit,
+        autoFail: c.autoFail,
+        vulnerable: c.vulnerable,
+        penaltyDice: c.penaltyDice.map((d: any) => ({ count: d.count, sides: d.sides })),
+        joined: [...c.joined],
+      };
+
+const singleBits = (mask: number): number[] => {
+  const bits: number[] = [];
+  for (let k = 0; k < 32; k++) if ((mask >>> k) & 1) bits.push((1 << k) >>> 0);
+  return bits;
+};
+
+const unique = <T>(xs: T[]): T[] => [...new Set(xs)];
+
+const errorText = (e: unknown): string => `error: ${(e as Error).message}`;
+
+const grantDump = (g: any, liveBits: number): Json => {
+  let chanceOf: Json = null;
+  if (g.chanceOf !== undefined) {
+    const at: Json[] = [];
+    for (const flags of unique([0, ...singleBits(liveBits), liveBits >>> 0])) {
+      let value: Json;
+      try {
+        value = g.chanceOf(flags);
+      } catch (e) {
+        value = errorText(e);
+      }
+      at.push([flags, value]);
+    }
+    chanceOf = { at };
+  }
+  return {
+    condition: g.condition,
+    on: g.on,
+    reads: g.reads,
+    landing: g.landing ?? null,
+    chance: g.chance,
+    chanceOf,
+    grants: g.grants,
+    onSave: g.onSave,
+    inForce: g.inForce,
+    effective: g.effective,
+    tried: g.tried,
+    rider: g.rider ?? null,
+    dealing: g.dealing,
+    counted: g.counted,
+    countedInForce: g.countedInForce,
+    countOnly: g.countOnly,
+    gateMask: g.gateMask ?? null,
+  };
+};
+
+const pairs = <V>(m: ReadonlyMap<string, V>, f: (v: V) => Json = (v) => v as Json): Json =>
+  [...m].map(([k, v]) => [k, f(v)]);
+
+/** The probes of `step`: see PROBE GRID at the top. */
+function probesOf(plan: any, step: any): { codes: number[]; fired: (string | null)[]; flags: number; counts: number[] }[] {
+  const G: number = plan.groupCount;
+  const S: number = plan.slotCount;
+  const C: number = plan.counterMax.length;
+  const hit = advance(0, "hit");
+  const crit = advance(0, "crit");
+  const miss = advance(0, "miss");
+  const states = [hit, crit, miss, advance(hit, "miss"), advance(0, "hit", true), advance(0, "crit", true)];
+  const codesList: number[][] = [new Array(G).fill(0)];
+  for (let g = 0; g < G; g++) {
+    for (const v of states) {
+      const codes = new Array(G).fill(0);
+      codes[g] = v;
+      codesList.push(codes);
+    }
+  }
+  const firedList: (string | null)[][] = [new Array(S).fill(null)];
+  for (let s = 0; s < S; s++) {
+    const fired: (string | null)[] = new Array(S).fill(null);
+    fired[s] = "hit";
+    firedList.push(fired);
+  }
+  let mask = 0;
+  for (const f of plan.flagLiveAfter) mask |= f;
+  mask |= step.consumes | step.hitConsumes | step.readAdvantage | step.readDisadvantage | step.readCritOnHit;
+  for (const read of step.flagReads) if (read.bit >= 0) mask |= 1 << read.bit;
+  for (const coin of plan.coins) mask |= coin.bit;
+  mask |= plan.startFlags;
+  mask >>>= 0;
+  const flagsList = unique([0, ...singleBits(mask), mask]);
+  const cap = (c: number): number => (Number.isFinite(plan.counterMax[c]) ? plan.counterMax[c] : 1000000);
+  const countsList: number[][] = [new Array(C).fill(0)];
+  for (let c = 0; c < C; c++) {
+    const counts = new Array(C).fill(0);
+    counts[c] = cap(c);
+    countsList.push(counts);
+  }
+  countsList.push(Array.from({ length: C }, (_, c) => cap(c)));
+
+  const seen = new Set<string>();
+  const probes: { codes: number[]; fired: (string | null)[]; flags: number; counts: number[] }[] = [];
+  const push = (codes: number[], fired: (string | null)[], flags: number, counts: number[]): boolean => {
+    if (probes.length >= 400) return false;
+    const key = JSON.stringify([codes, fired, flags, counts]);
+    if (seen.has(key)) return true;
+    seen.add(key);
+    probes.push({ codes, fired, flags, counts });
+    return true;
+  };
+  for (const codes of codesList) push(codes, firedList[0], flagsList[0], countsList[0]);
+  for (const fired of firedList) push(codesList[0], fired, flagsList[0], countsList[0]);
+  for (const flags of flagsList) push(codesList[0], firedList[0], flags, countsList[0]);
+  for (const counts of countsList) push(codesList[0], firedList[0], flagsList[0], counts);
+  for (const codes of codesList)
+    for (const fired of firedList)
+      for (const flags of flagsList)
+        for (const counts of countsList) if (!push(codes, fired, flags, counts)) return probes;
+  return probes;
+}
+
+function dumpStep(plan: any, step: any, liveBits: number): Json {
+  const probes = probesOf(plan, step).map((p) => {
+    let select: Json;
+    let contextIndex: Json;
+    try {
+      select = step.select([...p.codes], [...p.fired], p.flags, [...p.counts]);
+    } catch (e) {
+      select = errorText(e);
+    }
+    try {
+      contextIndex = step.contextIndexOf([...p.codes], [...p.fired], p.flags, [...p.counts]);
+    } catch (e) {
+      contextIndex = errorText(e);
+    }
+    return { ...p, select, contextIndex };
+  });
+  return {
+    id: step.id,
+    trigger: step.trigger === null ? null : step.trigger.on,
+    probes,
+    variants: Array.from({ length: step.variants.length }, (_, i) =>
+      step.variants[i] === undefined ? null : step.variants[i].map(drawDump)
+    ),
+    damage: step.damage === null ? null : { hit: pmfDump(step.damage.hit), crit: pmfDump(step.damage.crit) },
+    updates: [...step.updates],
+    updateKinds: [...step.updateKinds],
+    settled: [...step.settled],
+    releases: [...step.releases],
+    reads: step.reads,
+    slot: step.slot,
+    negates: step.negates,
+    spendSlot: step.spendSlot,
+    consumes: step.consumes,
+    hitConsumes: step.hitConsumes,
+    wounds: step.wounds,
+    gate: step.gate === undefined ? null : { ...step.gate },
+    grants: step.grants.map((g: any) => grantDump(g, liveBits)),
+    readAdvantage: step.readAdvantage,
+    readDisadvantage: step.readDisadvantage,
+    readCritOnHit: step.readCritOnHit,
+    flagReads: step.flagReads.map((r: any) => ({ bit: r.bit, modifiers: r.modifiers, penalty: r.penalty, source: r.source })),
+    contextPmfs: Array.from({ length: step.contextPmfs.length }, (_, i) =>
+      step.contextPmfs[i] === undefined ? null : pmfDump(step.contextPmfs[i])
+    ),
+    contextRollTypes: [...step.contextRollTypes],
+    contextVulnerable: [...step.contextVulnerable],
+    contextRowContexts: step.contextRowContexts.map(rowContextDump),
+    rerolls: step.rerolls.map((r: any) => ({ slot: r.slot, mode: r.mode })),
+    policy: step.policy === null ? null : { ...step.policy },
+    transformed: step.transformed,
+    converts: step.converts,
+    chance: step.chance,
+  };
+}
+
+function dumpPlan(plan: any): Json {
+  let liveBits = 0;
+  for (const f of plan.flagLiveAfter) liveBits |= f;
+  return {
+    effectSources: plan.effectSources.map((s: any) => ({ ...s })),
+    optionalIds: [...plan.optionalIds],
+    groupCount: plan.groupCount,
+    attackPMFs: plan.attackPMFs.map(pmfDump),
+    attackSingles: plan.attackSingles.map(pmfDump),
+    attackIds: [...plan.attackIds],
+    riderIds: [...plan.riderIds],
+    substituteIds: [...plan.substituteIds],
+    probeIds: [...plan.probeIds],
+    rerollIds: [...plan.rerollIds],
+    fireSlots: pairs(plan.fireSlots),
+    slotCount: plan.slotCount,
+    perHitGroups: pairs(plan.perHitGroups),
+    perHitCritOnly: [...plan.perHitCritOnly],
+    perHitAny: [...plan.perHitAny],
+    riderRows: pairs(plan.riderRows, (v: string[]) => [...v]),
+    probes: pairs(plan.probes),
+    everyHitIds: [...plan.everyHitIds],
+    counterMax: [...plan.counterMax],
+    groupLastReadStep: [...plan.groupLastReadStep],
+    conditionIds: [...plan.conditionIds],
+    flagLiveAfter: [...plan.flagLiveAfter],
+    coins: plan.coins.map((c: any) => ({ id: c.id, bit: c.bit, happens: c.happens })),
+    startFlags: plan.startFlags,
+    startConditions: [...plan.startConditions],
+    stateLimit: plan.stateLimit,
+    dealing: plan.dealing,
+    meleeLeaning: [...plan.meleeLeaning],
+    sourceOf: [...plan.sourceOf.keys()],
+    riderOf: [...plan.riderOf.keys()],
+    payloadAt: [...plan.payloadAt.keys()],
+    steps: plan.steps.map((s: any) => dumpStep(plan, s, liveBits)),
+  };
+}
+
+const out: Record<string, unknown> = {};
+for (const [name, make] of Object.entries(catalog)) {
+  try {
+    out[name] = { plan: dumpPlan(buildPlan(make(), EPS, new Set(), "joint")) };
+  } catch (e: any) {
+    out[name] = { error: { class: e.constructor.name, code: e.code ?? null, id: e.id ?? null, message: e.message } };
+  }
+}
+writeFileSync(
+  "/Users/michael/orca/workspaces/dice/rust-dice/rust/dice/src/turn/plan/golden/plans.json",
+  JSON.stringify(out, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? String(value) : value))
+);

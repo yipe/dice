@@ -37,8 +37,95 @@ rogue.toQuery().probTotalAtLeast(20);      // 0.5062   chance of 20+ damage
 rogue.toQuery().percentiles([0.25, 0.5, 0.75]); // [15, 20, 24]
 ```
 
+## 🦀 Rust (this branch)
+
+A Rust port of this library, bit-exact with the TypeScript one, lives in [`rust/dice`](rust/dice) (crate `yipe-dice`). It is shelved and unmerged: see [`rust/HANDOFF.md`](rust/HANDOFF.md).
+Use it as a git dependency: `yipe-dice = { git = "https://github.com/yipe/dice", branch = "rust-dice", package = "yipe-dice" }`
+
+Every snippet below runs as [`rust/dice/examples/readme.rs`](rust/dice/examples/readme.rs) (`cargo run -q --release --example readme`). Numbers are any integer or float (`plus(8)`, `ac(16)`), builders are immutable and return `Result<_, DiceError>` where they can fail, so chain with `?`. Every call with options has a `_with` twin (`attacks_with`, `on_first_hit_with`, `parse_with`, `to_query_with`).
+
+```rust
+use yipe_dice::prelude::*;
+
+fn main() -> Result<(), DiceError> {
+    let dagger = d20().plus(8)?.ac(16)?.on_hit(d4().plus(4)?)?;
+    let rogue = Turn::new()?
+        .attacks(2, dagger)? // two-weapon fighting
+        .on_first_hit(roll(3, d6())?)?; // Sneak Attack
+
+    rogue.mean()?;                                       // 18.6225
+    rogue.pmf()?.p_at(0);                                // 0.1225
+    rogue.to_query()?.prob_total_at_least(20);           // 0.5062
+    rogue.to_query()?.percentiles(&[0.25, 0.5, 0.75]);   // [15.0, 20.0, 24.0]
+    Ok(())
+}
+```
+
+The same attack, as a dice string and with the builder (`parse(expr)`; `parse_with(expr, n)` takes the TS `n`):
+
+```rust
+parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)")?.mean(); // 5.75
+
+let longsword = d20().plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?;
+longsword.mean()?;           // 5.75
+longsword.to_expression()?;  // "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
+```
+
+Look past the average, advantage and crit range:
+
+```rust
+let q = longsword.to_query()?;
+q.prob_at_least_one(["hit", "crit"]);  // 0.65
+q.prob_at_least_one("crit");           // 0.05
+q.stdev();                             // 4.7342
+q.prob_total_at_least(10);             // 0.2672
+q.percentiles(&[0.25, 0.5, 0.75, 0.95]);  // [0.0, 6.0, 10.0, 12.0]
+
+let hit = d8().plus(4)?;
+d20().with_advantage()?.plus(8)?.ac(16)?.on_hit(hit.clone())?.mean()?;       // 7.8975
+d20().with_disadvantage()?.plus(8)?.ac(16)?.on_hit(hit.clone())?.mean()?;    // 3.6025
+d20().plus(8)?.ac(16)?.crit_on(19)?.on_hit(hit)?.mean()?;                    // 5.975
+```
+
+A saving throw (Fireball against a +2 save, DC 15):
+
+```rust
+let fireball = d20().plus(2)?.dc(15)?
+    .on_save_failure(roll(8, d6())?)?
+    .save_half()?;
+fireball.mean()?;           // 22.3
+fireball.to_expression()?;  // "(d20 + 2 DC 15) * (8d6) save half"
+```
+
+A whole turn: Extra Attack, riders, and Vex advantage:
+
+```rust
+let sword = d20().plus(9)?.ac(16)?.on_hit(d6().plus(5)?)?;
+Turn::new()?
+    .attacks(4, sword.clone())?
+    .on_every_hit(d6())? // Hunter's Mark
+    .mean()?;            // 35.0
+
+let shortsword = d20().plus(8)?.ac(16)?.on_hit(d6().plus(5)?)?;
+let vex = shortsword.on_every_hit(advantage().until_next_attack())?;
+Turn::new()?.attacks(4, vex)?.mean()?; // 27.5867 (22.8 without Vex)
+```
+
+Sweep a turn across armor classes:
+
+```rust
+let base = Turn::new()?
+    .attacks(2, sword)?
+    .on_first_hit(roll(3, d6())?)?;
+
+for ac in [12, 14, 16, 18, 20] {
+    base.vs_ac(ac)?.mean()?; // 26.6225, 24.66, 22.4875, 20.105, 17.5125
+}
+```
+
 ## Contents
 
+- [Rust (this branch)](#-rust-this-branch)
 - [Why @yipe/dice](#-why-yipedice)
 - [Install](#-install)
 - [Quick start](#-quick-start)

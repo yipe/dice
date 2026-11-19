@@ -1,0 +1,10 @@
+target/
+# Regenerate (about 20 s, from the repo root): yarn vitest run -c rust/dice/fixtures/vitest.record.config.ts && node rust/dice/fixtures/merge.mjs
+fixtures/recorded.jsonl
+fixtures/recorded/
+fixtures/parser.jsonl
+fixtures/recorded-gaps.jsonl
+# Regenerate: npx -y tsx rust/dice/fixtures/gen-bounce.mts (from bounce-inputs.jsonl, ~5 s)
+fixtures/bounce.jsonl
+# Regenerated with recorded.jsonl (see the comment above)
+fixtures/recorded-query.jsonl

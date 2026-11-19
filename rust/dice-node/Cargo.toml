@@ -1,0 +1,22 @@
+[package]
+name = "dice-node"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "napi-rs binding of yipe-dice; see README.md"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+yipe-dice = { path = "../dice" }
+napi = { version = "3", default-features = false, features = ["napi8"] }
+napi-derive = "3"
+indexmap = "2"
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "unbounded_depth"] }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true

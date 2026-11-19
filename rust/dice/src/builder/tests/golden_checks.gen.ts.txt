@@ -1,0 +1,110 @@
+import { d4, d6, d8, d10, d12, d20, hd20, roll, flat, d } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder";
+import type { RollBuilder } from "/Users/michael/orca/workspaces/dice/rust-dice/src/builder/roll";
+
+type Ctx = { rollType: any; autoHit: boolean; critOnHit: boolean; autoFail: boolean; vulnerable: boolean; penaltyDice: { count: number; sides: number }[]; joined: string[] };
+const ctx = (o: Partial<Ctx> = {}): Ctx => ({ rollType: "flat", autoHit: false, critOnHit: false, autoFail: false, vulnerable: false, penaltyDice: [], joined: [], ...o });
+
+const base = () => d20.plus(7).ac(16);
+const chains: Record<string, () => any> = {
+  ac_check: () => d20.plus(5).ac(15),
+  ac_check_adv: () => d20.plus(5).withAdvantage().ac(15),
+  ac_check_bonus: () => d20.plus(5).plus(d4).ac(15),
+  a_basic: () => d20.plus(5).ac(15).onHit(d8),
+  a_2d6: () => base().onHit(roll(2, d6).plus(4)),
+  a_adv: () => d20.plus(7).withAdvantage().ac(16).onHit(roll(2, d6).plus(4)),
+  a_dis: () => d20.plus(7).withDisadvantage().ac(16).onHit(roll(2, d6).plus(4)),
+  a_elven: () => d20.plus(7).withElvenAccuracy().ac(16).onHit(d8.plus(3)),
+  a_three_dice: () => d20.plus(7).withAdvantage().ac(16).threeDiceAdvantage().onHit(d8.plus(3)),
+  a_three_dice_flat: () => d20.plus(7).ac(16).threeDiceAdvantage().onHit(d8.plus(3)),
+  a_crit19: () => base().critOn(19).onHit(roll(2, d6)),
+  a_crit17_adv: () => d20.plus(7).withAdvantage().ac(16).critOn(17).onHit(d10.plus(2)),
+  a_nocrit: () => base().onHit(roll(2, d6)).noCrit(),
+  a_oncrit: () => base().onHit(roll(2, d6)).onCrit(roll(3, d8)),
+  a_onmiss: () => base().onHit(roll(2, d6)).onMiss(d4),
+  a_halfmiss: () => base().onHit(roll(2, d6).plus(3)).halfOnMiss(),
+  a_sep: () => base().onHit(roll(1, d8).plus(4)).plusSeparateDamage(roll(2, d6)),
+  a_sep_oncrit: () => base().onHit(roll(1, d8)).onCrit(roll(3, d8)).plusSeparateDamage(roll(2, d6)),
+  a_nat20: () => d20.plus(9).ac(17).critOn(18).onHit(d8.plus(5)).plusNatural20Damage(flat(5)),
+  a_nat20_adv_sep: () => d20.plus(9).withAdvantage().ac(17).onHit(d8.plus(5)).plusSeparateDamage(d4).plusNatural20Damage(roll(2, d6)),
+  a_reroll_dmg: () => base().onHit(roll(2, d6).plus(3)).rerollDamage(2),
+  a_min_die: () => base().onHit(roll(2, d6).plus(3)).minimumDamageDie(2),
+  a_reroll_min: () => base().onHit(roll(2, d6).plus(3)).rerollDamage(2).minimumDamageDie(3),
+  a_reroll_oncrit: () => base().onHit(roll(2, d6)).rerollDamage(2).onCrit(roll(4, d6)),
+  a_up_to: () => base().onHit(roll(2, d6).plus(3)).rerollDamageUpTo(1),
+  a_up_to_rolls: () => base().onHit(roll(3, d6).plus(3)).rerollDamageUpTo(2, { rolls: 2 }),
+  a_bless: () => d20.plus(7).plus(d4).ac(16).onHit(d8),
+  a_bane: () => d20.plus(7).minus(d4).ac(16).onHit(d8),
+  a_always_hits: () => d20.plus(5).ac(15).alwaysHits().onHit(d8),
+  a_always_hits_crit19: () => d20.plus(5).ac(15).critOn(19).alwaysHits().onHit(d8),
+  a_always_crits: () => d20.plus(5).ac(15).alwaysCrits().onHit(d8),
+  a_always_both: () => d20.plus(5).ac(15).alwaysHits().alwaysCrits().onHit(roll(2, d6)),
+  a_reroll_miss: () => base().rerollMisses().onHit(roll(2, d6)),
+  a_reroll_miss_reroll: () => base().rerollMisses("reroll").onHit(roll(2, d6)),
+  a_reroll_miss_adv: () => d20.plus(7).withAdvantage().ac(16).rerollMisses().onHit(d8),
+  a_reroll_miss_dis_reroll: () => d20.plus(7).withDisadvantage().ac(16).rerollMisses("reroll").onHit(d8),
+  a_attack_reroll_miss: () => base().onHit(roll(2, d6)).rerollMisses(),
+  a_withcheck_ac: () => base().onHit(roll(2, d6)).withCheck((c: any) => ({ ...c, ac: 12 })),
+  a_withcheck_adv: () => base().onHit(roll(2, d6)).withCheck((c: any) => ({ ...c, rollType: "advantage" })),
+  a_withcheck_crit: () => base().onHit(roll(2, d6)).withCheck((c: any) => ({ ...c, critOnHit: true })),
+  a_ranged_pinned: () => d20.plus(7).withAdvantage().pinned().ac(16).ranged().onHit(d8),
+  a_str_damage: () => base().onHit("2d6+3"),
+  a_pooled_damage: () => base().onHit(roll(2, d6).plus(2).keepHighestAll(2, 1)),
+  a_half_damage: () => base().onHit(roll(2, d6).half()),
+  a_hd20: () => hd20.plus(5).ac(15).onHit(d8),
+  a_typed_tagged: () => base().onHit(d8).typed("fire").tagged("spell"),
+  a_zero_ac: () => d20.plus(30).ac(10).onHit(d8),
+  a_impossible: () => d20.plus(-5).ac(40).onHit(d8),
+  a_under_adv: () => base().onHit(roll(2, d6)).under(ctx({ rollType: "advantage" })),
+  a_under_dis: () => base().onHit(roll(2, d6)).under(ctx({ rollType: "disadvantage" })),
+  a_under_elven: () => base().onHit(roll(2, d6)).under(ctx({ rollType: "elven accuracy" })),
+  a_under_autohit: () => base().onHit(roll(2, d6)).under(ctx({ autoHit: true })),
+  a_under_crit: () => base().onHit(roll(2, d6)).under(ctx({ critOnHit: true })),
+  a_under_autohit_crit: () => base().onHit(roll(2, d6)).under(ctx({ autoHit: true, critOnHit: true, rollType: "advantage" })),
+  a_under_vuln: () => base().onHit(roll(2, d6).plus(3)).onMiss(d4).under(ctx({ vulnerable: true })),
+  a_under_vuln_adv_half: () => base().onHit(roll(2, d6).plus(3)).halfOnMiss().under(ctx({ vulnerable: true, rollType: "advantage" })),
+  a_under_pinned: () => d20.plus(7).withDisadvantage().pinned().ac(16).onHit(d8).under(ctx({ rollType: "advantage" })),
+  a_miss_rerolled: () => base().onHit(roll(2, d6)).missRerolled("reroll"),
+  a_miss_rerolled_add: () => d20.plus(7).withAdvantage().ac(16).onHit(roll(2, d6)).plusSeparateDamage(d4).missRerolled("add-d20"),
+  a_miss_rerolled_ctx: () => base().onHit(roll(2, d6)).missRerolled("reroll", ctx({ rollType: "disadvantage" })),
+  s_check: () => d20.plus(5).dc(15),
+  s_check_dis: () => d20.plus(5).withDisadvantage().dc(15),
+  s_check_bonus: () => d20.plus(3).plus(d4).dc(14),
+  s_check_fails: () => d20.plus(3).dc(14).alwaysFails(),
+  s_basic: () => d20.plus(5).dc(15).onSaveFailure(roll(8, d6)),
+  s_half: () => d20.plus(5).dc(15).onSaveFailure(roll(8, d6)).saveHalf(),
+  s_success: () => d20.plus(5).dc(15).onSaveFailure(roll(8, d6)).onSaveSuccess(roll(1, d6)),
+  s_success_flat0: () => d20.plus(5).dc(15).onSaveFailure(roll(2, d8)).onSaveSuccess(0),
+  s_dis: () => d20.plus(5).withDisadvantage().dc(15).onSaveFailure(roll(8, d6)).saveHalf(),
+  s_adv_ability: () => d20.plus(2).withAdvantage().dc(13).ability("con").onSaveFailure(roll(4, d8)),
+  s_always_fails: () => d20.plus(5).dc(15).alwaysFails().onSaveFailure(roll(4, d8)).saveHalf(),
+  s_no_fail_effect: () => d20.plus(5).dc(15).onSaveFailure(0).onSaveSuccess(roll(1, d4)),
+  s_parsed: () => d20.plus(5).dc(15).onSaveFailure("3d6"),
+  s_parsed_half: () => d20.plus(5).dc(15).onSaveFailure("3d6+1").saveHalf(),
+  s_pooled: () => d20.plus(5).dc(15).onSaveFailure(roll(4, d6).keepHighestAll(4, 3)),
+  s_certain_pass: () => d20.plus(30).dc(10).onSaveFailure(roll(2, d6)).saveHalf(),
+  s_rolled_in: () => d20.plus(5).dc(15).rolledIn({ rollType: "disadvantage", autoFail: false, penaltyDice: [{ count: 1, sides: 4 }] }),
+  s_under_pen: () => d20.plus(5).dc(15).onSaveFailure(roll(4, d6)).saveHalf().under(ctx({ penaltyDice: [{ count: 1, sides: 4 }, { count: 2, sides: 6 }] })),
+  s_under_autofail: () => d20.plus(5).dc(15).onSaveFailure(roll(4, d6)).saveHalf().under(ctx({ autoFail: true })),
+  s_under_vuln: () => d20.plus(5).dc(15).onSaveFailure(roll(4, d6).plus(1)).onSaveSuccess(roll(1, d4)).under(ctx({ vulnerable: true, rollType: "disadvantage" })),
+  s_under_pinned: () => d20.plus(5).withAdvantage().pinned().dc(15).onSaveFailure(roll(4, d6)).under(ctx({ rollType: "disadvantage" })),
+  s_effects: () => d20.plus(5).dc(15).onSaveFailure([roll(8, d6)]),
+};
+
+const out: Record<string, unknown> = {};
+for (const [name, build] of Object.entries(chains)) {
+  const entry: Record<string, unknown> = {};
+  try {
+    const r = build();
+    const isPmf = typeof r.support === "function" && typeof r.toExpression !== "function";
+    if (!isPmf) {
+      try { entry.expr = r.toExpression(); } catch (e) { entry.exprErr = (e as Error).message; }
+      try { entry.mean = r.toPMF().mean(); } catch (e) { entry.meanErr = (e as Error).message; }
+    }
+    try {
+      const p = isPmf ? r : r.toPMF();
+      entry.bins = p.toJSON().bins;
+    } catch (e) { entry.pmfErr = (e as Error).message; }
+  } catch (e) { entry.buildErr = (e as Error).message; }
+  out[name] = entry;
+}
+console.log(JSON.stringify(out));
