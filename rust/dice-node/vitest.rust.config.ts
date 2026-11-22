@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mergeConfig, type Plugin } from "vite";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import base from "../../vitest.config";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,8 +33,9 @@ function rustFacade(): Plugin {
   };
 }
 
+// mergeConfig concatenates arrays, so drop the base config's `rust/**` exclude before merging.
 export default mergeConfig(
-  base,
+  { ...base, test: { ...base.test, exclude: configDefaults.exclude } },
   defineConfig({
     root: repo,
     plugins: [rustFacade()],
