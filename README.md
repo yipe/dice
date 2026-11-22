@@ -34,8 +34,58 @@ This is the Rust port of [`@yipe/dice`](https://www.npmjs.com/package/@yipe/dice
 **[dprcalc.com](https://dprcalc.com)**. It is bit-exact with the TypeScript library: its tests replay
 recorded TypeScript calls and get the same numbers.
 
+## 🔮 Coming next: the `=>` syntax
+
+> **Not implemented yet.** This is the planned Rust API from [`rust/API.md`](rust/API.md). The code
+> below does not compile today; the numbers are what today's engine computes for the same turns.
+
+Dice, attacks and saves written the way a stat block writes them, checked at compile time:
+
+```rust
+use yipe_dice::prelude::*;
+
+let dagger = attack!(+8 => 1d4 + 4);          // d20 + 8 to hit; a crit doubles the dice
+
+let mut rogue = Turn::new();
+rogue.add(vec![dagger; 2]);                   // two-weapon fighting
+rogue.add(on_first_hit(dice!(3d6)));          // Sneak Attack
+
+let dist = rogue.vs(16)?;                     // against AC 16: the only `?`
+dist.mean();                                  // 18.6225
+dist.p(0);                                    // 0.1225   the whole turn whiffs
+dist.at_least(20);                            // 0.5062
+dist.percentiles([25, 50, 75]);               // [15, 20, 24]
+```
+
+```rust
+attack!(+8 => 1d8 + 4)                        // a crit is 2d8 + 4
+attack!(+8 adv => 1d8 + 4)                    // also: dis, elven (Elven Accuracy), lucky (Halfling)
+attack!(+8 + 1d4 => 1d8 + 4)                  // Bless on the roll
+attack!(+7 => 1d12 + 4, crit on 19)           // crits on 19-20
+attack!(+7 => 1d12 + 4 else 4)                // damage on a miss: Graze
+attack!(+{prof + dex} => 1d8 + {dex})         // Rust values
+
+save!(DC 15 Dex => 8d6 else half)             // Fireball: half on a success
+save!(DC 13 Con => 3d6)                       // nothing on a success
+
+dice!(4d6kh3).mean();                         // 12.2446
+dice!(2d6 reroll <=2).mean();                 // 8.3333  Great Weapon Fighting (2014)
+dice!(2d6 min 3).mean();                      // 8       Great Weapon Fighting (2024)
+```
+
+| You write | You get |
+| --- | --- |
+| `dice!(2d6 + 3)` | `Dice`: a roll |
+| `attack!(+8 => 1d8 + 4)` | `Attack`: a to-hit roll and its damage |
+| `save!(DC 15 Dex => 8d6 else half)` | `Save`: something the target rolls against |
+| `Turn` | what you do, in order: attacks, saves, and riders on them |
+| `Dist` | the answer: every damage total with its exact probability |
+
+Everything below this section works today.
+
 ## Contents
 
+- [Coming next: the `=>` syntax](#-coming-next-the--syntax)
 - [Dice strings](#-dice-strings)
 - [Strings and builders are one language](#-strings-and-builders-are-one-language)
 - [Look past the average](#-look-past-the-average)
