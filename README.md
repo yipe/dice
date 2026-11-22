@@ -1,551 +1,212 @@
-[![npm version](https://img.shields.io/npm/v/@yipe/dice.svg)](https://www.npmjs.com/package/@yipe/dice)
 [![License: MIT](https://img.shields.io/badge/License-MIT-007ec6.svg)](LICENSE)
-![TypeScript](https://img.shields.io/badge/TypeScript-Ready-3178c6?logo=typescript)
-![Size](https://img.shields.io/bundlephobia/minzip/@yipe/dice?logo=npm&logoColor=fff&label=Size)
+![Rust](https://img.shields.io/badge/Rust-2024-dea584?logo=rust)
 ![Dice](https://dprcalc.com/api/roll.svg)
-
-![Last Commit](https://img.shields.io/github/last-commit/yipe/dice?logo=github)
-![Dependencies](https://img.shields.io/librariesio/release/npm/@yipe/dice?logo=npm)
+![Last Commit](https://img.shields.io/github/last-commit/yipe/dice/rust-dice?logo=github)
 [![GitHub issues](https://img.shields.io/github/issues/yipe/dice.svg?logo=github)](https://github.com/yipe/dice/issues)
-[![Build Status](https://github.com/yipe/dice/actions/workflows/ci.yml/badge.svg)](https://github.com/yipe/dice/actions)
-[![Tests](https://img.shields.io/badge/tests-passing-4c1.svg?logo=vitest&logoColor=white)](https://github.com/yipe/dice/actions/workflows/ci.yml)
 
-# 🎲 @yipe/dice
+# 🎲🦀 yipe-dice
 
-**Exact D&D 5e damage math for TypeScript.**
-
-Describe an attack, a spell, or a whole turn (Extra Attack, Sneak Attack, Divine Smite, Hunter's Mark,
-advantage chained from a Vex weapon) and get back the complete damage distribution. It is not a
-Monte Carlo simulation and it is not just an average: you get every possible damage total, its exact
-probability, and which outcome (hit, crit, miss, failed save) produced it.
-
-@yipe/dice is the engine behind **[dprcalc.com](https://dprcalc.com)**.
-
-**[Build a turn in your browser at dprcalc.com/dice →](https://dprcalc.com/dice)**
-
-**[See how it works, step by step: How Dice Become DPR →](https://yipe.github.io/dice/)**
-
-```ts
-import { d20, d4, d6, roll, turn } from "@yipe/dice/builder";
-
-const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
-const rogue = turn([dagger, dagger]).onFirstHit(roll(3, d6)); // two-weapon fighting + Sneak Attack
-
-rogue.mean();                              // 18.6225  damage per round
-rogue.pmf.pAt(0);                          // 0.1225   chance the whole turn whiffs
-rogue.toQuery().probTotalAtLeast(20);      // 0.5062   chance of 20+ damage
-rogue.toQuery().percentiles([0.25, 0.5, 0.75]); // [15, 20, 24]
-```
-
-## 🦀 Rust (this branch)
-
-A Rust port of this library, bit-exact with the TypeScript one, lives in [`rust/dice`](rust/dice) (crate `yipe-dice`). It is shelved and unmerged: see [`rust/HANDOFF.md`](rust/HANDOFF.md).
-Use it as a git dependency: `yipe-dice = { git = "https://github.com/yipe/dice", branch = "rust-dice", package = "yipe-dice" }`
-
-Every snippet below runs as [`rust/dice/examples/readme.rs`](rust/dice/examples/readme.rs) (`cargo run -q --release --example readme`). Numbers are any integer or float (`plus(8)`, `ac(16)`), builders are immutable and return `Result<_, DiceError>` where they can fail, so chain with `?`. Every call with options has a `_with` twin (`attacks_with`, `on_first_hit_with`, `parse_with`, `to_query_with`).
+**Exact D&D 5e damage math for Rust. Write the dice the way the stat block does.**
 
 ```rust
 use yipe_dice::prelude::*;
 
 fn main() -> Result<(), DiceError> {
-    let dagger = d20().plus(8)?.ac(16)?.on_hit(d4().plus(4)?)?;
-    let rogue = Turn::new()?
-        .attacks(2, dagger)? // two-weapon fighting
-        .on_first_hit(roll(3, d6())?)?; // Sneak Attack
+    let dagger = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)")?;
 
-    rogue.mean()?;                                       // 18.6225
-    rogue.pmf()?.p_at(0);                                // 0.1225
-    rogue.to_query()?.prob_total_at_least(20);           // 0.5062
-    rogue.to_query()?.percentiles(&[0.25, 0.5, 0.75]);   // [15.0, 20.0, 24.0]
+    let rogue = Turn::new()?
+        .attacks(2, dagger)?             // two-weapon fighting
+        .on_first_hit(roll(3, d6())?)?;  // Sneak Attack, doubled on a crit
+
+    rogue.mean()?;                                      // 18.6225  damage per round
+    rogue.pmf()?.p_at(0);                               // 0.1225   the whole turn whiffs
+    rogue.to_query()?.prob_total_at_least(20);          // 0.5062   20+ damage
+    rogue.to_query()?.percentiles(&[0.25, 0.5, 0.75]);  // [15.0, 20.0, 24.0]
     Ok(())
 }
 ```
 
-The same attack, as a dice string and with the builder (`parse(expr)`; `parse_with(expr, n)` takes the TS `n`):
+Describe an attack, a spell, or a whole turn and get back the complete damage distribution. It is not
+a Monte Carlo simulation and it is not just an average: every possible damage total, its exact
+probability, and which outcome (hit, crit, miss, failed save) produced it.
 
-```rust
-parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)")?.mean(); // 5.75
-
-let longsword = d20().plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?;
-longsword.mean()?;           // 5.75
-longsword.to_expression()?;  // "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
-```
-
-Look past the average, advantage and crit range:
-
-```rust
-let q = longsword.to_query()?;
-q.prob_at_least_one(["hit", "crit"]);  // 0.65
-q.prob_at_least_one("crit");           // 0.05
-q.stdev();                             // 4.7342
-q.prob_total_at_least(10);             // 0.2672
-q.percentiles(&[0.25, 0.5, 0.75, 0.95]);  // [0.0, 6.0, 10.0, 12.0]
-
-let hit = d8().plus(4)?;
-d20().with_advantage()?.plus(8)?.ac(16)?.on_hit(hit.clone())?.mean()?;       // 7.8975
-d20().with_disadvantage()?.plus(8)?.ac(16)?.on_hit(hit.clone())?.mean()?;    // 3.6025
-d20().plus(8)?.ac(16)?.crit_on(19)?.on_hit(hit)?.mean()?;                    // 5.975
-```
-
-A saving throw (Fireball against a +2 save, DC 15):
-
-```rust
-let fireball = d20().plus(2)?.dc(15)?
-    .on_save_failure(roll(8, d6())?)?
-    .save_half()?;
-fireball.mean()?;           // 22.3
-fireball.to_expression()?;  // "(d20 + 2 DC 15) * (8d6) save half"
-```
-
-A whole turn: Extra Attack, riders, and Vex advantage:
-
-```rust
-let sword = d20().plus(9)?.ac(16)?.on_hit(d6().plus(5)?)?;
-Turn::new()?
-    .attacks(4, sword.clone())?
-    .on_every_hit(d6())? // Hunter's Mark
-    .mean()?;            // 35.0
-
-let shortsword = d20().plus(8)?.ac(16)?.on_hit(d6().plus(5)?)?;
-let vex = shortsword.on_every_hit(advantage().until_next_attack())?;
-Turn::new()?.attacks(4, vex)?.mean()?; // 27.5867 (22.8 without Vex)
-```
-
-Sweep a turn across armor classes:
-
-```rust
-let base = Turn::new()?
-    .attacks(2, sword)?
-    .on_first_hit(roll(3, d6())?)?;
-
-for ac in [12, 14, 16, 18, 20] {
-    base.vs_ac(ac)?.mean()?; // 26.6225, 24.66, 22.4875, 20.105, 17.5125
-}
-```
+This is the Rust port of [`@yipe/dice`](https://www.npmjs.com/package/@yipe/dice), the engine behind
+**[dprcalc.com](https://dprcalc.com)**. It is bit-exact with the TypeScript library: its tests replay
+recorded TypeScript calls and get the same numbers.
 
 ## Contents
 
-- [Rust (this branch)](#-rust-this-branch)
-- [Why @yipe/dice](#-why-yipedice)
+- [Dice strings](#-dice-strings)
+- [Strings and builders are one language](#-strings-and-builders-are-one-language)
+- [Look past the average](#-look-past-the-average)
+- [Whole turns](#-whole-turns)
 - [Install](#-install)
-- [Quick start](#-quick-start)
-- [What it can do](#-what-it-can-do)
-- [Dice expression cheat sheet](#-dice-expression-cheat-sheet)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Status and verification](#-status-and-verification)
 
-## ✨ Why @yipe/dice
+## 🎯 Dice strings
 
-- **Exact.** Every number is computed analytically from the full probability distribution, never
-  sampled.
-- **Distributions, not averages.** Hit and crit chances, percentiles, P(at least N damage), variance,
-  CDFs, and chart-ready series for any attack or turn.
-- **Knows where the damage came from.** Each outcome is tagged `hit`, `crit`, `missNone`, `missDamage`,
-  `saveFail` or `saveHalf`, so you can split damage into "from crits" and "from hits".
-- **Whole turns, modeled jointly.** Riders like Sneak Attack and Smite depend on the attacks that
-  trigger them. `turn()` gets the shape of the distribution right, not only the mean.
-- **The 5e rules are built in.** Natural 1s miss, natural 20s crit and double the damage dice but not
-  the modifiers. Also supported: advantage, disadvantage, Elven Accuracy, Halfling Luck, expanded crit
-  ranges, saving throws for half damage, rerolls, minimum die values, keep-highest pools and
-  exploding dice. Works for both 2014 and 2024 rules.
-- **Two ways to write it.** A fluent, type-safe builder, or a compact dice string such as
-  `(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)`. Each can be converted to the other.
-- **TypeScript first, no runtime dependencies.** ESM and CommonJS builds with full type definitions.
+`parse` reads the same notation dprcalc.com uses and returns the exact distribution (a `Pmf`):
 
-## 📦 Install
+```rust
+let longsword = parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)")?;
 
-```bash
-npm install @yipe/dice
-# or
-yarn add @yipe/dice
-# or
-pnpm add @yipe/dice
+longsword.mean();   // 5.75    damage per swing
+longsword.p_at(0);  // 0.35    chance of a miss
+longsword.stdev();  // 4.7342
 ```
 
-Requires Node.js 18.17 or later. The package has two entry points:
+| `parse(…)` | Means | `.mean()` |
+| --- | --- | --- |
+| `2d6 + 3` | dice and modifiers | 10 |
+| `4kh3d6` | 4d6, keep the highest 3 | 12.2446 |
+| `2(d6 reroll d2)` | Great Weapon Fighting (2014): reroll 1s and 2s on each die | 8.3333 |
+| `2(3 > d6)` | Great Weapon Fighting (2024): a d6 that never rolls below 3 | 8 |
+| `d8 > d8` | roll twice, keep the higher | 5.8125 |
+| `(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)` | an attack: to-hit vs AC, damage on a hit, damage on a crit | 5.75 |
+| `(d20 > d20 + 8 AC 16) * …` | with advantage | 7.8975 |
+| `(d20 < d20 + 8 AC 16) * …` | with disadvantage | 3.6025 |
+| `(hd20 + 8 AC 16) * …` | Halfling Luck: a natural 1 is rerolled | 6.0375 |
+| `… xcrit2 (2d8 + 4)` | crits on the top 2 faces (19-20) | 5.975 |
+| `… crit (2d8 + 4) miss (4)` | 4 damage on a miss (Graze) | 7.15 |
+| `(d20 + 2 DC 15) * (8d6) save half` | Fireball vs a +2 save, half on a success | 22.3 |
 
-| Import | Use it for |
-| --- | --- |
-| `@yipe/dice` | `parse()` for dice strings, `PMF`, `DiceQuery`, `withRollType()`, `tryParse()` and the error classes |
-| `@yipe/dice/builder` | the fluent builder (`d20`, `d6`, `roll`, …), `turn()` and turn effects |
+Natural 1s miss, natural 20s crit, and `crit` is written out, so the notation says exactly what a crit
+deals. All binary operators share one precedence and associate left to right: use parentheses to
+group. `X + Y` leaves a 0 alone (a miss stays a miss); `X ~+ Y` always adds. The
+[full grammar](docs/guide.md#dice-expression-language) covers every operator.
 
-Both entries share the same `PMF` class, so you can mix values from either.
+Strings typed by a user:
 
-## 🚀 Quick start
+```rust
+use yipe_dice::parser::{try_parse, with_roll_type};
 
-The same attack, written both ways:
+with_roll_type("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", "advantage")?;
+// "(d20 > d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
 
-```ts
-import { parse } from "@yipe/dice";
-import { d20, d8 } from "@yipe/dice/builder";
+try_parse("1d")?.mass();  // 0.0  half-typed input is an empty Pmf, not an error
 
-// A dice string
-parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)").mean(); // 5.75
-
-// The fluent builder: +8 to hit against AC 16, 1d8 + 4 on a hit (crits are handled for you)
-const longsword = d20.plus(8).ac(16).onHit(d8.plus(4));
-longsword.mean();          // 5.75  expected damage per round
-longsword.toExpression();  // "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
+parse("d6@3").unwrap_err().to_string();
+// "Unexpected token: '@' from expression: 'd6@3'"
 ```
 
-## 🧙 What it can do
+## 🔁 Strings and builders are one language
 
-### Look past the average
+Every builder prints the string it stands for, and that string parses back to the same numbers:
 
-`mean()` gives the DPR. `toQuery()` gives you everything else about the distribution:
+```rust
+let longsword = d20().plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?;
+longsword.to_expression()?;  // "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
+longsword.mean()?;           // 5.75
 
-```ts
-const q = d20.plus(8).ac(16).onHit(d8.plus(4)).toQuery();
+d20().with_advantage()?.plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?.to_expression()?;
+// "(d20 > d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)"
 
-q.mean();                                // 5.75   expected damage
-q.probAtLeastOne(["hit", "crit"]);       // 0.65   chance to land
-q.probAtLeastOne("crit");                // 0.05   chance to crit
-q.expectedDamageFrom("crit");            // 0.65   DPR contributed by crits
-q.stdev();                               // 4.7342
-q.probTotalAtLeast(10);                  // 0.2672 chance of 10+ damage
-q.percentiles([0.25, 0.5, 0.75, 0.95]);  // [0, 6, 10, 12]
+d20().plus(8)?.ac(16)?.crit_on(19)?.on_hit(d8().plus(4)?)?.to_expression()?;
+// "(d20 + 8 AC 16) * (1d8 + 4) xcrit2 (2d8 + 4)"
+
+roll(4, d6())?.keep_highest(4, 3)?.to_expression()?;  // "4kh3(1d6)"
+roll(2, d6())?.reroll(2)?.to_expression()?;           // "2(d6 reroll d2)"
+
+d20().plus(2)?.dc(15)?.on_save_failure(roll(8, d6())?)?.save_half()?.to_expression()?;
+// "(d20 + 2 DC 15) * (8d6) save half"
 ```
 
-### Advantage, Elven Accuracy, Halfling Luck, crit ranges
+Builders are immutable and return `Result<_, DiceError>` where they can fail, so chain with `?`.
+Numbers are any integer or float (`plus(8)`, `ac(16)`). Calls with options have a `_with` twin
+(`attacks_with`, `on_any_crit_with`, `parse_with`, `to_query_with`).
 
-```ts
-import { d20, d8, hd20 } from "@yipe/dice/builder";
+## 🔍 Look past the average
 
-const hit = d8.plus(4);
+```rust
+let q = longsword.to_query()?;
 
-d20.plus(8).ac(16).onHit(hit).mean();                     // 5.75
-d20.withAdvantage().plus(8).ac(16).onHit(hit).mean();     // 7.8975
-d20.withDisadvantage().plus(8).ac(16).onHit(hit).mean();  // 3.6025
-d20.withElvenAccuracy().plus(8).ac(16).onHit(hit).mean(); // 8.7774
-hd20.plus(8).ac(16).onHit(hit).mean();                    // 6.0375  Halfling Luck: reroll natural 1s
-d20.plus(8).ac(16).critOn(19).onHit(hit).mean();          // 5.975   Champion: crit on 19-20
+q.prob_at_least_one(["hit", "crit"]);     // 0.65  chance to land
+q.prob_at_least_one("crit");              // 0.05
+q.expected_damage_from("crit");           // 0.65  of the 5.75, what crits contribute
+q.prob_total_at_least(10);                // 0.2672
+q.percentiles(&[0.25, 0.5, 0.75, 0.95]);  // [0.0, 6.0, 10.0, 12.0]
 ```
 
-### Saving throws
+Every outcome is tagged `hit`, `crit`, `missNone`, `missDamage`, `saveFail` or `saveHalf`, so damage
+splits cleanly into "from crits" and "from hits".
 
-```ts
-// Fireball against a +2 save, DC 15: 8d6 on a failure, half on a success
-const fireball = d20.plus(2).dc(15).onSaveFailure(roll(8, d6)).saveHalf();
+## ⚔️ Whole turns
 
-fireball.mean();          // 22.3
-fireball.toExpression();  // "(d20 + 2 DC 15) * (8d6) save half"
-```
+A `Turn` takes attacks (a parsed string or a builder) and **riders**: extra damage that depends on
+what the attacks did. The turn is computed jointly, so the whole shape of the distribution is right,
+not only the mean.
 
-### Damage dice tricks
-
-A plain roll exposes its distribution as `.pmf`:
-
-```ts
-roll(2, d6).pmf.mean();                   // 7
-roll(2, d6).reroll(2).pmf.mean();         // 8.3333  Great Weapon Fighting (2014): reroll 1s and 2s
-roll(2, d6).minimum(3).pmf.mean();        // 8       Great Weapon Fighting (2024): treat 1s and 2s as 3
-roll(4, d6).keepHighest(4, 3).pmf.mean(); // 12.2446 4d6 drop lowest
-d8.maxOf(2).pmf.mean();                   // 5.8125  roll twice, keep the higher
-roll(8, d6).rerollUpTo(5).pmf.mean();     // 33.8853 Empowered Spell: reroll up to 5 dice
-```
-
-### Should I take the -5/+10?
-
-Compare a Great Weapon Master power attack against a normal swing at every AC:
-
-```ts
-const greatsword = roll(2, d6).plus(5);
-
-for (const ac of [13, 15, 17, 19]) {
-  const normal = d20.plus(9).ac(ac).onHit(greatsword).mean();
-  const power = d20.plus(4).ac(ac).onHit(greatsword.plus(10)).mean();
-  console.log(`AC ${ac}: ${normal.toFixed(2)} vs ${power.toFixed(2)}`);
-}
-// AC 13: 10.55 vs 13.55
-// AC 15: 9.35 vs 11.35
-// AC 17: 8.15 vs 9.15
-// AC 19: 6.95 vs 6.95   (break-even)
-```
-
-### Whole turns: Extra Attack, Sneak Attack, Smite, Hunter's Mark
-
-A `turn()` combines attacks with **riders**, which are extra damage that depends on what the attacks
-did. The library computes the exact joint distribution. If you computed Sneak Attack as a separate
-distribution and added it to the attacks, the mean would come out right but the shape would be
-wrong: the rogue above would show a 1.5% chance of a whiffed turn instead of the true 12.25%.
-
-```ts
-import { d20, d4, d6, d8, d10, roll, turn } from "@yipe/dice/builder";
-
-const sword = d20.plus(9).ac(16).onHit(d6.plus(5));
-const dagger = d20.plus(8).ac(16).onHit(d4.plus(4));
-const unarmed = d20.plus(8).ac(16).onHit(d6.plus(4));
-
+```rust
 // Fighter: four attacks, Hunter's Mark on every hit
-turn().attacks(4, sword).onEveryHit(d6).mean(); // 35
+let sword = parse("(d20 + 9 AC 16) * (1d6 + 5) crit (2d6 + 5)")?;
+Turn::new()?.attacks(4, sword)?.on_every_hit(d6())?.mean()?;  // 35.0
 
-// Paladin/monk: smite on a crit, otherwise flurry of blows
-const paladin = turn([dagger, dagger])
-  .onAnyCrit(roll(2, d8), { id: "smite" })
-  .otherwise([unarmed, unarmed]);
-paladin.mean();                    // 19.5703
-paladin.fireProbability("smite");  // 0.0975
+// Paladin/monk: Divine Smite on a crit, otherwise a flurry of blows
+let dagger = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)")?;
+let unarmed = parse("(d20 + 8 AC 16) * (1d6 + 4) crit (2d6 + 4)")?;
+let smite = ConditionOptions {
+    rider: RiderOptions { id: Some("smite".into()), ..RiderOptions::default() },
+    ..ConditionOptions::default()
+};
+let paladin = Turn::new()?
+    .attacks(2, dagger)?
+    .on_any_crit_with(roll(2, d8())?, smite)?
+    .otherwise(vec![DamageSource::from(unarmed.clone()), DamageSource::from(unarmed)])?;
+paladin.mean()?;                     // 19.5703
+paladin.fire_probability("smite")?;  // 0.0975
 
-// Everything at once
-turn([dagger, dagger])
-  .onFirstHit(roll(3, d6))       // Sneak Attack
-  .onFirstHit(d10)               // a once-per-turn burn
-  .onAnyCrit(roll(2, d8))        // Divine Smite on a crit
-  .otherwise([unarmed, unarmed]) // flurry of blows if no smite
-  .onEveryHit(d6)                // Hunter's Mark
-  .mean();                       // 39.5903
+// Vex: each hit gives the next swing advantage
+let shortsword = d20().plus(8)?.ac(16)?.on_hit(d6().plus(5)?)?;
+let vex = shortsword.on_every_hit(advantage().until_next_attack())?;
+Turn::new()?.attacks(4, vex)?.mean()?;  // 27.5867  (22.8 without Vex)
 ```
 
 | Rider | Fires | Example |
 | --- | --- | --- |
-| `onFirstHit` | once, on the first attack that lands (doubled if that attack crit) | Sneak Attack |
-| `onAnyCrit` | once, if any attack crit | Divine Smite |
-| `onEveryHit` | on every attack that lands, optionally `{ max: n }` times | Hunter's Mark, Rage, Superiority Dice |
-| `onFirstMiss` / `onAnyMiss` | on a miss | rerolls such as Lucky |
+| `on_first_hit` | once, on the first attack that lands | Sneak Attack |
+| `on_any_crit` | once, if any attack crits | Divine Smite |
+| `on_every_hit` | on every attack that lands | Hunter's Mark, Rage |
 | `otherwise` | when the rider before it did not fire | flurry if you didn't smite |
 
-### Advantage that one attack gives to the next
+Give a rider's dice as a builder (`roll(3, d6())`, `d6()`) so a crit doubles them. A parsed `"1d6"`
+is a finished distribution and is not doubled: the fighter above would deal 34.3, not 35.
 
-Grants model effects such as Vex, Topple, Stunning Strike or a crit-on-hit condition. They apply
-to later attack rolls, and the library tracks the turn order exactly:
+Sweep a turn across armor classes with `vs_ac`. It rebinds the AC of builder attacks; a parsed
+attack has its AC baked into the string, so use the builder here:
 
-```ts
-import { advantage, critOnHit } from "@yipe/dice/builder";
+```rust
+let sword = d20().plus(9)?.ac(16)?.on_hit(d6().plus(5)?)?;
+let base = Turn::new()?.attacks(2, sword)?.on_first_hit(roll(3, d6())?)?;
 
-const shortsword = d20.plus(8).ac(16).onHit(d6.plus(5));
-const vex = shortsword.onEveryHit(advantage().untilNextAttack());
-
-turn().attacks(4, shortsword).mean(); // 22.8
-turn().attacks(4, vex).mean();        // 27.5867  each hit gives the next swing advantage
-
-// Stunning Strike: on a failed save, advantage for the rest of the turn;
-// on a successful save, advantage on the next attack only
-const fist = d20.plus(8).ac(16).onHit(d6.plus(5));
-turn([fist, fist, fist])
-  .onFirstHit(advantage().untilEndOfTurn(), {
-    save: d20.plus(2).dc(15),
-    onSave: advantage().untilNextAttack(),
-  })
-  .mean(); // 19.7618  (17.1 without it)
-
-// After the first hit, every later hit this turn is a crit
-turn([shortsword, shortsword]).onFirstHit(critOnHit().untilEndOfTurn()).mean(); // 12.765
-```
-
-### Conditions: Prone, Stunned, Unconscious, grapples, curses
-
-- `@yipe/dice/dnd5e` names the conditions; trigger verbs put them on the target behind a save, a chance or a contest, and `atStart` says what it already has, per creature. See the [guide](docs/guide.md#conditions-what-the-target-has-and-what-it-gets).
-
-```ts
-import { restrained } from "@yipe/dice/dnd5e";
-const sword = d20.plus(8).ac(16).melee().onHit(d8.plus(4));
-turn().attacks(2, sword).attack(sword, { target: "second" }).atStart(restrained()).mean(); // 21.545
-```
-
-### Tags and named features: a Monk/Rogue turn
-
-Tag an attack with what it is, and name it in `of` by that tag instead of by position. `vex()`,
-`stunningStrike()` and the list of expected tags (`TAGS`) come from `@yipe/dice/dnd5e`; the core
-`save(check, { fail, pass })` they build on works with any effect. The
-[guide](docs/guide.md#tags-and-named-features-a-whole-monkrogue-turn) has the rules and the same turn without `dnd5e`.
-
-```ts
-import { d20, d6, d8, turn } from "@yipe/dice/builder";
-import { saveDC, stunningStrike, vex } from "@yipe/dice/dnd5e";
-
-const prof = +3;
-const mod = +4;
-const monkDie = d8;
-const attack = d20.plus(prof + mod).ac(15);
-
-const shortsword = attack.onHit(monkDie.plus(mod)).tagged("finesse").onEveryHit(vex());
-const scimitar   = attack.onHit(monkDie).tagged("finesse");            // Nick: no Dex mod
-const fist       = attack.onHit(monkDie.plus(mod)).tagged("unarmed");  // Flurry of Blows
-
-const myTurn = turn([shortsword, shortsword, scimitar, fist, fist])
-  .onFirstHit(d6, { of: "finesse" })                                        // Sneak Attack
-  .onFirstHit(stunningStrike(saveDC(14, { con: +3 })), { of: "unarmed" });  // Stunning Strike
-
-myTurn.mean(); // 33.5367
-```
-
-### Once-per-turn rerolls such as Savage Attacker
-
-```ts
-import { keepBestDamage } from "@yipe/dice/builder";
-
-const attack = d20.plus(5).ac(12).onHit(roll(2, d6).plus(3));
-
-turn([attack, attack]).mean();                              // 14.7
-turn([attack, attack]).onFirstHit(keepBestDamage()).mean(); // 15.9849
-```
-
-### Sweep a turn across armor classes
-
-```ts
-const base = turn([sword, sword]).onFirstHit(roll(3, d6));
-
-[12, 14, 16, 18, 20].map((ac) => base.vsAC(ac).mean());
-// [26.6225, 24.66, 22.4875, 20.105, 17.5125]
-```
-
-### Turns as plain data
-
-Turns can be written as JSON-safe specs, which a UI can save and load as-is:
-
-```ts
-import { Turn } from "@yipe/dice/builder";
-
-const fromUI = Turn.from({
-  attacks: [{ id: "dagger 1", source: dagger }, { id: "dagger 2", source: dagger }],
-  riders: [{ id: "sneak", damage: roll(3, d6), on: "first-hit" }],
-});
-
-fromUI.mean();                    // 18.6225
-fromUI.fireProbability("sneak");  // 0.8775
-```
-
-Invalid specs throw a `TurnSpecError` right away. Its `code` (`unknown-id`, `cycle`, `duplicate-id`, …)
-can be mapped directly to a form field error.
-
-### Roll one play of a turn
-
-The numbers above are exact. When you also want to show a roll, `sample` plays the same turn once, drawing
-every die from an `Rng` you supply (`die(sides)` uniform on 1..sides, `chance(p)` a coin), in the walk's own
-order, so sampled totals follow `pmf` exactly. The `Trace` lists every die and outcome per step, and is
-stamped with `SAMPLER_VERSION`: the same seed replays the same trace until that number changes.
-
-```ts
-const rng = { die: (sides: number) => 1 + Math.floor(Math.random() * sides), chance: (p: number) => Math.random() < p };
-const trace = fromUI.sample(rng);
-trace.total;                          // one play's damage, distributed as fromUI.pmf
-trace.waves[0].dice;                  // [{ sides: 20, face: 17, role: "attack", kept: true, … }, …]
-trace.waves.flatMap((w) => w.outcomes); // [{ source: "dagger 1", result: "hit", damage: 7 }, …]
-```
-
-Builders sample too: `roll(3, d6).sample(rng)`, `dagger.sample(rng)`, `fireball.sample(rng)`.
-
-### Chart-ready output
-
-```ts
-import { parse } from "@yipe/dice";
-
-const query = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)").query();
-
-query.toChartSeries();  // [{ x: 0, y: 0.35 }, { x: 5, y: 0.15 }, { x: 6, y: 0.153125 }, …]
-query.toCCDFSeries();   // { support: [0, 1, …], data: [100, 65, …] }  P(damage ≥ x), in percent
-
-rogue.toQuery().damageAttributionChartModel(); // stacked chart model: each total split by miss / hit / crit
-```
-
-### Forgiving parsing for UI input
-
-```ts
-import { tryParse, withRollType, DiceParseError, parse } from "@yipe/dice";
-
-tryParse("2d6 + 3").mean(); // 10
-tryParse("1d").mass();      // 0  (half-typed input returns an empty PMF instead of throwing)
-
-withRollType("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)", "advantage");
-// "(d20 > d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)"
-
-try {
-  parse("d6@3");
-} catch (err) {
-  if (err instanceof DiceParseError) console.warn(`Bad dice expression: ${err.expression}`);
+for ac in [12, 14, 16, 18, 20] {
+    base.vs_ac(ac)?.mean()?;  // 26.6225, 24.66, 22.4875, 20.105, 17.5125
 }
 ```
 
-## 🎯 Dice expression cheat sheet
+## 📦 Install
 
-| Expression | Meaning |
-| --- | --- |
-| `(d20 + 7 AC 15) * (1d10 + 4) crit (2d10 + 4)` | an attack: to-hit vs AC, damage on a hit, damage on a crit |
-| `… xcrit19 (2d10 + 4)` | crits on 19-20 |
-| `… miss (4)` | damage on a miss |
-| `(d20 + 5 DC 15) * (8d6) save half` | a saving throw for half damage |
-| `d20 > d20` | advantage (the higher of the two) |
-| `hd20` | Halfling Luck: rerolls a natural 1 |
-| `4kh3d6` | 4d6, keep the highest 3 |
-| `2(d6 reroll d2)` | 2d6, rerolling 1s and 2s on each die |
-| `3 > d6` | a d6 that never rolls below 3 |
-| `X & Y` | a weighted mix of two expressions |
-
-All binary operators have the same precedence and associate left to right, so use parentheses to
-group. The [full grammar](https://github.com/yipe/dice/blob/main/docs/guide.md#dice-expression-language) covers every operator and edge case.
-
-## 📚 Documentation
-
-- **[Guide and reference](https://github.com/yipe/dice/blob/main/docs/guide.md)**: the full grammar, crit and reroll rules, every `turn()` feature,
-  statistics, and an architecture overview.
-- **[Examples](examples)**: runnable scripts for attacks, statistics and turns.
-- **[Changelog](CHANGELOG.md)**: what changed in each release.
-- **[dprcalc.com/dice](https://dprcalc.com/dice)**: the library running in a real app.
-
-Run the examples from a clone:
-
-```bash
-yarn example basic   # also: stats, turn, misc
+```toml
+[dependencies]
+yipe-dice = { git = "https://github.com/yipe/dice", branch = "rust-dice", package = "yipe-dice" }
 ```
 
+`use yipe_dice::prelude::*;` brings in `parse`, the builders (`d20`, `d6`, `roll`, …), `Turn`,
+`Pmf`, `DiceQuery` and `DiceError`. The default `parallel` feature runs batch evaluation on rayon;
+turn it off for wasm.
+
+## ✅ Status and verification
+
+The port is complete and shelved, not merged into `main`: see [`rust/HANDOFF.md`](rust/HANDOFF.md).
+The crate lives in [`rust/dice`](rust/dice); [`rust/API.md`](rust/API.md) sketches a more idiomatic
+API (`dice!`/`attack!`/`save!` macros) that is designed but not implemented.
+
+Every number in this README is asserted by [`rust/dice/examples/readme.rs`](rust/dice/examples/readme.rs):
+
+```sh
+cd rust/dice
+cargo run -q --release --example readme  # every README number, checked
+FIXTURE_STRICT=1 cargo test -q --release  # the full suite (fixtures: see rust/HANDOFF.md)
 ```
-┌────────────┐
-│ Summary    │
-├────────────┴─────────────────────────────────────────────┐
-│ Expression:     (d20 + 5 AC 15) * (1d6+2) crit (2d6 + 2) │
-│ Success Chance: 0.55                                     │
-│ Expected DPR:   3.20                                     │
-└──────────────────────────────────────────────────────────┘
-
-┌────────────┐
-│ PMF ()     │
-├────────────┴───────────────────────────────────────────────────────────────────────────┐
-│   0: █████████████████████████████████████████████████████████████████████████ 45.00%  │
-│   3: █████████████▌                                                             8.33%  │
-│   4: █████████████▋                                                             8.47%  │
-│   5: █████████████▉                                                             8.61%  │
-│   6: ██████████████▏                                                            8.75%  │
-│   7: ██████████████▍                                                            8.89%  │
-│   8: ██████████████▋                                                            9.03%  │
-│   9: █▎                                                                         0.83%  │
-│  10: █▏                                                                         0.69%  │
-│  11: ▉                                                                          0.56%  │
-│  12: ▋                                                                          0.42%  │
-│  13: ▍                                                                          0.28%  │
-│  14: ▏                                                                          0.14%  │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-## 💬 Community
-
-Questions, ideas, or builds you want to model? Join the [Discord](https://dprcalc.com/discord) or
-[open an issue](https://github.com/yipe/dice/issues).
-
-## 🤝 Contributing
-
-Contributions are welcome. You need Node.js 20 or later to run the tests (the published package
-supports 18.17+) and Yarn 4 (via Corepack).
-
-```bash
-git clone https://github.com/yipe/dice.git
-cd dice
-yarn install
-yarn test
-```
-
-| Command | Purpose |
-| --- | --- |
-| `yarn build` | Build ESM/CJS bundles and type definitions into `dist/` |
-| `yarn test` | Run the test suite |
-| `yarn test:watch` | Run tests in watch mode |
-| `yarn typecheck` | Type-check without emitting |
-| `yarn lint` | Run ESLint |
-| `yarn example <name>` | Run an example script (`basic`, `stats`, `turn`, `misc`) |
-
-Before you open a pull request, make sure `yarn typecheck`, `yarn lint` and `yarn test` pass, and add
-an entry under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for any user-visible change. The
-[architecture overview](https://github.com/yipe/dice/blob/main/docs/guide.md#architecture) explains how the code is organized.
 
 ## 📜 License
 

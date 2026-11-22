@@ -1,82 +1,145 @@
-//! The README examples, using only public `yipe_dice` paths.
-//! Run: `cargo run -q --release --example readme`
+//! Every number in the README, checked. Run: `cargo run -q --release --example readme`
+use yipe_dice::parser::{try_parse, with_roll_type};
 use yipe_dice::prelude::*;
 
-/// Round to 4 decimals, as the TS README does.
+/// Round to 4 decimals, as the README does.
 fn r4(x: f64) -> f64 {
     (x * 1e4).round() / 1e4
 }
 
-fn main() -> Result<(), DiceError> {
-    // Top snippet: two-weapon fighting + Sneak Attack
-    let dagger = d20().plus(8)?.ac(16)?.on_hit(d4().plus(4)?)?;
-    let sneak = roll(3, d6())?;
-    let rogue = Turn::new()?
-        .attacks(2, dagger.clone())?
-        .on_first_hit(sneak.clone())?;
-    println!("rogue mean        {}", r4(rogue.mean()?));
-    println!("rogue p(0)        {}", r4(rogue.pmf()?.p_at(0)));
-    let q = rogue.to_query()?;
-    println!("rogue P(20+)      {}", r4(q.prob_total_at_least(20)));
-    println!("rogue percentiles {:?}", q.percentiles(&[0.25, 0.5, 0.75]));
+fn check(label: &str, got: f64, want: f64) {
+    assert_eq!(r4(got), want, "{label}");
+    println!("ok  {label:58} {want}");
+}
 
-    // Quick start
-    let expr = "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)";
-    println!("parse             {}", r4(parse(expr)?.mean()));
-    let longsword = d20().plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?;
-    println!("longsword mean    {}", r4(longsword.mean()?));
-    println!("expression        {}", longsword.to_expression()?);
+fn check_str(label: &str, got: &str, want: &str) {
+    assert_eq!(got, want, "{label}");
+    println!("ok  {label:58} {want:?}");
+}
+
+fn main() -> Result<(), DiceError> {
+    // Top snippet
+    let dagger = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)")?;
+    let rogue = Turn::new()?
+        .attacks(2, dagger)? // two-weapon fighting
+        .on_first_hit(roll(3, d6())?)?; // Sneak Attack
+    check("rogue mean", rogue.mean()?, 18.6225);
+    check("rogue p(0)", rogue.pmf()?.p_at(0), 0.1225);
+    let q = rogue.to_query()?;
+    check("rogue P(20+)", q.prob_total_at_least(20), 0.5062);
+    assert_eq!(q.percentiles(&[0.25, 0.5, 0.75]), [15.0, 20.0, 24.0]);
+
+    // The dice string table
+    for (expr, mean) in [
+        ("2d6 + 3", 10.0),
+        ("4kh3d6", 12.2446),
+        ("2(d6 reroll d2)", 8.3333),
+        ("2(3 > d6)", 8.0),
+        ("d8 > d8", 5.8125),
+        ("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", 5.75),
+        ("(d20 > d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", 7.8975),
+        ("(d20 < d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", 3.6025),
+        ("(hd20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", 6.0375),
+        ("(d20 + 8 AC 16) * (1d8 + 4) xcrit2 (2d8 + 4)", 5.975),
+        ("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4) miss (4)", 7.15),
+        ("(d20 + 2 DC 15) * (8d6) save half", 22.3),
+    ] {
+        check(expr, parse(expr)?.mean(), mean);
+    }
+
+    // A parsed string is a value
+    let longsword = parse("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)")?;
+    check("longsword p(0)", longsword.p_at(0), 0.35);
+    check("longsword stdev", longsword.stdev(), 4.7342);
+
+    // Strings and builders are the same language
+    let built = d20().plus(8)?.ac(16)?.on_hit(d8().plus(4)?)?;
+    check_str(
+        "builder to_expression",
+        &built.to_expression()?,
+        "(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)",
+    );
+    check("builder mean", built.mean()?, 5.75);
+    check_str(
+        "advantage",
+        &d20()
+            .with_advantage()?
+            .plus(8)?
+            .ac(16)?
+            .on_hit(d8().plus(4)?)?
+            .to_expression()?,
+        "(d20 > d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)",
+    );
+    check_str(
+        "crit_on(19)",
+        &d20()
+            .plus(8)?
+            .ac(16)?
+            .crit_on(19)?
+            .on_hit(d8().plus(4)?)?
+            .to_expression()?,
+        "(d20 + 8 AC 16) * (1d8 + 4) xcrit2 (2d8 + 4)",
+    );
+    check_str(
+        "keep_highest",
+        &roll(4, d6())?.keep_highest(4, 3)?.to_expression()?,
+        "4kh3(1d6)",
+    );
+    check_str(
+        "reroll",
+        &roll(2, d6())?.reroll(2)?.to_expression()?,
+        "2(d6 reroll d2)",
+    );
+    check_str(
+        "fireball",
+        &d20()
+            .plus(2)?
+            .dc(15)?
+            .on_save_failure(roll(8, d6())?)?
+            .save_half()?
+            .to_expression()?,
+        "(d20 + 2 DC 15) * (8d6) save half",
+    );
+
+    // Strings from a UI
+    check_str(
+        "with_roll_type",
+        &with_roll_type("(d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)", "advantage")?,
+        "(d20 > d20 + 8 AC 16) * (1d8 + 4) crit (2d8 + 4)",
+    );
+    check("try_parse half-typed", try_parse("1d")?.mass(), 0.0);
+    check_str(
+        "parse error",
+        &parse("d6@3").unwrap_err().to_string(),
+        "Unexpected token: '@' from expression: 'd6@3'",
+    );
 
     // Look past the average
-    let q = longsword.to_query()?;
-    println!("q mean            {}", r4(q.mean()));
-    println!(
-        "q land            {}",
-        r4(q.prob_at_least_one(["hit", "crit"]))
+    let q = built.to_query()?;
+    check(
+        "q P(hit or crit)",
+        q.prob_at_least_one(["hit", "crit"]),
+        0.65,
     );
-    println!("q crit            {}", r4(q.prob_at_least_one("crit")));
-    println!("q from crit       {}", r4(q.expected_damage_from("crit")));
-    println!("q stdev           {}", r4(q.stdev()));
-    println!("q P(10+)          {}", r4(q.prob_total_at_least(10)));
-    println!(
-        "q percentiles     {:?}",
-        q.percentiles(&[0.25, 0.5, 0.75, 0.95])
+    check("q P(crit)", q.prob_at_least_one("crit"), 0.05);
+    check("q from crit", q.expected_damage_from("crit"), 0.65);
+    check("q P(10+)", q.prob_total_at_least(10), 0.2672);
+    assert_eq!(
+        q.percentiles(&[0.25, 0.5, 0.75, 0.95]),
+        [0.0, 6.0, 10.0, 12.0]
     );
 
-    // Advantage, Elven Accuracy, Halfling Luck, crit ranges
-    let hit = d8().plus(4)?;
-    let attack = |die: RollBuilder| -> Result<f64, DiceError> {
-        die.plus(8)?.ac(16)?.on_hit(hit.clone())?.mean()
-    };
-    println!("normal            {}", r4(attack(d20())?));
-    println!("advantage         {}", r4(attack(d20().with_advantage()?)?));
-    println!(
-        "disadvantage      {}",
-        r4(attack(d20().with_disadvantage()?)?)
-    );
-    println!(
-        "elven accuracy    {}",
-        r4(attack(d20().with_elven_accuracy()?)?)
-    );
-    println!("halfling luck     {}", r4(attack(hd20())?));
-    let champion = d20().plus(8)?.ac(16)?.crit_on(19)?.on_hit(hit.clone())?;
-    println!("crit on 19        {}", r4(champion.mean()?));
-
-    // Saving throw: Fireball against a +2 save, DC 15
-    let fireball = d20()
-        .plus(2)?
-        .dc(15)?
-        .on_save_failure_args(&[Arg::from(roll(8, d6())?)])?
-        .save_half()?;
-    println!("fireball mean     {}", r4(fireball.mean()?));
-    println!("fireball expr     {}", fireball.to_expression()?);
-
-    // Whole turns: Extra Attack, riders
-    let sword = d20().plus(9)?.ac(16)?.on_hit(d6().plus(5)?)?;
+    // Whole turns
+    let sword = parse("(d20 + 9 AC 16) * (1d6 + 5) crit (2d6 + 5)")?;
     let fighter = Turn::new()?.attacks(4, sword.clone())?.on_every_hit(d6())?; // Hunter's Mark
-    println!("fighter mean      {}", r4(fighter.mean()?));
+    check("fighter mean", fighter.mean()?, 35.0);
+    let flat_mark = Turn::new()?
+        .attacks(4, sword.clone())?
+        .on_every_hit(parse("1d6")?)?;
+    check("fighter, parsed rider", flat_mark.mean()?, 34.3);
 
-    let unarmed = d20().plus(8)?.ac(16)?.on_hit(d6().plus(4)?)?;
+    let dagger = parse("(d20 + 8 AC 16) * (1d4 + 4) crit (2d4 + 4)")?;
+    let unarmed = parse("(d20 + 8 AC 16) * (1d6 + 4) crit (2d6 + 4)")?;
     let smite = ConditionOptions {
         rider: RiderOptions {
             id: Some("smite".into()),
@@ -91,26 +154,36 @@ fn main() -> Result<(), DiceError> {
             DamageSource::from(unarmed.clone()),
             DamageSource::from(unarmed),
         ])?;
-    println!("paladin mean      {}", r4(paladin.mean()?));
-    println!(
-        "paladin P(smite)  {}",
-        r4(paladin.fire_probability("smite")?)
+    check("paladin mean", paladin.mean()?, 19.5703);
+    check(
+        "paladin P(smite)",
+        paladin.fire_probability("smite")?,
+        0.0975,
     );
 
-    // Everything on one turn is joint; Vex: each hit gives the next swing advantage
     let shortsword = d20().plus(8)?.ac(16)?.on_hit(d6().plus(5)?)?;
     let vex = shortsword.on_every_hit(advantage().until_next_attack())?;
-    let four = |a: AttackBuilder| Turn::new()?.attacks(4, a)?.mean();
-    println!("4 attacks         {}", r4(four(shortsword)?));
-    println!("4 attacks, vex    {}", r4(four(vex)?));
+    check(
+        "4 attacks",
+        Turn::new()?.attacks(4, shortsword)?.mean()?,
+        22.8,
+    );
+    check(
+        "4 attacks, vex",
+        Turn::new()?.attacks(4, vex)?.mean()?,
+        27.5867,
+    );
 
-    // Sweep a turn across armor classes
+    // Sweep a turn across armor classes: vs_ac needs a builder attack, a parsed one has no AC to rebind
     let sword = d20().plus(9)?.ac(16)?.on_hit(d6().plus(5)?)?;
-    let base = Turn::new()?.attacks(2, sword)?.on_first_hit(sneak)?;
+    let base = Turn::new()?
+        .attacks(2, sword)?
+        .on_first_hit(roll(3, d6())?)?;
     let sweep = [12, 14, 16, 18, 20]
         .into_iter()
         .map(|ac| Ok(r4(base.vs_ac(ac)?.mean()?)))
         .collect::<Result<Vec<f64>, DiceError>>()?;
-    println!("sweep             {sweep:?}");
+    assert_eq!(sweep, [26.6225, 24.66, 22.4875, 20.105, 17.5125]);
+    println!("ok  sweep {sweep:?}");
     Ok(())
 }
